@@ -10,6 +10,7 @@ using Optimisers
 using Zygote
 using NNlib
 using BSON: @save
+using ProbabilisticEnsembling 
 
 # Optional CUDA support if available
 const HAS_CUDA = try
@@ -28,11 +29,6 @@ function get_device()
         return (to=x -> x, on="cpu")
     end
 end
-
-include(joinpath(@__DIR__, "utils.jl"))
-using .Utils: StandardScaler, fit_scaler, scale_inputs, scale_targets, inverse_targets,
-    find_dataset_csv, load_ett, make_sequences, train_val_test_split,
-    batches, mse, mae, rmse, r2, mape, compute_metrics
 
 # LSTM via explicit time scan over LSTMCell to avoid version-specific wrappers
 function lstm_forward_batch(lstm_cell, head, ps_cell, st_cell, ps_head, st_head, xb)

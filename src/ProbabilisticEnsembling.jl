@@ -1,1 +1,5 @@
-module ProbabilisticEnsembling end
+module ProbabilisticEnsembling
+
+include("utils.jl")
+
+end

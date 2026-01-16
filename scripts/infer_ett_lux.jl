@@ -5,11 +5,7 @@ using Pkg
 using BSON: @load
 using Random, Statistics
 using Lux
-
-include(joinpath(@__DIR__, "utils.jl"))
-using .Utils: load_ett, make_sequences, train_val_test_split,
-    scale_inputs, scale_targets, inverse_targets,
-    mse, mae, rmse, r2, mape
+using ProbabilisticEnsembling 
 
 function lstm_forward_batch(lstm_cell, head, ps_cell, st_cell, ps_head, st_head, xb)
     stc = st_cell
