@@ -3,30 +3,6 @@
 # Train LSTM and 1D-CNN with Lux.jl on ETTh1/ETTh2 and save models.
 
 using Pkg
-
-# Activate a local environment for this script (created on first run)
-try
-    Pkg.activate(@__DIR__)
-    # Ensure dependencies (will download on first run)
-    Pkg.instantiate()
-    pkgs = [
-        name => uuid for (name, uuid) in (
-            "Lux" => "b1ec4ad8-2f76-4f7f-8c8e-c0e6aab33f7c",
-            "Optimisers" => "3bd65402-5787-11e9-1adc-39752487f4e2",
-            "Zygote" => "e88e6eb3-aa80-5325-afca-941959d7151f",
-            "DataFrames" => "a93c6f00-e57d-5684-b7b6-d8193f3e46c0",
-            "CSV" => "336ed68f-0bac-5ca0-87d4-7b16caf5d00b",
-            "Statistics" => Base.UUID(0),
-            "Random" => Base.UUID(0),
-            "NNlib" => "872c559c-99b0-510c-b3b7-b6c96a88d5cd",
-            "BSON" => "fbb218c0-5317-5bc6-957e-2ee96dd4b1f0",
-        )
-    ]
-    Pkg.add([name for (name, _) in pkgs if name ∉ keys(Pkg.project().dependencies)])
-catch err
-    @warn "Pkg setup failed or offline; proceeding assuming packages available" err
-end
-
 using Random, Statistics
 using CSV, DataFrames
 using Lux

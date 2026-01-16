@@ -1,3 +1,8 @@
+name = "ProbabilisticEnsembling"
+uuid = "dab4be3b-02fa-4a9b-b857-091df78264db"
+authors = ["Mykola Lukashchuk <m.lukashchuk@tue.nl>", "Kyrylo Yemets <kyrylo.v.yemets@lpnu.ua>"]
+version = "0.0.1"
+
 [deps]
 BSON = "fbb218c0-5317-5bc6-957e-2ee96dd4b1f0"
 CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
