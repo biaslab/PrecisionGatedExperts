@@ -1,15 +1,27 @@
 name = "ProbabilisticEnsembling"
 uuid = "dab4be3b-02fa-4a9b-b857-091df78264db"
-authors = ["Mykola Lukashchuk <m.lukashchuk@tue.nl>", "Kyrylo Yemets <kyrylo.v.yemets@lpnu.ua>"]
 version = "0.0.1"
+authors = ["Mykola Lukashchuk <m.lukashchuk@tue.nl>", "Kyrylo Yemets <kyrylo.v.yemets@lpnu.ua>"]
 
 [deps]
+ADTypes = "47edcb42-4c32-4615-8424-f2b9edc5f35b"
 BSON = "fbb218c0-5317-5bc6-957e-2ee96dd4b1f0"
 CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
 DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
+Enzyme = "7da242da-08ed-463a-9acd-ee780be4f1d9"
+JLD2 = "033835bb-8acc-5ee8-8aae-3f567f8a3819"
 Lux = "b2108857-7c20-44ae-9111-449ecde12c47"
+MLUtils = "f1d291b0-491e-4a28-83b9-f70985020b54"
 NNlib = "872c559c-99b0-510c-b3b7-b6c96a88d5cd"
 Optimisers = "3bd65402-5787-11e9-1adc-39752487f4e2"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+Reactant = "3c362404-f566-11ee-1572-e11a4b42c853"
 Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
 Zygote = "e88e6eb3-aa80-5325-afca-941959d7151f"
+
+[compat]
+ADTypes = "1.21.0"
+Enzyme = "0.13.115"
+JLD2 = "0.6.3"
+MLUtils = "0.4.8"
+Reactant = "0.2.198"
