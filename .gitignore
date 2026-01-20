@@ -28,3 +28,7 @@ LocalPreferences.toml
 JuliaLocalPreferences.toml
 
 .DS_Store
+
+
+data/electricity.csv
+data/traffic.csv
