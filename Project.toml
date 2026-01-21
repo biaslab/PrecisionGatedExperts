@@ -1,13 +1,14 @@
 name = "ProbabilisticEnsembling"
 uuid = "dab4be3b-02fa-4a9b-b857-091df78264db"
-version = "0.0.1"
 authors = ["Mykola Lukashchuk <m.lukashchuk@tue.nl>", "Kyrylo Yemets <kyrylo.v.yemets@lpnu.ua>"]
+version = "0.0.1"
 
 [deps]
 ADTypes = "47edcb42-4c32-4615-8424-f2b9edc5f35b"
 BSON = "fbb218c0-5317-5bc6-957e-2ee96dd4b1f0"
 CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
 DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
+Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
 Enzyme = "7da242da-08ed-463a-9acd-ee780be4f1d9"
 JLD2 = "033835bb-8acc-5ee8-8aae-3f567f8a3819"
 Lux = "b2108857-7c20-44ae-9111-449ecde12c47"
@@ -20,6 +21,7 @@ Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
 
 [compat]
 ADTypes = "1.21.0"
+Distributions = "0.25.123"
 Enzyme = "0.13.115"
 JLD2 = "0.6.3"
 Lux = "1.4.0"
