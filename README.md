@@ -20,13 +20,13 @@ This repository already includes the datasets under `data/` as CSV files:
 
 The training/inference scripts auto-detect these CSVs from `data/`. Trained models are saved to `models/`.
 
-| Dataset (file)         | Dims | Horizons                 | Split (train, val, test) | Frequency |
-|------------------------|-----:|--------------------------|---------------------------|-----------|
-| ETTh1 (`ETTh1.csv`)    |    7 | {96, 192, 336, 720}      | (8545, 2881, 2881)        | 15 min    |
-| ETTh2 (`ETTh2.csv`)    |    7 | {96, 192, 336, 720}      | (8545, 2881, 2881)        | 15 min    |
-| Electricity (`electricity.csv`) | 321 | {96, 192, 336, 720} | (18317, 2633, 5261)       | Hourly    |
-| Traffic (`traffic.csv`)        | 862 | {96, 192, 336, 720} | (12185, 1757, 3509)       | Hourly    |
-| Exchange (`exchange_rate.csv`) |   8 | {96, 192, 336, 720} | (5120, 665, 1422)         | Daily     |
+| Dataset (file)         | Dims | Horizons                 | Split (train, val, test) |Propostions splits| Frequency |
+|------------------------|-----:|--------------------------|---------------------------|--|-----------|
+| ETTh1 (`ETTh1.csv`)    |    7 | {96, 192, 336, 720}      | (8545, 2881, 2881)        |6:2:2| 15 min    |
+| ETTh2 (`ETTh2.csv`)    |    7 | {96, 192, 336, 720}      | (8545, 2881, 2881)        |6:2:2| 15 min    |
+| Electricity (`electricity.csv`) | 321 | {96, 192, 336, 720} | (18317, 2633, 5261)      |7:1:2| Hourly    |
+| Traffic (`traffic.csv`)        | 862 | {96, 192, 336, 720} | (12185, 1757, 3509)       |7:1:2| Hourly    |
+| Exchange (`exchange_rate.csv`) |   8 | {96, 192, 336, 720} | (5120, 665, 1422)         |7:1:2| Daily     |
 
 Notes
 - Splits are chronological: the first block is used for training, the next for validation, and the final for testing.
