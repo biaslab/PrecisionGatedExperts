@@ -87,9 +87,6 @@ end
 @constraints function dynamic_ensemble_constraints()
     # Mean-field factorization: all variables factorize
     q(w, z, γ, τ) = q(w)q(z)q(γ)q(τ)
-
-    # Projection constraints with ClosedFormStrategy for faster inference
-    # Use Gamma (GammaShapeScale) instead of GammaShapeRate for projection - it has manifold support
     q(z) :: ProjectedTo(NormalMeanVariance, parameters=ProjectionParameters(strategy=ClosedFormStrategy()))
     q(γ) :: ProjectedTo(Gamma, parameters=ProjectionParameters(strategy=ClosedFormStrategy()))
 end
@@ -189,8 +186,11 @@ function demo_dynamic_ensemble()
     # Define forecasters
     forecasters = [
         ("sin(x)", x -> sin(x)),
+        ("sin+0.3", x -> sin(x) + 0.3),
+        ("0.8sin", x -> 0.8 * sin(x)),
+        ("linear", x -> 0.5 * x),
         ("cos(x)", x -> cos(x)),
-        ("sin+cos", x -> 0.5 * (sin(x) + cos(x))),
+        # ("shifted cos", x -> cos.(x .- 0.5)),
     ]
 
     n_forecasters = length(forecasters)
@@ -242,9 +242,230 @@ function demo_dynamic_ensemble()
         @info "  Forecaster $i" name w_bias=round(w_mean[1], digits=4) w_slope=round(w_mean[2], digits=4)
     end
 
+    # =========================================================================
+    # Step 3: Generate predictions on test data
+    # =========================================================================
+    @info "Step 3: Generating Ensemble Predictions on Test Data"
+
+    n_test = 50
+    x_test = collect(range(0, 4π, length=n_test))
+    y_test = true_function.(x_test) .+ noise_level .* randn(n_test)
+
+    # Generate forecaster predictions for test data
+    predictions_test = zeros(n_forecasters, n_test)
+    for (i, (_, f)) in enumerate(forecasters)
+        predictions_test[i, :] = f.(x_test)
+    end
+
+    # Create features for test data
+    features_test = create_features(x_test, feature_type)
+
+    # Compute dynamic ensemble predictions manually using learned weights
+    # For each test point j: γ_i(x_j) = exp(w_i' * x_j)
+    # Ensemble mean: ŷ_j = Σᵢ γ_i(x_j) * f_i(x_j) / Σᵢ γ_i(x_j)
+    # Ensemble variance: 1 / Σᵢ γ_i(x_j)
+
+    ensemble_mean = zeros(n_test)
+    ensemble_std = zeros(n_test)
+
+    for j in 1:n_test
+        # Compute precision for each forecaster at this test point
+        γ_values = zeros(n_forecasters)
+        for i in 1:n_forecasters
+            w_mean = mean(w_posteriors[i])
+            z_ij = dot(w_mean, features_test[j])
+            γ_values[i] = exp(z_ij)
+        end
+
+        # Precision-weighted ensemble prediction
+        total_precision = sum(γ_values)
+        ensemble_mean[j] = sum(γ_values[i] * predictions_test[i, j] for i in 1:n_forecasters) / total_precision
+        ensemble_std[j] = sqrt(1.0 / total_precision)
+    end
+
+    @info "Prediction Statistics" mean_std=round(mean(ensemble_std), digits=4)
+
+    # =========================================================================
+    # Step 4: Compare with static ensemble and individual forecasters
+    # =========================================================================
+    @info "Step 4: Performance Comparison"
+
+    # Train static ensemble for comparison
+    static_priors = [GammaShapeRate(1.0, 1e-12) for _ in 1:n_forecasters]
+    static_result = infer(
+        model = static_ensemble_model(n_forecasters=n_forecasters, priors=static_priors),
+        data = (y = y_train, predictions = predictions_train),
+        iterations = 20
+    )
+    γ_posteriors = static_result.posteriors[:γ][end]
+
+    # Static ensemble predictions
+    y_missing = [missing for _ in 1:n_test]
+    static_predict = infer(
+        model = static_ensemble_model(n_forecasters=n_forecasters, priors=γ_posteriors),
+        data = (y = y_missing, predictions = predictions_test),
+        iterations = 1
+    )
+    static_predictions = static_predict.predictions[:y][end]
+    static_mean = map(mean, static_predictions)
+    static_std = map(std, static_predictions)
+
+    # Compute MSEs
+    dynamic_mse = mean((ensemble_mean .- y_test).^2)
+    static_mse = mean((static_mean .- y_test).^2)
+
+    individual_mses = Float64[]
+    for i in 1:n_forecasters
+        mse_i = mean((predictions_test[i, :] .- y_test).^2)
+        push!(individual_mses, mse_i)
+    end
+
+    simple_avg = vec(mean(predictions_test, dims=1))
+    simple_avg_mse = mean((simple_avg .- y_test).^2)
+
+    @info "MSE Comparison"
+    for (i, (name, _)) in enumerate(forecasters)
+        @info "  Forecaster $i" name MSE=round(individual_mses[i], digits=6)
+    end
+    @info "  Simple Average" MSE=round(simple_avg_mse, digits=6)
+    @info "  Static Ensemble" MSE=round(static_mse, digits=6)
+    @info "  Dynamic Ensemble" MSE=round(dynamic_mse, digits=6)
+
+    # Compute improvements
+    best_idx = argmin(individual_mses)
+    best_mse = individual_mses[best_idx]
+    best_name = forecasters[best_idx][1]
+
+    improvement_vs_simple_avg = (simple_avg_mse - dynamic_mse) / simple_avg_mse * 100
+    improvement_vs_static = (static_mse - dynamic_mse) / static_mse * 100
+    improvement_vs_best = (best_mse - dynamic_mse) / best_mse * 100
+
+    @info "Dynamic Ensemble Improvements"
+    @info "  vs Simple Average" improvement="$(round(improvement_vs_simple_avg, digits=1))%"
+    @info "  vs Static Ensemble" improvement="$(round(improvement_vs_static, digits=1))%"
+    @info "  vs Best Individual ($best_name)" improvement="$(round(improvement_vs_best, digits=1))%"
+
+    # =========================================================================
+    # Step 5: Visualization
+    # =========================================================================
+    @info "Step 5: Generating Visualization"
+
+    # Plot 1: Predictions comparison
+    p1 = plot(x_test, y_test,
+        label="True", lw=2, color=:black, ls=:dot,
+        title="Dynamic vs Static Ensemble",
+        xlabel="x", ylabel="y",
+        legend=:topright
+    )
+
+    # Dynamic ensemble with uncertainty
+    plot!(p1, x_test, ensemble_mean,
+        ribbon=2*ensemble_std,
+        label="Dynamic ±2σ",
+        lw=2, color=:blue, fillalpha=0.3
+    )
+
+    # Static ensemble
+    plot!(p1, x_test, static_mean,
+        ribbon=2*static_std,
+        label="Static ±2σ",
+        lw=2, color=:red, fillalpha=0.2
+    )
+
+    # Plot 2: Individual forecasters
+    p2 = plot(x_test, y_test,
+        label="True", lw=2, color=:black, ls=:dot,
+        title="Individual Forecasters",
+        xlabel="x", ylabel="y",
+        legend=:topright
+    )
+
+    colors = [:red, :green, :orange, :purple, :brown, :pink, :cyan]
+    for (i, (name, _)) in enumerate(forecasters)
+        plot!(p2, x_test, predictions_test[i, :],
+            label=name, ls=:dash, alpha=0.7, color=colors[i]
+        )
+    end
+
+    # Plot 3: Dynamic weights over x (computed from learned w)
+    p3 = plot(title="Dynamic Precision Weights",
+        xlabel="x", ylabel="γ(x) = exp(w'x)",
+        legend=:topright
+    )
+
+    for (i, (name, _)) in enumerate(forecasters)
+        w_mean = mean(w_posteriors[i])
+        # Compute γ(x) = exp(w'x) for each test point
+        γ_values = [exp(dot(w_mean, f)) for f in features_test]
+        plot!(p3, x_test, γ_values, label=name, lw=2, color=colors[i])
+    end
+
+    # Plot 4: Uncertainty comparison (dynamic vs static)
+    p4 = plot(title="Uncertainty: Dynamic vs Static",
+        xlabel="x", ylabel="Standard Deviation (σ)",
+        legend=:topright
+    )
+    plot!(p4, x_test, ensemble_std, label="Dynamic σ", lw=2, color=:blue)
+    plot!(p4, x_test, static_std, label="Static σ", lw=2, color=:red, ls=:dash)
+
+    # Plot 5: MSE comparison bar chart
+    all_mses = vcat(individual_mses, [simple_avg_mse, static_mse, dynamic_mse])
+    all_labels = vcat([f[1] for f in forecasters], ["Simple Avg", "Static", "Dynamic"])
+    bar_colors = vcat(fill(:gray, n_forecasters), [:orange, :red, :blue])
+
+    p5 = bar(1:length(all_mses), all_mses,
+        title="MSE Comparison",
+        xlabel="Method", ylabel="MSE",
+        xticks=(1:length(all_mses), all_labels),
+        legend=false, color=bar_colors,
+        xrotation=45
+    )
+
+    # Plot 6: Normalized weights over x
+    p6 = plot(title="Normalized Dynamic Weights",
+        xlabel="x", ylabel="Weight (normalized)",
+        legend=:outerright
+    )
+
+    for j in 1:n_test
+        γ_values = zeros(n_forecasters)
+        for i in 1:n_forecasters
+            w_mean = mean(w_posteriors[i])
+            z_ij = dot(w_mean, features_test[j])
+            γ_values[i] = exp(z_ij)
+        end
+    end
+
+    # Compute normalized weights for each test point
+    normalized_weights = zeros(n_forecasters, n_test)
+    for j in 1:n_test
+        γ_values = zeros(n_forecasters)
+        for i in 1:n_forecasters
+            w_mean = mean(w_posteriors[i])
+            z_ij = dot(w_mean, features_test[j])
+            γ_values[i] = exp(z_ij)
+        end
+        normalized_weights[:, j] = γ_values ./ sum(γ_values)
+    end
+
+    for (i, (name, _)) in enumerate(forecasters)
+        plot!(p6, x_test, normalized_weights[i, :], label=name, lw=2, color=colors[i])
+    end
+
+    # Combine plots (3x2 layout)
+    plt = plot(p1, p2, p3, p4, p5, p6, layout=(3, 2), size=(1200, 1200))
+
+    savefig(plt, "dynamic_ensemble_demo.png")
+    @info "Saved visualization" file="dynamic_ensemble_demo.png"
+
     return (
         w_posteriors = w_posteriors,
-        forecasters = forecasters
+        forecasters = forecasters,
+        ensemble_mean = ensemble_mean,
+        ensemble_std = ensemble_std,
+        dynamic_mse = dynamic_mse,
+        static_mse = static_mse,
+        individual_mses = individual_mses
     )
 end
 
