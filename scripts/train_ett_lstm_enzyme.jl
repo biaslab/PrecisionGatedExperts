@@ -45,6 +45,37 @@ function (m::TimeSeriesLSTM)(x::AbstractArray{T,3}, ps::NamedTuple, st::NamedTup
     return y, st
 end
 
+
+struct TimeSeriesCNN{C1,C2,H} <: Lux.AbstractLuxContainerLayer{(:conv1, :conv2, :head)}
+    conv1::C1
+    conv2::C2
+    head::H
+end
+
+function TimeSeriesCNN(in_dims::Int, out_dims::Int; channels::Int=64, k::Int=7, stride::Int=2)
+    return TimeSeriesCNN(
+        Conv((k,), in_dims => channels, relu; pad=(1,), stride=(stride,)),
+        Conv((k,), channels => channels, relu; pad=(1,), stride=(stride,)),
+        Chain(Dense(channels => channels, relu), Dense(channels => out_dims))
+    )
+end
+
+function (m::TimeSeriesCNN)(x::AbstractArray{T,3}, ps::NamedTuple, st::NamedTuple) where {T}
+    # x shape: (features, seq_len, batch)
+    # Permute to (seq_len, channels, batch) expected by 1D Conv
+    x = permutedims(x, (2, 1, 3))
+    x, st1 = m.conv1(x, ps.conv1, st.conv1)
+    x, st2 = m.conv2(x, ps.conv2, st.conv2)
+    # Global average pool over time dimension (first dim)
+    x = mean(x; dims=1)              # (1, C, N)
+    x = reshape(x, size(x, 2), size(x, 3)) # (C, N)
+    y, st_head = m.head(x, ps.head, st.head)
+    st = merge(st, (conv1=st1, conv2=st2, head=st_head))
+    return y, st
+end
+
+
+
 # -----------------------------------------------------------------------------
 # Loss Function
 # -----------------------------------------------------------------------------
