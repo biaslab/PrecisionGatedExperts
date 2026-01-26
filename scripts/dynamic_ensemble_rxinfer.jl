@@ -90,8 +90,8 @@ end
     q(γ) :: ProjectedTo(Gamma, parameters=ProjectionParameters(strategy=ClosedFormStrategy()))
 end
 
-@initialization function dynamic_ensemble_init()
-    q(w) = MvNormalMeanPrecision(zeros(2), diagm(ones(2)))
+@initialization function dynamic_ensemble_init(n_features)
+    q(w) = MvNormalMeanPrecision(zeros(n_features), diagm(ones(n_features)))
     q(z) = NormalMeanVariance(0.0, 1.0)
     q(γ) = GammaShapeScale(1.0, 1.0)
     q(τ) = GammaShapeScale(1.0, 1.0)
@@ -140,7 +140,7 @@ function create_features(x, feature_type::Symbol)
     elseif feature_type == :quadratic
         return [Float64[1.0, xi, xi^2] for xi in x]
     elseif feature_type == :trig
-        return [Float64[1.0, sin(xi), cos(xi)] for xi in x]
+        return [Float64[1.0, xi, sin(xi), cos(xi)] for xi in x]
     else
         error("Unknown feature type: $feature_type")
     end
@@ -179,6 +179,9 @@ function demo_dynamic_ensemble(true_function, feature_type=:bias)
         ("0.8sin", x -> 0.8 * sin(x)),
         ("linear", x -> 0.5 * x),
         ("cos(x)", x -> cos(x)),
+        ("constant_1", _ -> 1),
+        ("constant_10", _ -> 10),
+        ("constant_100", _ -> 100),
         # ("shifted cos", x -> cos.(x .- 0.5)),
     ]
 
@@ -206,7 +209,7 @@ function demo_dynamic_ensemble(true_function, feature_type=:bias)
     # Initial priors on gating weights
     w_priors_init = [MvNormalMeanPrecision(zeros(n_features), 0.1 * diagm(ones(n_features))) for _ in 1:n_forecasters]
     # Priors on τ (softdot precision)
-    τ_priors_init = [ GammaShapeScale(1.0, 1.0)  for _ in 1:n_forecasters ]
+    τ_priors_init = [ GammaShapeScale(1.0, 1e12)  for _ in 1:n_forecasters ]
 
     @info "Running variational inference with projection..."
 
@@ -219,7 +222,7 @@ function demo_dynamic_ensemble(true_function, feature_type=:bias)
         ),
         data = (y = y_train, features = features_train, predictions = predictions_train),
         constraints = dynamic_ensemble_constraints(),
-        initialization = dynamic_ensemble_init(),
+        initialization = dynamic_ensemble_init(n_features),
         iterations = 30,
         free_energy = true,
         showprogress = true
@@ -232,7 +235,8 @@ function demo_dynamic_ensemble(true_function, feature_type=:bias)
     @info "Learned Gating Weight Posteriors"
     for (i, (name, _)) in enumerate(forecasters)
         w_mean = mean(w_posteriors[i])
-        @info "  Forecaster $i" name w_bias=round(w_mean[1], digits=4) w_slope=round(w_mean[2], digits=4)
+        w_rounded = round.(w_mean, digits=4)
+        @info "  Forecaster $i" name w=w_rounded
     end
 
     @info "Learned Softdot Precision Posteriors"
@@ -270,7 +274,7 @@ function demo_dynamic_ensemble(true_function, feature_type=:bias)
         ),
         data = (y = y_missing, features = features_test, predictions = predictions_test),
         constraints = dynamic_ensemble_constraints(),
-        initialization = dynamic_ensemble_init(),
+        initialization = dynamic_ensemble_init(n_features),
         iterations = 10
     )
 
@@ -305,7 +309,7 @@ function demo_dynamic_ensemble(true_function, feature_type=:bias)
     static_predict = infer(
         model = static_ensemble_model(n_forecasters=n_forecasters, priors=γ_posteriors),
         data = (y = y_missing, predictions = predictions_test),
-        iterations = 1
+        iterations = 10
     )
     static_predictions = static_predict.predictions[:y][end]
     static_mean = map(mean, static_predictions)
@@ -358,7 +362,7 @@ function demo_dynamic_ensemble(true_function, feature_type=:bias)
     # =========================================================================
     @info "Step 6: Generating Visualization"
 
-    colors = [:red, :green, :orange, :purple, :brown, :pink, :cyan]
+    colors = [:red, :green, :orange, :purple, :brown, :pink, :cyan, :magenta, :yellow]
 
     # Plot 1: Predictions comparison
     p1 = plot(x_test, y_test,
@@ -486,7 +490,7 @@ function true_function(x)
     transition_width = π
     weight_cos = 0.5 * (1 + tanh((x - transition_point) / transition_width))
     weight_sin = 1 - weight_cos
-    return weight_sin * sin(x) + weight_cos * cos(x)
+    return weight_sin * sin(x) + weight_cos * cos(x) + 0.1 * x^2
 end
 
 function main()
