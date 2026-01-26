@@ -283,6 +283,9 @@ function demo_dynamic_ensemble(true_function, feature_type=:bias)
     dynamic_mean = map(mean, dynamic_predictions)
     dynamic_std = map(std, dynamic_predictions)
 
+    # Extract γ posteriors for weight uncertainty visualization
+    γ_dynamic_posteriors = dynamic_predict.posteriors[:γ][end]  # [n_forecasters, n_test] matrix of distributions
+
     @info "Dynamic Prediction Statistics" mean_std=round(mean(dynamic_std), digits=4)
 
     # =========================================================================
@@ -315,7 +318,10 @@ function demo_dynamic_ensemble(true_function, feature_type=:bias)
     static_mean = map(mean, static_predictions)
     static_std = map(std, static_predictions)
 
-    @info "Static Prediction Statistics" mean_std=round(mean(static_std), digits=4)
+    # Extract static γ posteriors (these are the same for all x since static model)
+    γ_static_posteriors = γ_posteriors  # Vector of distributions, one per forecaster
+
+    @info "Static Prediction Statistics" mean_std=round(mean(dynamic_std), digits=4)
 
     # =========================================================================
     # Step 5: Performance Comparison
@@ -404,62 +410,101 @@ function demo_dynamic_ensemble(true_function, feature_type=:bias)
     end
     vline!(p2, [2π], color=:gray, ls=:dash, label="", lw=2)
 
-    # Plot 3: Dynamic weights over x (computed from learned w)
-    p3 = plot(title="Dynamic Precision Weights γ(x) = exp(w'x)",
+    # Plot 3: Dynamic weights over x with uncertainty from γ posteriors
+    p3 = plot(title="Dynamic Precision Weights γ(x)",
         xlabel="x", ylabel="Precision γ",
         legend=:topright
     )
 
     for (i, (name, _)) in enumerate(forecasters)
-        w_mean = mean(w_posteriors[i])
-        # Compute γ(x) = exp(w'x) for each test point
-        γ_values = [exp(dot(w_mean, f)) for f in features_test]
-        plot!(p3, x_test, γ_values, label=name, lw=2, color=colors[i])
+        # Extract mean and std directly from γ posteriors
+        γ_means = [mean(γ_dynamic_posteriors[i, j]) for j in 1:n_test]
+        γ_stds = [std(γ_dynamic_posteriors[i, j]) for j in 1:n_test]
+
+        plot!(p3, x_test, γ_means, ribbon=2*γ_stds, label=name, lw=2, color=colors[i], fillalpha=0.2)
     end
     vline!(p3, [2π], color=:gray, ls=:dash, label="", lw=2)
 
-    # Plot 4: Uncertainty comparison (dynamic vs static)
-    p4 = plot(title="Uncertainty: Dynamic vs Static",
+    # Plot 4: Uncertainty comparison (dynamic vs static) with uncertainty bands
+    # Monte Carlo sampling to get uncertainty of the uncertainty
+    n_mc_samples = 500
+
+    # Dynamic: sample γ posteriors and compute prediction std for each sample
+    dynamic_std_samples = zeros(n_mc_samples, n_test)
+    for s in 1:n_mc_samples
+        for j in 1:n_test
+            # Sample γ for each forecaster and compute combined precision
+            γ_samples = [rand(γ_dynamic_posteriors[i, j]) for i in 1:n_forecasters]
+            # Prediction variance = weighted sum of individual variances
+            # For precision-weighted combination: var = 1 / sum(γ)
+            total_precision = sum(γ_samples)
+            dynamic_std_samples[s, j] = 1.0 / sqrt(total_precision)
+        end
+    end
+    dynamic_std_mean = vec(mean(dynamic_std_samples, dims=1))
+    dynamic_std_std = vec(std(dynamic_std_samples, dims=1))
+
+    # Static: sample γ posteriors (same for all x) and compute prediction std
+    static_std_samples = zeros(n_mc_samples, n_test)
+    for s in 1:n_mc_samples
+        # Sample γ for each forecaster (constant across x)
+        γ_samples = [rand(γ_static_posteriors[i]) for i in 1:n_forecasters]
+        total_precision = sum(γ_samples)
+        static_std_samples[s, :] .= 1.0 / sqrt(total_precision)
+    end
+    static_std_mean = vec(mean(static_std_samples, dims=1))
+    static_std_std = vec(std(static_std_samples, dims=1))
+
+    p4 = plot(title="Uncertainty: Dynamic vs Static (with uncertainty bands)",
         xlabel="x", ylabel="Standard Deviation (σ)",
         legend=:topright
     )
-    plot!(p4, x_test, dynamic_std, label="Dynamic σ", lw=2, color=:blue)
-    plot!(p4, x_test, static_std, label="Static σ", lw=2, color=:red, ls=:dash)
+    plot!(p4, x_test, dynamic_std_mean, ribbon=2*dynamic_std_std,
+        label="Dynamic σ ±2σ", lw=2, color=:blue, fillalpha=0.3)
+    plot!(p4, x_test, static_std_mean, ribbon=2*static_std_std,
+        label="Static σ ±2σ", lw=2, color=:red, fillalpha=0.2)
     vline!(p4, [2π], color=:gray, ls=:dash, label="Train boundary", lw=2)
 
-    # Plot 5: MSE comparison bar chart
-    all_mses = vcat(individual_mses, [simple_avg_mse, static_mse, dynamic_mse])
-    all_labels = vcat([f[1] for f in forecasters], ["Simple Avg", "Static", "Dynamic"])
-    bar_colors = vcat(fill(:gray, n_forecasters), [:orange, :red, :blue])
+    # Plot 5: MSE comparison bar chart (only key methods)
+    key_mses = [best_mse, simple_avg_mse, static_mse, dynamic_mse]
+    key_labels = ["Best ($best_name)", "Simple Avg", "Static", "Dynamic"]
+    key_colors = [:gray, :orange, :red, :blue]
 
-    p5 = bar(1:length(all_mses), all_mses,
+    p5 = bar(1:length(key_mses), key_mses,
         title="MSE Comparison (Full Test Set 0-4π)",
         xlabel="Method", ylabel="MSE",
-        xticks=(1:length(all_mses), all_labels),
-        legend=false, color=bar_colors,
+        xticks=(1:length(key_mses), key_labels),
+        legend=false, color=key_colors,
         xrotation=45
     )
 
-    # Plot 6: Normalized weights over x
-    p6 = plot(title="Normalized Dynamic Weights",
+    # Plot 6: Normalized weights over x with uncertainty (via Monte Carlo from γ posteriors)
+    p6 = plot(title="Normalized Dynamic Weights with Uncertainty",
         xlabel="x", ylabel="Weight (normalized)",
         legend=:outerright
     )
 
-    # Compute normalized weights for each test point
-    normalized_weights = zeros(n_forecasters, n_test)
-    for j in 1:n_test
-        γ_values = zeros(n_forecasters)
-        for i in 1:n_forecasters
-            w_mean = mean(w_posteriors[i])
-            z_ij = dot(w_mean, features_test[j])
-            γ_values[i] = exp(z_ij)
+    # Monte Carlo sampling from γ posteriors to compute normalized weight uncertainty
+    n_samples = 500
+    normalized_weights_samples = zeros(n_samples, n_forecasters, n_test)
+
+    for s in 1:n_samples
+        for j in 1:n_test
+            # Sample γ for each forecaster from their posteriors
+            γ_samples = [rand(γ_dynamic_posteriors[i, j]) for i in 1:n_forecasters]
+            normalized_weights_samples[s, :, j] = γ_samples ./ sum(γ_samples)
         end
-        normalized_weights[:, j] = γ_values ./ sum(γ_values)
     end
 
+    # Compute mean and std of normalized weights
+    normalized_weights_mean = dropdims(mean(normalized_weights_samples, dims=1), dims=1)
+    normalized_weights_std = dropdims(std(normalized_weights_samples, dims=1), dims=1)
+
     for (i, (name, _)) in enumerate(forecasters)
-        plot!(p6, x_test, normalized_weights[i, :], label=name, lw=2, color=colors[i])
+        plot!(p6, x_test, normalized_weights_mean[i, :],
+            ribbon=2*normalized_weights_std[i, :],
+            label=name, lw=2, color=colors[i], fillalpha=0.2
+        )
     end
     vline!(p6, [2π], color=:gray, ls=:dash, label="", lw=2)
 
@@ -468,6 +513,90 @@ function demo_dynamic_ensemble(true_function, feature_type=:bias)
 
     savefig(plt, "dynamic_ensemble_demo.png")
     @info "Saved visualization" file="dynamic_ensemble_demo.png"
+
+    # ==========================================================================
+    # Plot 7: Variance Decomposition (Aleatoric vs Epistemic) - Separate figure
+    # ==========================================================================
+    # Total variance = Aleatoric + Epistemic
+    # Aleatoric: variance from expected precision = 1/E[Σγ]
+    # Epistemic: additional variance from uncertainty over γ = E[1/Σγ] - 1/E[Σγ]
+
+    # Dynamic ensemble decomposition
+    dynamic_aleatoric = zeros(n_test)
+    dynamic_epistemic = zeros(n_test)
+    dynamic_total_var = zeros(n_test)
+
+    for j in 1:n_test
+        # E[γ] for each forecaster
+        γ_means_j = [mean(γ_dynamic_posteriors[i, j]) for i in 1:n_forecasters]
+        expected_total_precision = sum(γ_means_j)
+
+        # Aleatoric: variance assuming we knew γ exactly (use expected γ)
+        dynamic_aleatoric[j] = 1.0 / expected_total_precision
+
+        # E[1/Σγ] via Monte Carlo
+        inv_precision_samples = zeros(n_mc_samples)
+        for s in 1:n_mc_samples
+            γ_samples = [rand(γ_dynamic_posteriors[i, j]) for i in 1:n_forecasters]
+            inv_precision_samples[s] = 1.0 / sum(γ_samples)
+        end
+        dynamic_total_var[j] = mean(inv_precision_samples)
+
+        # Epistemic: difference between total and aleatoric
+        dynamic_epistemic[j] = dynamic_total_var[j] - dynamic_aleatoric[j]
+    end
+
+    # Static ensemble decomposition
+    static_aleatoric = zeros(n_test)
+    static_epistemic = zeros(n_test)
+    static_total_var = zeros(n_test)
+
+    # E[γ] for static (constant across x)
+    γ_static_means = [mean(γ_static_posteriors[i]) for i in 1:n_forecasters]
+    expected_static_precision = sum(γ_static_means)
+    static_aleatoric .= 1.0 / expected_static_precision
+
+    # E[1/Σγ] via Monte Carlo for static
+    inv_precision_static_samples = zeros(n_mc_samples)
+    for s in 1:n_mc_samples
+        γ_samples = [rand(γ_static_posteriors[i]) for i in 1:n_forecasters]
+        inv_precision_static_samples[s] = 1.0 / sum(γ_samples)
+    end
+    static_total_var .= mean(inv_precision_static_samples)
+    static_epistemic .= static_total_var .- static_aleatoric
+
+    # Create variance decomposition plot
+    p7 = plot(layout=(1, 2), size=(1200, 400),
+        title=["Dynamic Ensemble" "Static Ensemble"])
+
+    # Dynamic subplot - stacked area
+    plot!(p7[1], x_test, dynamic_aleatoric,
+        fillrange=0, fillalpha=0.6, color=:blue,
+        label="Aleatoric", lw=0)
+    plot!(p7[1], x_test, dynamic_aleatoric .+ dynamic_epistemic,
+        fillrange=dynamic_aleatoric, fillalpha=0.4, color=:orange,
+        label="Epistemic", lw=0)
+    plot!(p7[1], x_test, dynamic_total_var,
+        label="Total Var", lw=2, color=:black, ls=:dash)
+    vline!(p7[1], [2π], color=:gray, ls=:dash, label="Train boundary", lw=2)
+    xlabel!(p7[1], "x")
+    ylabel!(p7[1], "Variance")
+
+    # Static subplot - stacked area
+    plot!(p7[2], x_test, static_aleatoric,
+        fillrange=0, fillalpha=0.6, color=:blue,
+        label="Aleatoric", lw=0)
+    plot!(p7[2], x_test, static_aleatoric .+ static_epistemic,
+        fillrange=static_aleatoric, fillalpha=0.4, color=:orange,
+        label="Epistemic", lw=0)
+    plot!(p7[2], x_test, static_total_var,
+        label="Total Var", lw=2, color=:black, ls=:dash)
+    vline!(p7[2], [2π], color=:gray, ls=:dash, label="Train boundary", lw=2)
+    xlabel!(p7[2], "x")
+    ylabel!(p7[2], "Variance")
+
+    savefig(p7, "variance_decomposition.png")
+    @info "Saved variance decomposition" file="variance_decomposition.png"
 
     return (
         w_posteriors = w_posteriors,
