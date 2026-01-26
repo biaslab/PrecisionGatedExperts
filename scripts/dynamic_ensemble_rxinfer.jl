@@ -53,7 +53,7 @@ using ProbabilisticEnsembling
 # Dynamic Ensemble Model Definition
 # =============================================================================
 
-@model function dynamic_ensemble_model(n_forecasters, n_obs, features, predictions, y, w_priors)
+@model function dynamic_ensemble_model(n_forecasters, n_obs, features, predictions, y, w_priors, τ_priors)
     # features: Vector of vectors, each of length n_features
     # predictions: [n_forecasters × n_obs] - forecaster outputs
     # w_priors: vector of MvNormal priors for gating weights
@@ -63,15 +63,14 @@ using ProbabilisticEnsembling
     # Gating weights for each forecaster
     for i in 1:n_forecasters
         w[i] ~ w_priors[i]
+        τ[i] ~ τ_priors[i]
     end
 
     # For each observation
     for j in 1:n_obs
         # For each forecaster
         for i in 1:n_forecasters
-            # τ is precision for softdot (z = w^T x with noise)
-            τ[i, j] ~ GammaShapeScale(1.0, 1.0)
-            z[i, j] ~ softdot(features[j], w[i], τ[i, j])
+            z[i, j] ~ softdot(features[j], w[i], τ[i])
 
             # γ = exp(z) via Log node: z = Log(γ)
             # Use GammaShapeScale for CFE compatibility
@@ -156,7 +155,7 @@ end
 
 Demonstrate the dynamic ensemble inference with synthetic data.
 """
-function demo_dynamic_ensemble()
+function demo_dynamic_ensemble(true_function, feature_type=:bias)
     Random.seed!(42)
 
     @info "Dynamic Probabilistic Ensemble Forecasting Demo"
@@ -167,20 +166,10 @@ function demo_dynamic_ensemble()
     # =========================================================================
     @info "Step 1: Generating Synthetic Data with Region-Dependent Structure"
 
-    n_train = 30
+    n_train = 300
     noise_level = 0.15
 
-    x_train = collect(range(0, 4π, length=n_train))
-
-    # True function: sin dominates in first half, cos in second half
-    function true_function(x)
-        transition_point = 2π
-        transition_width = π
-        weight_cos = 0.5 * (1 + tanh((x - transition_point) / transition_width))
-        weight_sin = 1 - weight_cos
-        return weight_sin * sin(x) + weight_cos * cos(x)
-    end
-
+    x_train = collect(range(0, 2π, length=n_train))
     y_train = true_function.(x_train) .+ noise_level .* randn(n_train)
 
     # Define forecasters
@@ -202,9 +191,8 @@ function demo_dynamic_ensemble()
     end
 
     @info "Data Summary" n_train n_forecasters true_function="transition from sin to cos" noise_level
-
+   
     # Create feature vectors for gating
-    feature_type = :bias  # [1, x] - allows baseline + linear gating
     features_train = create_features(x_train, feature_type)
     n_features = length(features_train[1])
 
@@ -217,6 +205,8 @@ function demo_dynamic_ensemble()
 
     # Initial priors on gating weights
     w_priors_init = [MvNormalMeanPrecision(zeros(n_features), 0.1 * diagm(ones(n_features))) for _ in 1:n_forecasters]
+    # Priors on τ (softdot precision)
+    τ_priors_init = [ GammaShapeScale(1.0, 1.0)  for _ in 1:n_forecasters ]
 
     @info "Running variational inference with projection..."
 
@@ -224,22 +214,31 @@ function demo_dynamic_ensemble()
         model = dynamic_ensemble_model(
             n_forecasters = n_forecasters,
             n_obs = n_train,
-            w_priors = w_priors_init
+            w_priors = w_priors_init,
+            τ_priors = τ_priors_init
         ),
         data = (y = y_train, features = features_train, predictions = predictions_train),
         constraints = dynamic_ensemble_constraints(),
         initialization = dynamic_ensemble_init(),
         iterations = 30,
-        free_energy = true
+        free_energy = true,
+        showprogress = true
     )
 
     # Extract learned weight posteriors
     w_posteriors = dynamic_result.posteriors[:w][end]
+    τ_posteriors = dynamic_result.posteriors[:τ][end]
 
     @info "Learned Gating Weight Posteriors"
     for (i, (name, _)) in enumerate(forecasters)
         w_mean = mean(w_posteriors[i])
         @info "  Forecaster $i" name w_bias=round(w_mean[1], digits=4) w_slope=round(w_mean[2], digits=4)
+    end
+
+    @info "Learned Softdot Precision Posteriors"
+    for (i, (name, _)) in enumerate(forecasters)
+        τ_means = mean(τ_posteriors[i])
+        @info "  Forecaster higher level precision $i" name τ_mean=round(τ_means, digits=4)
     end
 
     # =========================================================================
@@ -259,38 +258,35 @@ function demo_dynamic_ensemble()
 
     # Create features for test data
     features_test = create_features(x_test, feature_type)
+    y_missing = [missing for _ in 1:n_test]
 
-    # Compute dynamic ensemble predictions manually using learned weights
-    # For each test point j: γ_i(x_j) = exp(w_i' * x_j)
-    # Ensemble mean: ŷ_j = Σᵢ γ_i(x_j) * f_i(x_j) / Σᵢ γ_i(x_j)
-    # Ensemble variance: 1 / Σᵢ γ_i(x_j)
+    # Dynamic ensemble predictions using RxInfer
+    dynamic_predict = infer(
+        model = dynamic_ensemble_model(
+            n_forecasters = n_forecasters,
+            n_obs = n_test,
+            w_priors = w_posteriors,
+            τ_priors = τ_posteriors
+        ),
+        data = (y = y_missing, features = features_test, predictions = predictions_test),
+        constraints = dynamic_ensemble_constraints(),
+        initialization = dynamic_ensemble_init(),
+        iterations = 10
+    )
 
-    ensemble_mean = zeros(n_test)
-    ensemble_std = zeros(n_test)
+    # Extract dynamic ensemble predictions
+    dynamic_predictions = dynamic_predict.predictions[:y][end]
+    dynamic_mean = map(mean, dynamic_predictions)
+    dynamic_std = map(std, dynamic_predictions)
 
-    for j in 1:n_test
-        # Compute precision for each forecaster at this test point
-        γ_values = zeros(n_forecasters)
-        for i in 1:n_forecasters
-            w_mean = mean(w_posteriors[i])
-            z_ij = dot(w_mean, features_test[j])
-            γ_values[i] = exp(z_ij)
-        end
-
-        # Precision-weighted ensemble prediction
-        total_precision = sum(γ_values)
-        ensemble_mean[j] = sum(γ_values[i] * predictions_test[i, j] for i in 1:n_forecasters) / total_precision
-        ensemble_std[j] = sqrt(1.0 / total_precision)
-    end
-
-    @info "Prediction Statistics" mean_std=round(mean(ensemble_std), digits=4)
+    @info "Dynamic Prediction Statistics" mean_std=round(mean(dynamic_std), digits=4)
 
     # =========================================================================
-    # Step 4: Compare with static ensemble and individual forecasters
+    # Step 4: Train and predict with Static Ensemble for comparison
     # =========================================================================
-    @info "Step 4: Performance Comparison"
+    @info "Step 4: Training Static Ensemble for Comparison"
 
-    # Train static ensemble for comparison
+    # Train static ensemble
     static_priors = [GammaShapeRate(1.0, 1e-12) for _ in 1:n_forecasters]
     static_result = infer(
         model = static_ensemble_model(n_forecasters=n_forecasters, priors=static_priors),
@@ -299,8 +295,13 @@ function demo_dynamic_ensemble()
     )
     γ_posteriors = static_result.posteriors[:γ][end]
 
+    @info "Learned Static Precision Posteriors"
+    for (i, (name, _)) in enumerate(forecasters)
+        γ_mean = mean(γ_posteriors[i])
+        @info "  Forecaster $i" name γ_mean=round(γ_mean, digits=4)
+    end
+
     # Static ensemble predictions
-    y_missing = [missing for _ in 1:n_test]
     static_predict = infer(
         model = static_ensemble_model(n_forecasters=n_forecasters, priors=γ_posteriors),
         data = (y = y_missing, predictions = predictions_test),
@@ -310,8 +311,15 @@ function demo_dynamic_ensemble()
     static_mean = map(mean, static_predictions)
     static_std = map(std, static_predictions)
 
+    @info "Static Prediction Statistics" mean_std=round(mean(static_std), digits=4)
+
+    # =========================================================================
+    # Step 5: Performance Comparison
+    # =========================================================================
+    @info "Step 5: Performance Comparison (Train: 0-2π, Test: 0-4π)"
+
     # Compute MSEs
-    dynamic_mse = mean((ensemble_mean .- y_test).^2)
+    dynamic_mse = mean((dynamic_mean .- y_test).^2)
     static_mse = mean((static_mean .- y_test).^2)
 
     individual_mses = Float64[]
@@ -346,21 +354,23 @@ function demo_dynamic_ensemble()
     @info "  vs Best Individual ($best_name)" improvement="$(round(improvement_vs_best, digits=1))%"
 
     # =========================================================================
-    # Step 5: Visualization
+    # Step 6: Visualization
     # =========================================================================
-    @info "Step 5: Generating Visualization"
+    @info "Step 6: Generating Visualization"
+
+    colors = [:red, :green, :orange, :purple, :brown, :pink, :cyan]
 
     # Plot 1: Predictions comparison
     p1 = plot(x_test, y_test,
         label="True", lw=2, color=:black, ls=:dot,
-        title="Dynamic vs Static Ensemble",
+        title="Dynamic vs Static Ensemble (Train: 0-2π, Test: 0-4π)",
         xlabel="x", ylabel="y",
         legend=:topright
     )
 
     # Dynamic ensemble with uncertainty
-    plot!(p1, x_test, ensemble_mean,
-        ribbon=2*ensemble_std,
+    plot!(p1, x_test, dynamic_mean,
+        ribbon=2*dynamic_std,
         label="Dynamic ±2σ",
         lw=2, color=:blue, fillalpha=0.3
     )
@@ -372,6 +382,9 @@ function demo_dynamic_ensemble()
         lw=2, color=:red, fillalpha=0.2
     )
 
+    # Add vertical line at training boundary
+    vline!(p1, [2π], color=:gray, ls=:dash, label="Train boundary", lw=2)
+
     # Plot 2: Individual forecasters
     p2 = plot(x_test, y_test,
         label="True", lw=2, color=:black, ls=:dot,
@@ -380,16 +393,16 @@ function demo_dynamic_ensemble()
         legend=:topright
     )
 
-    colors = [:red, :green, :orange, :purple, :brown, :pink, :cyan]
     for (i, (name, _)) in enumerate(forecasters)
         plot!(p2, x_test, predictions_test[i, :],
             label=name, ls=:dash, alpha=0.7, color=colors[i]
         )
     end
+    vline!(p2, [2π], color=:gray, ls=:dash, label="", lw=2)
 
     # Plot 3: Dynamic weights over x (computed from learned w)
-    p3 = plot(title="Dynamic Precision Weights",
-        xlabel="x", ylabel="γ(x) = exp(w'x)",
+    p3 = plot(title="Dynamic Precision Weights γ(x) = exp(w'x)",
+        xlabel="x", ylabel="Precision γ",
         legend=:topright
     )
 
@@ -399,14 +412,16 @@ function demo_dynamic_ensemble()
         γ_values = [exp(dot(w_mean, f)) for f in features_test]
         plot!(p3, x_test, γ_values, label=name, lw=2, color=colors[i])
     end
+    vline!(p3, [2π], color=:gray, ls=:dash, label="", lw=2)
 
     # Plot 4: Uncertainty comparison (dynamic vs static)
     p4 = plot(title="Uncertainty: Dynamic vs Static",
         xlabel="x", ylabel="Standard Deviation (σ)",
         legend=:topright
     )
-    plot!(p4, x_test, ensemble_std, label="Dynamic σ", lw=2, color=:blue)
+    plot!(p4, x_test, dynamic_std, label="Dynamic σ", lw=2, color=:blue)
     plot!(p4, x_test, static_std, label="Static σ", lw=2, color=:red, ls=:dash)
+    vline!(p4, [2π], color=:gray, ls=:dash, label="Train boundary", lw=2)
 
     # Plot 5: MSE comparison bar chart
     all_mses = vcat(individual_mses, [simple_avg_mse, static_mse, dynamic_mse])
@@ -414,7 +429,7 @@ function demo_dynamic_ensemble()
     bar_colors = vcat(fill(:gray, n_forecasters), [:orange, :red, :blue])
 
     p5 = bar(1:length(all_mses), all_mses,
-        title="MSE Comparison",
+        title="MSE Comparison (Full Test Set 0-4π)",
         xlabel="Method", ylabel="MSE",
         xticks=(1:length(all_mses), all_labels),
         legend=false, color=bar_colors,
@@ -426,15 +441,6 @@ function demo_dynamic_ensemble()
         xlabel="x", ylabel="Weight (normalized)",
         legend=:outerright
     )
-
-    for j in 1:n_test
-        γ_values = zeros(n_forecasters)
-        for i in 1:n_forecasters
-            w_mean = mean(w_posteriors[i])
-            z_ij = dot(w_mean, features_test[j])
-            γ_values[i] = exp(z_ij)
-        end
-    end
 
     # Compute normalized weights for each test point
     normalized_weights = zeros(n_forecasters, n_test)
@@ -451,26 +457,40 @@ function demo_dynamic_ensemble()
     for (i, (name, _)) in enumerate(forecasters)
         plot!(p6, x_test, normalized_weights[i, :], label=name, lw=2, color=colors[i])
     end
+    vline!(p6, [2π], color=:gray, ls=:dash, label="", lw=2)
 
     # Combine plots (3x2 layout)
-    plt = plot(p1, p2, p3, p4, p5, p6, layout=(3, 2), size=(1200, 1200))
+    plt = plot(p1, p2, p3, p4, p5, p6, layout=(3, 2), size=(1400, 1200))
 
     savefig(plt, "dynamic_ensemble_demo.png")
     @info "Saved visualization" file="dynamic_ensemble_demo.png"
 
     return (
         w_posteriors = w_posteriors,
+        τ_posteriors = τ_posteriors,
+        γ_posteriors = γ_posteriors,
         forecasters = forecasters,
-        ensemble_mean = ensemble_mean,
-        ensemble_std = ensemble_std,
+        dynamic_mean = dynamic_mean,
+        dynamic_std = dynamic_std,
+        static_mean = static_mean,
+        static_std = static_std,
         dynamic_mse = dynamic_mse,
         static_mse = static_mse,
         individual_mses = individual_mses
     )
 end
 
+# True function: sin dominates in first half, cos in second half
+function true_function(x)
+    transition_point = 2π
+    transition_width = π
+    weight_cos = 0.5 * (1 + tanh((x - transition_point) / transition_width))
+    weight_sin = 1 - weight_cos
+    return weight_sin * sin(x) + weight_cos * cos(x)
+end
+
 function main()
-    demo_dynamic_ensemble()
+    demo_dynamic_ensemble(true_function)
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
