@@ -166,7 +166,7 @@ function demo_dynamic_ensemble(true_function, feature_type=:bias)
     # =========================================================================
     @info "Step 1: Generating Synthetic Data with Region-Dependent Structure"
 
-    n_train = 300
+    n_train = 500
     noise_level = 0.15
 
     x_train = collect(range(0, 2π, length=n_train))
@@ -410,22 +410,25 @@ function demo_dynamic_ensemble(true_function, feature_type=:bias)
     end
     vline!(p2, [2π], color=:gray, ls=:dash, label="", lw=2)
 
-    # Plot 3: Dynamic weights over x with uncertainty from γ posteriors
-    p3 = plot(title="Dynamic Precision Weights γ(x)",
+    # Plot 3: Dynamic weights over x with 95% CI from γ posteriors
+    p3 = plot(title="Dynamic Precision Weights γ(x) (95% CI)",
         xlabel="x", ylabel="Precision γ",
         legend=:topright
     )
 
     for (i, (name, _)) in enumerate(forecasters)
-        # Extract mean and std directly from γ posteriors
-        γ_means = [mean(γ_dynamic_posteriors[i, j]) for j in 1:n_test]
-        γ_stds = [std(γ_dynamic_posteriors[i, j]) for j in 1:n_test]
+        # Extract median and 95% CI using quantiles (proper for Gamma distributions)
+        γ_medians = [quantile(γ_dynamic_posteriors[i, j], 0.5) for j in 1:n_test]
+        γ_lower = [quantile(γ_dynamic_posteriors[i, j], 0.025) for j in 1:n_test]
+        γ_upper = [quantile(γ_dynamic_posteriors[i, j], 0.975) for j in 1:n_test]
 
-        plot!(p3, x_test, γ_means, ribbon=2*γ_stds, label=name, lw=2, color=colors[i], fillalpha=0.2)
+        plot!(p3, x_test, γ_medians,
+            ribbon=(γ_medians .- γ_lower, γ_upper .- γ_medians),
+            label=name, lw=2, color=colors[i], fillalpha=0.2)
     end
     vline!(p3, [2π], color=:gray, ls=:dash, label="", lw=2)
 
-    # Plot 4: Uncertainty comparison (dynamic vs static) with uncertainty bands
+    # Plot 4: Uncertainty comparison (dynamic vs static) with 95% CI
     # Monte Carlo sampling to get uncertainty of the uncertainty
     n_mc_samples = 500
 
@@ -441,8 +444,10 @@ function demo_dynamic_ensemble(true_function, feature_type=:bias)
             dynamic_std_samples[s, j] = 1.0 / sqrt(total_precision)
         end
     end
-    dynamic_std_mean = vec(mean(dynamic_std_samples, dims=1))
-    dynamic_std_std = vec(std(dynamic_std_samples, dims=1))
+    # Use quantiles for 95% CI
+    dynamic_std_median = [quantile(dynamic_std_samples[:, j], 0.5) for j in 1:n_test]
+    dynamic_std_lower = [quantile(dynamic_std_samples[:, j], 0.025) for j in 1:n_test]
+    dynamic_std_upper = [quantile(dynamic_std_samples[:, j], 0.975) for j in 1:n_test]
 
     # Static: sample γ posteriors (same for all x) and compute prediction std
     static_std_samples = zeros(n_mc_samples, n_test)
@@ -452,17 +457,21 @@ function demo_dynamic_ensemble(true_function, feature_type=:bias)
         total_precision = sum(γ_samples)
         static_std_samples[s, :] .= 1.0 / sqrt(total_precision)
     end
-    static_std_mean = vec(mean(static_std_samples, dims=1))
-    static_std_std = vec(std(static_std_samples, dims=1))
+    # Use quantiles for 95% CI
+    static_std_median = [quantile(static_std_samples[:, j], 0.5) for j in 1:n_test]
+    static_std_lower = [quantile(static_std_samples[:, j], 0.025) for j in 1:n_test]
+    static_std_upper = [quantile(static_std_samples[:, j], 0.975) for j in 1:n_test]
 
-    p4 = plot(title="Uncertainty: Dynamic vs Static (with uncertainty bands)",
+    p4 = plot(title="Uncertainty: Dynamic vs Static (95% CI)",
         xlabel="x", ylabel="Standard Deviation (σ)",
         legend=:topright
     )
-    plot!(p4, x_test, dynamic_std_mean, ribbon=2*dynamic_std_std,
-        label="Dynamic σ ±2σ", lw=2, color=:blue, fillalpha=0.3)
-    plot!(p4, x_test, static_std_mean, ribbon=2*static_std_std,
-        label="Static σ ±2σ", lw=2, color=:red, fillalpha=0.2)
+    plot!(p4, x_test, dynamic_std_median,
+        ribbon=(dynamic_std_median .- dynamic_std_lower, dynamic_std_upper .- dynamic_std_median),
+        label="Dynamic σ (95% CI)", lw=2, color=:blue, fillalpha=0.3)
+    plot!(p4, x_test, static_std_median,
+        ribbon=(static_std_median .- static_std_lower, static_std_upper .- static_std_median),
+        label="Static σ (95% CI)", lw=2, color=:red, fillalpha=0.2)
     vline!(p4, [2π], color=:gray, ls=:dash, label="Train boundary", lw=2)
 
     # Plot 5: MSE comparison bar chart (only key methods)
@@ -478,8 +487,8 @@ function demo_dynamic_ensemble(true_function, feature_type=:bias)
         xrotation=45
     )
 
-    # Plot 6: Normalized weights over x with uncertainty (via Monte Carlo from γ posteriors)
-    p6 = plot(title="Normalized Dynamic Weights with Uncertainty",
+    # Plot 6: Normalized weights over x with 95% CI (via Monte Carlo from γ posteriors)
+    p6 = plot(title="Normalized Dynamic Weights (95% CI)",
         xlabel="x", ylabel="Weight (normalized)",
         legend=:outerright
     )
@@ -496,13 +505,14 @@ function demo_dynamic_ensemble(true_function, feature_type=:bias)
         end
     end
 
-    # Compute mean and std of normalized weights
-    normalized_weights_mean = dropdims(mean(normalized_weights_samples, dims=1), dims=1)
-    normalized_weights_std = dropdims(std(normalized_weights_samples, dims=1), dims=1)
-
+    # Compute median and 95% CI of normalized weights
     for (i, (name, _)) in enumerate(forecasters)
-        plot!(p6, x_test, normalized_weights_mean[i, :],
-            ribbon=2*normalized_weights_std[i, :],
+        weight_median = [quantile(normalized_weights_samples[:, i, j], 0.5) for j in 1:n_test]
+        weight_lower = [quantile(normalized_weights_samples[:, i, j], 0.025) for j in 1:n_test]
+        weight_upper = [quantile(normalized_weights_samples[:, i, j], 0.975) for j in 1:n_test]
+
+        plot!(p6, x_test, weight_median,
+            ribbon=(weight_median .- weight_lower, weight_upper .- weight_median),
             label=name, lw=2, color=colors[i], fillalpha=0.2
         )
     end
@@ -517,9 +527,10 @@ function demo_dynamic_ensemble(true_function, feature_type=:bias)
     # ==========================================================================
     # Plot 7: Variance Decomposition (Aleatoric vs Epistemic) - Separate figure
     # ==========================================================================
-    # Total variance = Aleatoric + Epistemic
-    # Aleatoric: variance from expected precision = 1/E[Σγ]
-    # Epistemic: additional variance from uncertainty over γ = E[1/Σγ] - 1/E[Σγ]
+    # Law of total variance: Var[y|x] = E[Var[y|γ]] + Var[E[y|γ]]
+    # Aleatoric: E[Var[y|γ]] = E[1/Σγ] - expected noise variance given γ
+    # Epistemic: Var[E[y|γ]] = Var[μ(x,γ)] - how prediction shifts with γ uncertainty
+    # where μ(x,γ) = Σ(γᵢfᵢ(x)) / Σγᵢ (precision-weighted mean)
 
     # Dynamic ensemble decomposition
     dynamic_aleatoric = zeros(n_test)
@@ -527,23 +538,29 @@ function demo_dynamic_ensemble(true_function, feature_type=:bias)
     dynamic_total_var = zeros(n_test)
 
     for j in 1:n_test
-        # E[γ] for each forecaster
-        γ_means_j = [mean(γ_dynamic_posteriors[i, j]) for i in 1:n_forecasters]
-        expected_total_precision = sum(γ_means_j)
+        # Sample predictions and variances
+        mu_samples = zeros(n_mc_samples)
+        var_samples = zeros(n_mc_samples)
 
-        # Aleatoric: variance assuming we knew γ exactly (use expected γ)
-        dynamic_aleatoric[j] = 1.0 / expected_total_precision
-
-        # E[1/Σγ] via Monte Carlo
-        inv_precision_samples = zeros(n_mc_samples)
         for s in 1:n_mc_samples
             γ_samples = [rand(γ_dynamic_posteriors[i, j]) for i in 1:n_forecasters]
-            inv_precision_samples[s] = 1.0 / sum(γ_samples)
-        end
-        dynamic_total_var[j] = mean(inv_precision_samples)
+            total_precision = sum(γ_samples)
 
-        # Epistemic: difference between total and aleatoric
-        dynamic_epistemic[j] = dynamic_total_var[j] - dynamic_aleatoric[j]
+            # Predictive mean: precision-weighted average of forecaster predictions
+            mu_samples[s] = sum(γ_samples[i] * predictions_test[i, j] for i in 1:n_forecasters) / total_precision
+
+            # Predictive variance given this γ
+            var_samples[s] = 1.0 / total_precision
+        end
+
+        # Aleatoric: E[Var[y|γ]] - expected variance given γ
+        dynamic_aleatoric[j] = mean(var_samples)
+
+        # Epistemic: Var[E[y|γ]] - variance of the mean prediction
+        dynamic_epistemic[j] = var(mu_samples)
+
+        # Total: Aleatoric + Epistemic (law of total variance)
+        dynamic_total_var[j] = dynamic_aleatoric[j] + dynamic_epistemic[j]
     end
 
     # Static ensemble decomposition
@@ -551,19 +568,31 @@ function demo_dynamic_ensemble(true_function, feature_type=:bias)
     static_epistemic = zeros(n_test)
     static_total_var = zeros(n_test)
 
-    # E[γ] for static (constant across x)
-    γ_static_means = [mean(γ_static_posteriors[i]) for i in 1:n_forecasters]
-    expected_static_precision = sum(γ_static_means)
-    static_aleatoric .= 1.0 / expected_static_precision
+    for j in 1:n_test
+        mu_samples = zeros(n_mc_samples)
+        var_samples = zeros(n_mc_samples)
 
-    # E[1/Σγ] via Monte Carlo for static
-    inv_precision_static_samples = zeros(n_mc_samples)
-    for s in 1:n_mc_samples
-        γ_samples = [rand(γ_static_posteriors[i]) for i in 1:n_forecasters]
-        inv_precision_static_samples[s] = 1.0 / sum(γ_samples)
+        for s in 1:n_mc_samples
+            # Static: γ is constant across x, sample once per forecaster
+            γ_samples = [rand(γ_static_posteriors[i]) for i in 1:n_forecasters]
+            total_precision = sum(γ_samples)
+
+            # Predictive mean: precision-weighted average
+            mu_samples[s] = sum(γ_samples[i] * predictions_test[i, j] for i in 1:n_forecasters) / total_precision
+
+            # Predictive variance given this γ
+            var_samples[s] = 1.0 / total_precision
+        end
+
+        # Aleatoric: E[Var[y|γ]]
+        static_aleatoric[j] = mean(var_samples)
+
+        # Epistemic: Var[E[y|γ]]
+        static_epistemic[j] = var(mu_samples)
+
+        # Total
+        static_total_var[j] = static_aleatoric[j] + static_epistemic[j]
     end
-    static_total_var .= mean(inv_precision_static_samples)
-    static_epistemic .= static_total_var .- static_aleatoric
 
     # Create variance decomposition plot
     p7 = plot(layout=(1, 2), size=(1200, 400),
