@@ -85,7 +85,7 @@ end
 
 @constraints function dynamic_ensemble_constraints()
     # Mean-field factorization: all variables factorize
-    q(w, z, γ, τ) = q(w)q(z)q(γ)q(τ)
+    q(w, z, γ, τ) = q(w)q(z, γ)q(τ)
     q(z) :: ProjectedTo(NormalMeanVariance, parameters=ProjectionParameters(strategy=ClosedFormStrategy()))
     q(γ) :: ProjectedTo(Gamma, parameters=ProjectionParameters(strategy=ClosedFormStrategy()))
 end
