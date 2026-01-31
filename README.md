@@ -3,8 +3,28 @@
 You can training scripts with:
 
 ```bash
-julia --project=. scripts/train_ett_lux.jl
+julia --project=. scripts/train_ett_lstm_enzyme.jl
 ```
+
+Run inference with trained model: 
+
+```bash
+julia --project=. scripts/infer_ett_enzyme.jl models/ETTh1_h96_CNN_enzyme.jld2
+```
+
+Run static ensemble model with neural models: 
+
+```bash
+julia --project=. scripts/neural_ensemble_rxinfer.jl models/ETTh1_h96_CNN_enzyme.jld2 models/ETTh1_h96_LSTM_enzyme.jld2
+```
+
+Run dynamic ensemble model with neural models: 
+
+```bash
+julia --project=. scripts/dynamic_neural_ensemble_rxinfer.jl models/ETTh1_h96_CNN_enzyme.jld2 models/ETTh1_h96_LSTM_enzyme.jld2
+```
+
+
 
 ## Datasets
 
