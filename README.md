@@ -18,13 +18,22 @@ Run static ensemble model with neural models:
 julia --project=. scripts/neural_ensemble_rxinfer.jl models/ETTh1_h96_CNN_enzyme.jld2 models/ETTh1_h96_LSTM_enzyme.jld2
 ```
 
-Run dynamic ensemble model with neural models: 
+Run the dynamic ensemble with neural models:
+
+Models must come from the same dataset and use the same horizon. The dataset name is stored at the top of each model file’s name. The dataset used at inference time is determined by the models you pass in. You can pass two or more models as arguments after the script name.
+Right now constant models like quantile 10 and quantile 90 added by default to each combination of models. 
+
+Example (CNN + LSTM trained on ETTh1 with horizon 96):
 
 ```bash
 julia --project=. scripts/dynamic_neural_ensemble_rxinfer.jl models/ETTh1_h96_CNN_enzyme.jld2 models/ETTh1_h96_LSTM_enzyme.jld2
 ```
 
+General usage:
 
+```bash
+julia --project=. scripts/dynamic_neural_ensemble_rxinfer.jl <model_path_1> <model_path_2> ... <model_path_n>
+```
 
 ## Datasets
 
