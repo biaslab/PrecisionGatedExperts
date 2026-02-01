@@ -105,8 +105,8 @@ end
 
 #const N_FEATURES = Ref(0)
 
-@initialization function dynamic_ensemble_init(n_features)
-    q(w) = MvNormalMeanScalePrecision(zeros(n_features), 0.1)
+@initialization function dynamic_ensemble_init(w_init)
+    q(w) = w_init
     q(z) = NormalMeanVariance(0.0, 1.0)
     q(γ) = GammaShapeScale(1.0, 1.0)
     q(τ) = GammaShapeScale(1.0, 1.0)
@@ -221,7 +221,7 @@ function make_features(X_scaled)
         x_last_cos = map(cos,X_scaled[:, end, j])
         x_last_sin = map(sin,X_scaled[:, end, j])
         x_last = Float64.(X_scaled[:, end, j])
-        feats[j] = vcat(1.0, x_last,x_last_cos,x_last_sin)
+        feats[j] = vcat(1.0, x_last, x_last_cos,x_last_sin)
     end
     return feats
 end
@@ -230,14 +230,13 @@ end
 # Main
 # -----------------------------------------------------------------------------
 
-#function main()
+function main()
     if length(ARGS) < 2
         println("Usage: julia scripts/dynamic_neural_ensemble_rxinfer.jl <model1.jld2> <model2.jld2> [more...]")
         return
     end
 
-    model_paths = ["/Users/ruiite/projects/prob_ensem_forecast/probabilistic_ensemble_forecasting/models/ETTh1_h96_CNN_enzyme.jld2",
-        "/Users/ruiite/projects/prob_ensem_forecast/probabilistic_ensemble_forecasting/models/ETTh1_h96_LSTM_enzyme.jld2"]
+    model_paths = ARGS
 
     models = map(load_jld2_model, model_paths)
 
@@ -338,7 +337,7 @@ end
         ),
         data = (y = y_train, features = features_train, predictions = predictions_train_vec),
         constraints = dynamic_ensemble_constraints(),
-        initialization = dynamic_ensemble_init(n_features),
+        initialization = dynamic_ensemble_init(w_priors_init),
         iterations = 30,
         free_energy = false,
         showprogress = true,
@@ -375,8 +374,8 @@ end
         ),
         data = (y = y_missing, features = features_test, predictions = predictions_test_vec),
         constraints = dynamic_ensemble_constraints(),
-        initialization = dynamic_ensemble_init(n_features),
-        iterations = 10,
+        initialization = dynamic_ensemble_init(w_posteriors),
+        iterations = 1,
         showprogress = true,
         free_energy = false,
     )
@@ -508,12 +507,13 @@ end
     end
 
     plt = plot(p1, p2, p3, p4, p5, p6, layout=(3, 2), size=(1200, 1200))
-    savefig(plt, "dynamic_neural_ensemble_rxinfer.png")
-    @info "Saved visualization" file="dynamic_neural_ensemble_rxinfer.png"
+    plot_file = "dynamic_neural_ensemble_rxinfer_$(base_meta.dataset).png"
+    savefig(plt, plot_file)
+    @info "Saved visualization" file=plot_file
 
     @info "Done"
-#end
+end
 
-# if abspath(PROGRAM_FILE) == @__FILE__
-#     main()
-# end
+if abspath(PROGRAM_FILE) == @__FILE__
+    main()
+end
