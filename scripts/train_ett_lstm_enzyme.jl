@@ -262,6 +262,9 @@ function main()
     batchsize = parse(Int, get(ENV, "BATCHSIZE", "128"))
     lr = parse(Float32, get(ENV, "LR", "0.001"))
     hidden_dim = parse(Int, get(ENV, "HIDDEN", "64"))
+    cnn_channels = parse(Int, get(ENV, "CNN_CHANNELS", "64"))
+    cnn_kernel = parse(Int, get(ENV, "CNN_KERNEL", "7"))
+    cnn_stride = parse(Int, get(ENV, "CNN_STRIDE", "2"))
     patience = parse(Int, get(ENV, "PATIENCE", "5"))
 
     dev = reactant_device()
@@ -339,6 +342,50 @@ function main()
                 )
             )
             @info "Model saved" path=model_path
+
+            @info "Training CNN" dataset=ds horizon=H seq_len=seq_len
+
+            cnn_model = TimeSeriesCNN(input_dim, out_dim; channels=cnn_channels, k=cnn_kernel, stride=cnn_stride)
+            cnn_train_loader, cnn_val_loader = create_dataloaders(Xtr, Ytr, Xval, Yval; batchsize=batchsize, dev=dev)
+
+            cnn_result = train_lstm(
+                cnn_model, cnn_train_loader, cnn_val_loader;
+                epochs=epochs,
+                lr=lr,
+                patience=patience,
+                dev=dev
+            )
+
+            cnn_test_metrics = compute_test_metrics(cnn_model, cnn_result.parameters, cnn_result.states, Xte, Yte_sc, scaler; dev=dev)
+            @info "CNN test metrics" dataset=ds horizon=H cnn_test_metrics...
+
+            cnn_model_path = joinpath(models_dir, "$(ds)_h$(H)_CNN_enzyme.jld2")
+            jldsave(cnn_model_path;
+                model_type=:TimeSeriesCNN,
+                parameters=cnn_result.parameters,
+                states=cnn_result.states,
+                config=(
+                    input_dim=input_dim,
+                    channels=cnn_channels,
+                    kernel=cnn_kernel,
+                    stride=cnn_stride,
+                    out_dim=out_dim
+                ),
+                meta=(
+                    dataset=ds,
+                    model="CNN1D",
+                    seq_len=seq_len,
+                    horizon=H,
+                    features=feat_cols,
+                    targets=feat_cols,
+                    scaler=scaler,
+                    split=(train=0.6, val=0.2, test=0.2),
+                    sizes=(train=size(Xtr, 3), val=size(Xval, 3), test=size(Xte, 3)),
+                    val_best=(epoch=cnn_result.best_epoch, mse=cnn_result.best_val_mse),
+                    test_metrics=cnn_test_metrics
+                )
+            )
+            @info "CNN model saved" path=cnn_model_path
         end
     end
 

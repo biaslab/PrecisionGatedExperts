@@ -7,7 +7,7 @@ export find_dataset_csv, load_ett
 export make_sequences
 export train_val_test_split
 export batches
-export mse, mae, rmse, r2, mape, compute_metrics
+export mse, mae, rmse, r2, mape, smape, compute_metrics
 
 struct StandardScaler
     μ::Vector{Float32}
@@ -115,6 +115,7 @@ function r2(ŷ, y)
     return 1 .- sse ./ sst
 end
 mape(ŷ, y; ϵ=1f-6) = mean(abs.((ŷ .- y) ./ (abs.(y) .+ ϵ))) * 100
+smape(ŷ, y; ϵ=1f-6) = mean((2 .* abs.(ŷ .- y)) ./ (abs.(ŷ) .+ abs.(y) .+ ϵ)) * 100
 
 function compute_metrics(model, ps, st, X_scaled, Y_scaled, scaler::StandardScaler, to)
     Xd, Yd = to(X_scaled), to(Y_scaled)
@@ -128,6 +129,6 @@ function compute_metrics(model, ps, st, X_scaled, Y_scaled, scaler::StandardScal
         rmse = rmse(ŷ, y),
         r2 = r2(ŷ, y),
         mape = mape(ŷ, y),
+        smape = smape(ŷ, y),
     )
 end
-
