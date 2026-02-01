@@ -76,17 +76,18 @@ end
 # RxInfer dynamic model (multivariate outputs)
 # -----------------------------------------------------------------------------
 
-@model function dynamic_mv_ensemble_model(n_forecasters, n_obs, features, predictions, y, w_priors)
+@model function dynamic_mv_ensemble_model(n_forecasters, n_obs, features, predictions, y, w_priors, τ_priors)
     local w, z, γ, τ
+
 
     for i in 1:n_forecasters
         w[i] ~ w_priors[i]
+        τ[i] ~ τ_priors[i]
     end
 
     for j in 1:n_obs
         for i in 1:n_forecasters
-            τ[i, j] ~ GammaShapeScale(1.0, 1.0)
-            z[i, j] ~ softdot(features[j], w[i], τ[i, j])
+            z[i, j] ~ softdot(features[j], w[i], τ[i])
 
             γ[i, j] ~ GammaShapeScale(1.0, 1.0)
             z[i, j] ~ Log(γ[i, j])
@@ -102,10 +103,10 @@ end
     q(γ) :: ProjectedTo(Gamma, parameters=ProjectionParameters(strategy=ClosedFormStrategy()))
 end
 
-const N_FEATURES = Ref(0)
+#const N_FEATURES = Ref(0)
 
-@initialization function dynamic_ensemble_init()
-    q(w) = MvNormalMeanPrecision(zeros(N_FEATURES[]), diagm(ones(N_FEATURES[])))
+@initialization function dynamic_ensemble_init(n_features)
+    q(w) = MvNormalMeanScalePrecision(zeros(n_features), 0.1)
     q(z) = NormalMeanVariance(0.0, 1.0)
     q(γ) = GammaShapeScale(1.0, 1.0)
     q(τ) = GammaShapeScale(1.0, 1.0)
@@ -217,8 +218,10 @@ function make_features(X_scaled)
     n = size(X_scaled, 3)
     feats = Vector{Vector{Float64}}(undef, n)
     for j in 1:n
+        x_last_cos = map(cos,X_scaled[:, end, j])
+        x_last_sin = map(sin,X_scaled[:, end, j])
         x_last = Float64.(X_scaled[:, end, j])
-        feats[j] = vcat(1.0, x_last)
+        feats[j] = vcat(1.0, x_last,x_last_cos,x_last_sin)
     end
     return feats
 end
@@ -227,13 +230,15 @@ end
 # Main
 # -----------------------------------------------------------------------------
 
-function main()
+#function main()
     if length(ARGS) < 2
         println("Usage: julia scripts/dynamic_neural_ensemble_rxinfer.jl <model1.jld2> <model2.jld2> [more...]")
         return
     end
 
-    model_paths = ARGS
+    model_paths = ["/Users/ruiite/projects/prob_ensem_forecast/probabilistic_ensemble_forecasting/models/ETTh1_h96_CNN_enzyme.jld2",
+        "/Users/ruiite/projects/prob_ensem_forecast/probabilistic_ensemble_forecasting/models/ETTh1_h96_LSTM_enzyme.jld2"]
+
     models = map(load_jld2_model, model_paths)
 
     base_meta = models[1].meta
@@ -257,13 +262,14 @@ function main()
     Xtr, Ytr, Xval, Yval, Xte, Yte = train_val_test_split(X3, Y2; ratios=(split.train, split.val, split.test))
 
     scaler = base_meta.scaler
-    Xtr_s = scale_inputs(scaler, Xtr)
+    Xtr_s = scale_inputs(scaler, Xval)
     Xte_s = scale_inputs(scaler, Xte)
 
+
     n_forecasters = length(models)
-    n_train = size(Xtr, 3)
+    n_train = size(Xval, 3)
     n_test = size(Xte, 3)
-    d = size(Ytr, 1)
+    d = size(Yval, 1)
 
     predictions_train = Array{Float64}(undef, n_forecasters, d, n_train)
     predictions_test = Array{Float64}(undef, n_forecasters, d, n_test)
@@ -283,7 +289,7 @@ function main()
         @info "Forecaster ready" index=i model_type=m.model_type path=model_paths[i]
     end
 
-    y_train = to_vecs(Float64.(Ytr))
+    y_train = to_vecs(Float64.(Yval))
     y_test = to_vecs(Float64.(Yte))
 
     predictions_train_vec = Array{Vector{Float64}}(undef, n_forecasters, n_train)
@@ -300,43 +306,72 @@ function main()
     features_train = make_features(Xtr_s)
     features_test = make_features(Xte_s)
     n_features = length(features_train[1])
-    N_FEATURES[] = n_features
+    #N_FEATURES[] = n_features
 
     @info "Step 1: Training dynamic ensemble using RxInfer" n_features=n_features
-    w_priors_init = [MvNormalMeanPrecision(zeros(n_features), 0.1 * diagm(ones(n_features))) for _ in 1:n_forecasters]
+    w_priors_init = [MvNormalMeanScalePrecision(zeros(n_features), 0.1) for _ in 1:n_forecasters]
+    #w_priors_init = [MvNormalMeanPrecision(zeros(n_features), 0.1 * diagm(ones(n_features))) for _ in 1:n_forecasters]
+    τ_priors_init = [ GammaShapeScale(1.0, 1e12)  for _ in 1:n_forecasters ]
 
     dynamic_result = infer(
         model = dynamic_mv_ensemble_model(
             n_forecasters = n_forecasters,
             n_obs = n_train,
-            w_priors = w_priors_init
+            w_priors = w_priors_init,
+            τ_priors = τ_priors_init
         ),
         data = (y = y_train, features = features_train, predictions = predictions_train_vec),
         constraints = dynamic_ensemble_constraints(),
-        initialization = dynamic_ensemble_init(),
+        initialization = dynamic_ensemble_init(n_features),
         iterations = 30,
-        free_energy = true
+        free_energy = false,
+        showprogress = true,
     )
 
     w_posteriors = dynamic_result.posteriors[:w][end]
+    τ_posteriors = dynamic_result.posteriors[:τ][end]
 
     @info "Step 2: Dynamic ensemble prediction on test"
-    ensemble_mean = Array{Float64}(undef, d, n_test)
-    ensemble_std = Array{Float64}(undef, n_test)
-    γ_values_all = Array{Float64}(undef, n_forecasters, n_test)
+    # ensemble_mean = Array{Float64}(undef, d, n_test)
+    # ensemble_std = Array{Float64}(undef, n_test)
 
-    for j in 1:n_test
-        γ_values = zeros(n_forecasters)
-        for i in 1:n_forecasters
-            w_mean = mean(w_posteriors[i])
-            z_ij = dot(w_mean, features_test[j])
-            γ_values[i] = exp(z_ij)
-        end
-        γ_values_all[:, j] = γ_values
-        total_precision = sum(γ_values)
-        ensemble_mean[:, j] = sum(γ_values[i] .* predictions_test[i, :, j] for i in 1:n_forecasters) / total_precision
-        ensemble_std[j] = sqrt(1.0 / total_precision)
-    end
+
+    # for j in 1:n_test
+    #     γ_values = zeros(n_forecasters)
+    #     for i in 1:n_forecasters
+    #         w_mean = mean(w_posteriors[i])
+    #         z_ij = dot(w_mean, features_test[j])
+    #         γ_values[i] = exp(z_ij)
+    #     end
+    #     γ_values_all[:, j] = γ_values
+    #     total_precision = sum(γ_values)
+    #     ensemble_mean[:, j] = sum(γ_values[i] .* predictions_test[i, :, j] for i in 1:n_forecasters) / total_precision
+    #     ensemble_std[j] = sqrt(1.0 / total_precision)
+    # end
+    y_missing = [missing for _ in 1:n_test]
+
+    dynamic_predict = infer(
+        model = dynamic_mv_ensemble_model(
+            n_forecasters = n_forecasters,
+            n_obs = n_test,
+            w_priors = w_posteriors,
+            τ_priors = τ_posteriors
+        ),
+        data = (y = y_missing, features = features_test, predictions = predictions_test_vec),
+        constraints = dynamic_ensemble_constraints(),
+        initialization = dynamic_ensemble_init(n_features),
+        iterations = 10
+    )
+
+    dynamic_predictions = dynamic_predict.predictions[:y][end]
+    ensemble_mean = hcat(map(mean, dynamic_predictions)...)
+    ensemble_std = map((a)->a[1,1],map(std, dynamic_predictions))
+
+
+    # Extract γ posteriors for weight uncertainty visualization
+    γ_dynamic_posteriors = dynamic_predict.posteriors[:γ][end]  # [n_forecasters, n_test] matrix of distributions
+
+    γ_values_all = mean.(γ_dynamic_posteriors)
 
     y_test_mat = Float64.(Yte)
     ensemble_metrics = (
@@ -459,8 +494,8 @@ function main()
     @info "Saved visualization" file="dynamic_neural_ensemble_rxinfer.png"
 
     @info "Done"
-end
+#end
 
-if abspath(PROGRAM_FILE) == @__FILE__
-    main()
-end
+# if abspath(PROGRAM_FILE) == @__FILE__
+#     main()
+# end
