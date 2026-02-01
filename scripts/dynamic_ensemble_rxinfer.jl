@@ -179,9 +179,9 @@ function demo_dynamic_ensemble(true_function, feature_type=:bias)
         ("0.8sin", x -> 0.8 * sin(x)),
         ("linear", x -> 0.5 * x),
         ("cos(x)", x -> cos(x)),
-        ("constant_1", _ -> 1),
-        ("constant_10", _ -> 10),
-        ("constant_100", _ -> 100),
+        ("constant_1", _ -> 1.0),
+        # ("constant_10", _ -> 10.0),
+        ("constant_100", _ -> 100.0),
         # ("shifted cos", x -> cos.(x .- 0.5)),
     ]
 
