@@ -271,8 +271,10 @@ end
     n_test = size(Xte, 3)
     d = size(Yval, 1)
 
-    predictions_train = Array{Float64}(undef, n_forecasters, d, n_train)
-    predictions_test = Array{Float64}(undef, n_forecasters, d, n_test)
+    # Add two constant baselines: per-dimension min and max from train targets
+    n_total = n_forecasters + 2
+    predictions_train = Array{Float64}(undef, n_total, d, n_train)
+    predictions_test = Array{Float64}(undef, n_total, d, n_test)
 
     @info "Running forecasters" n_forecasters n_train n_test output_dim=d
 
@@ -292,9 +294,23 @@ end
     y_train = to_vecs(Float64.(Yval))
     y_test = to_vecs(Float64.(Yte))
 
-    predictions_train_vec = Array{Vector{Float64}}(undef, n_forecasters, n_train)
-    predictions_test_vec = Array{Vector{Float64}}(undef, n_forecasters, n_test)
-    for i in 1:n_forecasters
+    y_q10 = [quantile(Float64.(view(Yval, i, :)), 0.1) for i in 1:d]
+    y_q90 = [quantile(Float64.(view(Yval, i, :)), 0.9) for i in 1:d]
+    idx_min = n_forecasters + 1
+    idx_max = n_forecasters + 2
+    for j in 1:n_train
+        predictions_train[idx_min, :, j] = y_q10
+        predictions_train[idx_max, :, j] = y_q90
+    end
+    for j in 1:n_test
+        predictions_test[idx_min, :, j] = y_q10
+        predictions_test[idx_max, :, j] = y_q90
+    end
+    @info "Added constant baselines" q10_idx=idx_min q90_idx=idx_max
+
+    predictions_train_vec = Array{Vector{Float64}}(undef, n_total, n_train)
+    predictions_test_vec = Array{Vector{Float64}}(undef, n_total, n_test)
+    for i in 1:n_total
         for j in 1:n_train
             predictions_train_vec[i, j] = Vector{Float64}(predictions_train[i, :, j])
         end
@@ -309,13 +325,13 @@ end
     #N_FEATURES[] = n_features
 
     @info "Step 1: Training dynamic ensemble using RxInfer" n_features=n_features
-    w_priors_init = [MvNormalMeanScalePrecision(zeros(n_features), 0.1) for _ in 1:n_forecasters]
-    #w_priors_init = [MvNormalMeanPrecision(zeros(n_features), 0.1 * diagm(ones(n_features))) for _ in 1:n_forecasters]
-    τ_priors_init = [ GammaShapeScale(1.0, 1e12)  for _ in 1:n_forecasters ]
+    w_priors_init = [MvNormalMeanScalePrecision(zeros(n_features), 0.1) for _ in 1:n_total]
+    #w_priors_init = [MvNormalMeanPrecision(zeros(n_features), 0.1 * diagm(ones(n_features))) for _ in 1:n_total]
+    τ_priors_init = [ GammaShapeScale(1.0, 1e12)  for _ in 1:n_total ]
 
     dynamic_result = infer(
         model = dynamic_mv_ensemble_model(
-            n_forecasters = n_forecasters,
+            n_forecasters = n_total,
             n_obs = n_train,
             w_priors = w_priors_init,
             τ_priors = τ_priors_init
@@ -352,15 +368,17 @@ end
 
     dynamic_predict = infer(
         model = dynamic_mv_ensemble_model(
-            n_forecasters = n_forecasters,
+            n_forecasters = n_total,
             n_obs = n_test,
             w_priors = w_posteriors,
-            τ_priors = τ_posteriors
+            τ_priors = τ_posteriors,
         ),
         data = (y = y_missing, features = features_test, predictions = predictions_test_vec),
         constraints = dynamic_ensemble_constraints(),
         initialization = dynamic_ensemble_init(n_features),
-        iterations = 10
+        iterations = 10,
+        showprogress = true,
+        free_energy = false,
     )
 
     dynamic_predictions = dynamic_predict.predictions[:y][end]
@@ -386,10 +404,10 @@ end
 
     @info "Step 3: Performance comparison on test"
     individual = []
-    for i in 1:n_forecasters
+    for i in 1:n_total
         yhat = predictions_test[i, :, :]
         push!(individual, (
-            path=model_paths[i],
+            path=i <= n_forecasters ? model_paths[i] : (i == idx_min ? "const_q10_train" : "const_q90_train"),
             mse=mse_mv(yhat, y_test_mat),
             mae=mae_mv(yhat, y_test_mat),
             rmse=rmse_mv(yhat, y_test_mat),
@@ -435,8 +453,8 @@ end
         lw=2, color=:blue, fillalpha=0.3
     )
 
-    colors = [:red, :green, :orange, :purple, :brown, :pink, :cyan]
-    for i in 1:n_forecasters
+    colors = [:red, :green, :orange, :purple, :brown, :pink, :cyan, :gray, :black]
+    for i in 1:n_total
         plot!(p1, x_test, predictions_test[i, 1, :],
             label="F$(i)", ls=:dash, alpha=0.6, color=colors[mod1(i, length(colors))]
         )
@@ -459,7 +477,7 @@ end
         xlabel="t", ylabel="γ(x) = exp(w'x)",
         legend=:topright
     )
-    for i in 1:n_forecasters
+    for i in 1:n_total
         plot!(p3, x_test, γ_values_all[i, :], label="F$(i)", lw=2, color=colors[mod1(i, length(colors))])
     end
 
@@ -470,8 +488,8 @@ end
     plot!(p4, x_test, ensemble_std, label="Dynamic σ", lw=2, color=:blue)
 
     all_mses = vcat([m.mse for m in individual], [simple_metrics.mse, ensemble_metrics.mse])
-    all_labels = vcat(["F$(i)" for i in 1:n_forecasters], ["Simple Avg", "Dynamic"])
-    bar_colors = vcat(fill(:gray, n_forecasters), [:orange, :blue])
+    all_labels = vcat(["F$(i)" for i in 1:n_total], ["Simple Avg", "Dynamic"])
+    bar_colors = vcat(fill(:gray, n_total), [:orange, :blue])
     p5 = bar(1:length(all_mses), all_mses,
         title="MSE Comparison (Test Set, avg over dims)",
         xlabel="Method", ylabel="MSE",
@@ -485,7 +503,7 @@ end
         xlabel="t", ylabel="Weight (normalized)",
         legend=:outerright
     )
-    for i in 1:n_forecasters
+    for i in 1:n_total
         plot!(p6, x_test, normalized_weights[i, :], label="F$(i)", lw=2, color=colors[mod1(i, length(colors))])
     end
 
