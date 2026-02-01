@@ -347,22 +347,6 @@ function main()
     τ_posteriors = dynamic_result.posteriors[:τ][end]
 
     @info "Step 2: Dynamic ensemble prediction on test"
-    # ensemble_mean = Array{Float64}(undef, d, n_test)
-    # ensemble_std = Array{Float64}(undef, n_test)
-
-
-    # for j in 1:n_test
-    #     γ_values = zeros(n_forecasters)
-    #     for i in 1:n_forecasters
-    #         w_mean = mean(w_posteriors[i])
-    #         z_ij = dot(w_mean, features_test[j])
-    #         γ_values[i] = exp(z_ij)
-    #     end
-    #     γ_values_all[:, j] = γ_values
-    #     total_precision = sum(γ_values)
-    #     ensemble_mean[:, j] = sum(γ_values[i] .* predictions_test[i, :, j] for i in 1:n_forecasters) / total_precision
-    #     ensemble_std[j] = sqrt(1.0 / total_precision)
-    # end
     y_missing = [missing for _ in 1:n_test]
 
     dynamic_predict = infer(
