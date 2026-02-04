@@ -263,12 +263,15 @@ function main()
     scaler = base_meta.scaler
     Xtr_s = scale_inputs(scaler, Xval)
     Xte_s = scale_inputs(scaler, Xte)
+    Yval_sc = scale_targets(scaler, Yval)
+    Yte_sc = scale_targets(scaler, Yte)
 
 
     n_forecasters = length(models)
     n_train = size(Xval, 3)
     n_test = size(Xte, 3)
     d = size(Yval, 1)
+    ot_idx = d  # OT is last column
 
     # Add two constant baselines: per-dimension min and max from train targets
     n_total = n_forecasters + 2
@@ -282,19 +285,16 @@ function main()
         yhat_tr_sc = predict_unscaled(model, m.parameters, m.states, Xtr_s)
         yhat_te_sc = predict_unscaled(model, m.parameters, m.states, Xte_s)
 
-        yhat_tr = inverse_targets(scaler, yhat_tr_sc)
-        yhat_te = inverse_targets(scaler, yhat_te_sc)
-
-        predictions_train[i, :, :] = Float64.(yhat_tr)
-        predictions_test[i, :, :] = Float64.(yhat_te)
+        predictions_train[i, :, :] = Float64.(yhat_tr_sc)
+        predictions_test[i, :, :] = Float64.(yhat_te_sc)
         @info "Forecaster ready" index=i model_type=m.model_type path=model_paths[i]
     end
 
-    y_train = to_vecs(Float64.(Yval))
-    y_test = to_vecs(Float64.(Yte))
+    y_train = to_vecs(Float64.(Yval_sc))
+    y_test = to_vecs(Float64.(Yte_sc))
 
-    y_q10 = [quantile(Float64.(view(Yval, i, :)), 0.1) for i in 1:d]
-    y_q90 = [quantile(Float64.(view(Yval, i, :)), 0.9) for i in 1:d]
+    y_q10 = [quantile(Float64.(view(Yval_sc, i, :)), 0.1) for i in 1:d]
+    y_q90 = [quantile(Float64.(view(Yval_sc, i, :)), 0.9) for i in 1:d]
     idx_min = n_forecasters + 1
     idx_max = n_forecasters + 2
     for j in 1:n_train
@@ -374,14 +374,22 @@ function main()
 
     γ_values_all = mean.(γ_dynamic_posteriors)
 
-    y_test_mat = Float64.(Yte)
+    y_test_mat = Float64.(Yte_sc)
+    y_test_ot_sc = y_test_mat[ot_idx:ot_idx, :]
+    ensemble_mean_ot_sc = ensemble_mean[ot_idx:ot_idx, :]
     ensemble_metrics = (
-        mse = mse_mv(ensemble_mean, y_test_mat),
-        mae = mae_mv(ensemble_mean, y_test_mat),
-        rmse = rmse_mv(ensemble_mean, y_test_mat),
-        r2 = r2_mv(ensemble_mean, y_test_mat),
-        mape = mape_mv(ensemble_mean, y_test_mat),
-        smape = smape_mv(ensemble_mean, y_test_mat),
+        mse = mse_mv(ensemble_mean_ot_sc, y_test_ot_sc),
+        mae = mae_mv(ensemble_mean_ot_sc, y_test_ot_sc),
+        rmse = rmse_mv(ensemble_mean_ot_sc, y_test_ot_sc),
+        r2 = r2_mv(ensemble_mean_ot_sc, y_test_ot_sc),
+        mape = mape_mv(ensemble_mean_ot_sc, y_test_ot_sc),
+        smape = smape_mv(ensemble_mean_ot_sc, y_test_ot_sc),
+        mse_all = mse_mv(ensemble_mean, y_test_mat),
+        mae_all = mae_mv(ensemble_mean, y_test_mat),
+        rmse_all = rmse_mv(ensemble_mean, y_test_mat),
+        r2_all = r2_mv(ensemble_mean, y_test_mat),
+        mape_all = mape_mv(ensemble_mean, y_test_mat),
+        smape_all = smape_mv(ensemble_mean, y_test_mat),
         mean_std = mean(ensemble_std),
     )
 
@@ -389,25 +397,39 @@ function main()
     individual = []
     for i in 1:n_total
         yhat = predictions_test[i, :, :]
+        yhat_ot_sc = yhat[ot_idx:ot_idx, :]
         push!(individual, (
             path=i <= n_forecasters ? model_paths[i] : (i == idx_min ? "const_q10_train" : "const_q90_train"),
-            mse=mse_mv(yhat, y_test_mat),
-            mae=mae_mv(yhat, y_test_mat),
-            rmse=rmse_mv(yhat, y_test_mat),
-            r2=r2_mv(yhat, y_test_mat),
-            mape=mape_mv(yhat, y_test_mat),
-            smape=smape_mv(yhat, y_test_mat),
+            mse=mse_mv(yhat_ot_sc, y_test_ot_sc),
+            mae=mae_mv(yhat_ot_sc, y_test_ot_sc),
+            rmse=rmse_mv(yhat_ot_sc, y_test_ot_sc),
+            r2=r2_mv(yhat_ot_sc, y_test_ot_sc),
+            mape=mape_mv(yhat_ot_sc, y_test_ot_sc),
+            smape=smape_mv(yhat_ot_sc, y_test_ot_sc),
+            mse_all=mse_mv(yhat, y_test_mat),
+            mae_all=mae_mv(yhat, y_test_mat),
+            rmse_all=rmse_mv(yhat, y_test_mat),
+            r2_all=r2_mv(yhat, y_test_mat),
+            mape_all=mape_mv(yhat, y_test_mat),
+            smape_all=smape_mv(yhat, y_test_mat),
         ))
     end
 
     simple_avg = vec(mean(predictions_test; dims=1)) |> x -> reshape(x, d, n_test)
+    simple_avg_ot_sc = simple_avg[ot_idx:ot_idx, :]
     simple_metrics = (
-        mse = mse_mv(simple_avg, y_test_mat),
-        mae = mae_mv(simple_avg, y_test_mat),
-        rmse = rmse_mv(simple_avg, y_test_mat),
-        r2 = r2_mv(simple_avg, y_test_mat),
-        mape = mape_mv(simple_avg, y_test_mat),
-        smape = smape_mv(simple_avg, y_test_mat),
+        mse = mse_mv(simple_avg_ot_sc, y_test_ot_sc),
+        mae = mae_mv(simple_avg_ot_sc, y_test_ot_sc),
+        rmse = rmse_mv(simple_avg_ot_sc, y_test_ot_sc),
+        r2 = r2_mv(simple_avg_ot_sc, y_test_ot_sc),
+        mape = mape_mv(simple_avg_ot_sc, y_test_ot_sc),
+        smape = smape_mv(simple_avg_ot_sc, y_test_ot_sc),
+        mse_all = mse_mv(simple_avg, y_test_mat),
+        mae_all = mae_mv(simple_avg, y_test_mat),
+        rmse_all = rmse_mv(simple_avg, y_test_mat),
+        r2_all = r2_mv(simple_avg, y_test_mat),
+        mape_all = mape_mv(simple_avg, y_test_mat),
+        smape_all = smape_mv(simple_avg, y_test_mat),
     )
 
     @info "Dynamic ensemble metrics" ensemble_metrics...
