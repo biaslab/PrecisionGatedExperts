@@ -14,7 +14,6 @@ using ExponentialFamilyProjection: ClosedFormStrategy
 using Distributions
 using Statistics
 using LinearAlgebra
-using JLD2
 using Lux
 using Reactant
 using ProbabilisticEnsembling
@@ -73,30 +72,6 @@ reactant_device() = (
 )
 cpu_device() = Lux.cpu_device()
 
-function build_model(model_type::Symbol, config)
-    if model_type == :TimeSeriesLSTM
-        return TimeSeriesLSTM(config.input_dim, config.hidden_dim, config.out_dim)
-    elseif model_type == :TimeSeriesCNN
-        channels = get(config, :channels, 64)
-        return TimeSeriesCNN(config.input_dim, config.out_dim; channels=channels)
-    else
-        error("Unknown model_type=$(model_type)")
-    end
-end
-
-function load_jld2_model(path::AbstractString)
-    @assert isfile(path) "Model file not found: $(path)"
-    return JLD2.jldopen(path, "r") do f
-        (
-            model_type=read(f, "model_type"),
-            parameters=read(f, "parameters"),
-            states=read(f, "states"),
-            config=read(f, "config"),
-            meta=read(f, "meta"),
-        )
-    end
-end
-
 function same_scaler(s1, s2; atol=1.0f-6)
     length(s1.μ) == length(s2.μ) || return false
     length(s1.σ) == length(s2.σ) || return false
@@ -119,47 +94,6 @@ end
 
 function to_vecs(Y::AbstractMatrix)
     return [Vector{Float64}(Y[:, j]) for j in 1:size(Y, 2)]
-end
-
-function mse_mv(ŷ::AbstractMatrix, y::AbstractMatrix)
-    d = size(y, 1)
-    return mean(sum((ŷ .- y) .^ 2; dims=1)) / d
-end
-
-function mae_mv(ŷ::AbstractMatrix, y::AbstractMatrix)
-    d = size(y, 1)
-    return mean(sum(abs.(ŷ .- y); dims=1)) / d
-end
-
-function rmse_mv(ŷ::AbstractMatrix, y::AbstractMatrix)
-    return sqrt(mse_mv(ŷ, y))
-end
-
-function r2_mv(ŷ::AbstractMatrix, y::AbstractMatrix)
-    d = size(y, 1)
-    r2s = Float64[]
-    for i in 1:d
-        push!(r2s, r2(ŷ[i, :], y[i, :]))
-    end
-    return mean(r2s)
-end
-
-function mape_mv(ŷ::AbstractMatrix, y::AbstractMatrix)
-    d = size(y, 1)
-    m = Float64[]
-    for i in 1:d
-        push!(m, mape(ŷ[i, :], y[i, :]))
-    end
-    return mean(m)
-end
-
-function smape_mv(ŷ::AbstractMatrix, y::AbstractMatrix)
-    d = size(y, 1)
-    m = Float64[]
-    for i in 1:d
-        push!(m, smape(ŷ[i, :], y[i, :]))
-    end
-    return mean(m)
 end
 
 function make_features(X_scaled)

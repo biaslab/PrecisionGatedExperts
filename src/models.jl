@@ -1,6 +1,6 @@
 using Lux
 
-export TimeSeriesLSTM, TimeSeriesCNN
+export TimeSeriesLSTM, TimeSeriesCNN, build_model
 
 struct TimeSeriesLSTM{L,H} <: Lux.AbstractLuxContainerLayer{(:lstm_cell, :head)}
     lstm_cell::L
@@ -48,4 +48,15 @@ function (m::TimeSeriesCNN)(x::AbstractArray{T,3}, ps::NamedTuple, st::NamedTupl
     y, st_head = m.head(x, ps.head, st.head)
     st = merge(st, (conv1=st1, conv2=st2, head=st_head))
     return y, st
+end
+
+function build_model(model_type::Symbol, config)
+    if model_type == :TimeSeriesLSTM
+        return TimeSeriesLSTM(config.input_dim, config.hidden_dim, config.out_dim)
+    elseif model_type == :TimeSeriesCNN
+        channels = get(config, :channels, 64)
+        return TimeSeriesCNN(config.input_dim, config.out_dim; channels=channels)
+    else
+        error("Unknown model_type=$(model_type)")
+    end
 end

@@ -1,6 +1,7 @@
 using CSV, DataFrames
 using Statistics, Random
 using Lux
+using JLD2
 
 export StandardScaler, fit_scaler, scale_inputs, inverse_transform_target, scale_targets, inverse_targets
 export find_dataset_csv, load_ett
@@ -8,6 +9,8 @@ export make_sequences
 export train_val_test_split
 export batches
 export mse, mae, rmse, r2, mape, smape, compute_metrics
+export load_jld2_model
+export mse_mv, mae_mv, rmse_mv, r2_mv, mape_mv, smape_mv
 
 struct StandardScaler
     μ::Vector{Float32}
@@ -16,9 +19,9 @@ end
 
 function fit_scaler(X::AbstractArray{<:Real,3})
     f, t, n = size(X)
-    X2 = reshape(X, f, t*n)
+    X2 = reshape(X, f, t * n)
     μ = vec(mean(X2; dims=2))
-    σ = vec(std(X2; dims=2, corrected=true)) .+ 1f-6
+    σ = vec(std(X2; dims=2, corrected=true)) .+ 1.0f-6
     return StandardScaler(Float32.(μ), Float32.(σ))
 end
 
@@ -55,6 +58,19 @@ function find_dataset_csv(path::AbstractString)
     end
 end
 
+function load_jld2_model(path::AbstractString)
+    @assert isfile(path) "Model file not found: $(path)"
+    return JLD2.jldopen(path, "r") do f
+        (
+            model_type=read(f, "model_type"),
+            parameters=read(f, "parameters"),
+            states=read(f, "states"),
+            config=read(f, "config"),
+            meta=read(f, "meta"),
+        )
+    end
+end
+
 function load_ett(path::AbstractString)
     csv_path = find_dataset_csv(path)
     df = CSV.read(csv_path, DataFrame)
@@ -76,7 +92,7 @@ function make_sequences(X::AbstractMatrix{<:Real}; seq_len::Int=96, horizon::Int
         s = i
         e = s + seq_len - 1
         @views X3[:, :, i] = Float32.(X[:, s:e])
-        @views Y2[:, i] = Float32.(X[:, e + horizon])
+        @views Y2[:, i] = Float32.(X[:, e+horizon])
     end
     return X3, Y2
 end
@@ -103,19 +119,60 @@ end
 
 batches(X, Y, batchsize) = begin
     N = size(X, 3)
-    [ (X[:, :, i:min(i+batchsize-1, N)], Y[:, i:min(i+batchsize-1, N)]) for i in 1:batchsize:N ]
+    [(X[:, :, i:min(i + batchsize - 1, N)], Y[:, i:min(i + batchsize - 1, N)]) for i in 1:batchsize:N]
 end
 
-mse(ŷ, y) = mean((ŷ .- y).^2)
+mse(ŷ, y) = mean((ŷ .- y) .^ 2)
 mae(ŷ, y) = mean(abs.(ŷ .- y))
 rmse(ŷ, y) = sqrt(mse(ŷ, y))
 function r2(ŷ, y)
-    sse = sum((ŷ .- y).^2)
-    sst = sum((y .- mean(y)).^2) + eps()
+    sse = sum((ŷ .- y) .^ 2)
+    sst = sum((y .- mean(y)) .^ 2) + eps()
     return 1 .- sse ./ sst
 end
-mape(ŷ, y; ϵ=1f-6) = mean(abs.((ŷ .- y) ./ (abs.(y) .+ ϵ))) * 100
-smape(ŷ, y; ϵ=1f-6) = mean((2 .* abs.(ŷ .- y)) ./ (abs.(ŷ) .+ abs.(y) .+ ϵ)) * 100
+mape(ŷ, y; ϵ=1.0f-6) = mean(abs.((ŷ .- y) ./ (abs.(y) .+ ϵ))) * 100
+smape(ŷ, y; ϵ=1.0f-6) = mean((2 .* abs.(ŷ .- y)) ./ (abs.(ŷ) .+ abs.(y) .+ ϵ)) * 100
+
+function mse_mv(ŷ::AbstractMatrix, y::AbstractMatrix)
+    d = size(y, 1)
+    return mean(sum((ŷ .- y) .^ 2; dims=1)) / d
+end
+
+function mae_mv(ŷ::AbstractMatrix, y::AbstractMatrix)
+    d = size(y, 1)
+    return mean(sum(abs.(ŷ .- y); dims=1)) / d
+end
+
+function rmse_mv(ŷ::AbstractMatrix, y::AbstractMatrix)
+    return sqrt(mse_mv(ŷ, y))
+end
+
+function r2_mv(ŷ::AbstractMatrix, y::AbstractMatrix)
+    d = size(y, 1)
+    r2s = Float64[]
+    for i in 1:d
+        push!(r2s, r2(ŷ[i, :], y[i, :]))
+    end
+    return mean(r2s)
+end
+
+function mape_mv(ŷ::AbstractMatrix, y::AbstractMatrix)
+    d = size(y, 1)
+    m = Float64[]
+    for i in 1:d
+        push!(m, mape(ŷ[i, :], y[i, :]))
+    end
+    return mean(m)
+end
+
+function smape_mv(ŷ::AbstractMatrix, y::AbstractMatrix)
+    d = size(y, 1)
+    m = Float64[]
+    for i in 1:d
+        push!(m, smape(ŷ[i, :], y[i, :]))
+    end
+    return mean(m)
+end
 
 function compute_metrics(model, ps, st, X_scaled, Y_scaled, scaler::StandardScaler, to)
     Xd, Yd = to(X_scaled), to(Y_scaled)
@@ -124,11 +181,11 @@ function compute_metrics(model, ps, st, X_scaled, Y_scaled, scaler::StandardScal
     ŷ = inverse_targets(scaler, Array(ŷ_scaled))
     y = inverse_targets(scaler, Array(Yd))
     return (
-        mse = mse(ŷ, y),
-        mae = mae(ŷ, y),
-        rmse = rmse(ŷ, y),
-        r2 = r2(ŷ, y),
-        mape = mape(ŷ, y),
-        smape = smape(ŷ, y),
+        mse=mse(ŷ, y),
+        mae=mae(ŷ, y),
+        rmse=rmse(ŷ, y),
+        r2=r2(ŷ, y),
+        mape=mape(ŷ, y),
+        smape=smape(ŷ, y),
     )
 end
