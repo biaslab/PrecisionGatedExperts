@@ -47,8 +47,8 @@ end
 
 @constraints function dynamic_ensemble_constraints()
     q(w, z, γ, τ) = q(w)q(z)q(γ)q(τ)
-    q(z) :: ProjectedTo(NormalMeanVariance, parameters=ProjectionParameters(strategy=ClosedFormStrategy()))
-    q(γ) :: ProjectedTo(Gamma, parameters=ProjectionParameters(strategy=ClosedFormStrategy()))
+    q(z)::ProjectedTo(NormalMeanVariance, parameters=ProjectionParameters(strategy=ClosedFormStrategy()))
+    q(γ)::ProjectedTo(Gamma, parameters=ProjectionParameters(strategy=ClosedFormStrategy()))
 end
 
 #const N_FEATURES = Ref(0)
@@ -97,7 +97,7 @@ function load_jld2_model(path::AbstractString)
     end
 end
 
-function same_scaler(s1, s2; atol=1f-6)
+function same_scaler(s1, s2; atol=1.0f-6)
     length(s1.μ) == length(s2.μ) || return false
     length(s1.σ) == length(s2.σ) || return false
     return maximum(abs.(s1.μ .- s2.μ)) ≤ atol && maximum(abs.(s1.σ .- s2.σ)) ≤ atol
@@ -123,7 +123,7 @@ end
 
 function mse_mv(ŷ::AbstractMatrix, y::AbstractMatrix)
     d = size(y, 1)
-    return mean(sum((ŷ .- y).^2; dims=1)) / d
+    return mean(sum((ŷ .- y) .^ 2; dims=1)) / d
 end
 
 function mae_mv(ŷ::AbstractMatrix, y::AbstractMatrix)
@@ -166,10 +166,10 @@ function make_features(X_scaled)
     n = size(X_scaled, 3)
     feats = Vector{Vector{Float64}}(undef, n)
     for j in 1:n
-        x_last_cos = map(cos,X_scaled[:, end, j])
-        x_last_sin = map(sin,X_scaled[:, end, j])
+        x_last_cos = map(cos, X_scaled[:, end, j])
+        x_last_sin = map(sin, X_scaled[:, end, j])
         x_last = Float64.(X_scaled[:, end, j])
-        feats[j] = vcat(1.0, x_last, x_last_cos,x_last_sin)
+        feats[j] = vcat(1.0, x_last, x_last_cos, x_last_sin)
     end
     return feats
 end
@@ -198,7 +198,7 @@ function main()
         end
     end
 
-    @info "Loading dataset" dataset=base_meta.dataset seq_len=base_meta.seq_len horizon=base_meta.horizon
+    @info "Loading dataset" dataset = base_meta.dataset seq_len = base_meta.seq_len horizon = base_meta.horizon
 
     data_dir = joinpath(@__DIR__, "..", "data")
     ds_path = joinpath(data_dir, String(base_meta.dataset))
@@ -226,7 +226,7 @@ function main()
     predictions_train = Array{Float64}(undef, n_total, d, n_train)
     predictions_test = Array{Float64}(undef, n_total, d, n_test)
 
-    @info "Running forecasters" n_forecasters n_train n_test output_dim=d
+    @info "Running forecasters" n_forecasters n_train n_test output_dim = d
 
     for (i, m) in enumerate(models)
         model = build_model(m.model_type, m.config)
@@ -235,7 +235,7 @@ function main()
 
         predictions_train[i, :, :] = Float64.(yhat_tr_sc)
         predictions_test[i, :, :] = Float64.(yhat_te_sc)
-        @info "Forecaster ready" index=i model_type=m.model_type path=model_paths[i]
+        @info "Forecaster ready" index = i model_type = m.model_type path = model_paths[i]
     end
 
     y_train = to_vecs(Float64.(Yval_sc))
@@ -253,7 +253,7 @@ function main()
         predictions_test[idx_min, :, j] = y_q10
         predictions_test[idx_max, :, j] = y_q90
     end
-    @info "Added constant baselines" q10_idx=idx_min q90_idx=idx_max
+    @info "Added constant baselines" q10_idx = idx_min q90_idx = idx_max
 
     predictions_train_vec = Array{Vector{Float64}}(undef, n_total, n_train)
     predictions_test_vec = Array{Vector{Float64}}(undef, n_total, n_test)
@@ -271,24 +271,24 @@ function main()
     n_features = length(features_train[1])
     #N_FEATURES[] = n_features
 
-    @info "Step 1: Training dynamic ensemble using RxInfer" n_features=n_features
+    @info "Step 1: Training dynamic ensemble using RxInfer" n_features = n_features
     w_priors_init = [MvNormalMeanScalePrecision(zeros(n_features), 0.1) for _ in 1:n_total]
     #w_priors_init = [MvNormalMeanPrecision(zeros(n_features), 0.1 * diagm(ones(n_features))) for _ in 1:n_total]
-    τ_priors_init = [ GammaShapeScale(1.0, 1e12)  for _ in 1:n_total ]
+    τ_priors_init = [GammaShapeScale(1.0, 1e12) for _ in 1:n_total]
 
     dynamic_result = infer(
-        model = dynamic_mv_ensemble_model(
-            n_forecasters = n_total,
-            n_obs = n_train,
-            w_priors = w_priors_init,
-            τ_priors = τ_priors_init
+        model=dynamic_mv_ensemble_model(
+            n_forecasters=n_total,
+            n_obs=n_train,
+            w_priors=w_priors_init,
+            τ_priors=τ_priors_init
         ),
-        data = (y = y_train, features = features_train, predictions = predictions_train_vec),
-        constraints = dynamic_ensemble_constraints(),
-        initialization = dynamic_ensemble_init(w_priors_init),
-        iterations = 30,
-        free_energy = false,
-        showprogress = true,
+        data=(y=y_train, features=features_train, predictions=predictions_train_vec),
+        constraints=dynamic_ensemble_constraints(),
+        initialization=dynamic_ensemble_init(w_priors_init),
+        iterations=30,
+        free_energy=false,
+        showprogress=true,
     )
 
     w_posteriors = dynamic_result.posteriors[:w][end]
@@ -298,23 +298,23 @@ function main()
     y_missing = [missing for _ in 1:n_test]
 
     dynamic_predict = infer(
-        model = dynamic_mv_ensemble_model(
-            n_forecasters = n_total,
-            n_obs = n_test,
-            w_priors = w_posteriors,
-            τ_priors = τ_posteriors,
+        model=dynamic_mv_ensemble_model(
+            n_forecasters=n_total,
+            n_obs=n_test,
+            w_priors=w_posteriors,
+            τ_priors=τ_posteriors,
         ),
-        data = (y = y_missing, features = features_test, predictions = predictions_test_vec),
-        constraints = dynamic_ensemble_constraints(),
-        initialization = dynamic_ensemble_init(w_posteriors),
-        iterations = 1,
-        showprogress = true,
-        free_energy = false,
+        data=(y=y_missing, features=features_test, predictions=predictions_test_vec),
+        constraints=dynamic_ensemble_constraints(),
+        initialization=dynamic_ensemble_init(w_posteriors),
+        iterations=1,
+        showprogress=true,
+        free_energy=false,
     )
 
     dynamic_predictions = dynamic_predict.predictions[:y][end]
     ensemble_mean = hcat(map(mean, dynamic_predictions)...)
-    ensemble_std = map((a)->a[1,1],map(std, dynamic_predictions))
+    ensemble_std = map((a) -> a[1, 1], map(std, dynamic_predictions))
 
 
     # Extract γ posteriors for weight uncertainty visualization
@@ -326,19 +326,19 @@ function main()
     y_test_ot_sc = y_test_mat[ot_idx:ot_idx, :]
     ensemble_mean_ot_sc = ensemble_mean[ot_idx:ot_idx, :]
     ensemble_metrics = (
-        mse = mse_mv(ensemble_mean_ot_sc, y_test_ot_sc),
-        mae = mae_mv(ensemble_mean_ot_sc, y_test_ot_sc),
-        rmse = rmse_mv(ensemble_mean_ot_sc, y_test_ot_sc),
-        r2 = r2_mv(ensemble_mean_ot_sc, y_test_ot_sc),
-        mape = mape_mv(ensemble_mean_ot_sc, y_test_ot_sc),
-        smape = smape_mv(ensemble_mean_ot_sc, y_test_ot_sc),
-        mse_all = mse_mv(ensemble_mean, y_test_mat),
-        mae_all = mae_mv(ensemble_mean, y_test_mat),
-        rmse_all = rmse_mv(ensemble_mean, y_test_mat),
-        r2_all = r2_mv(ensemble_mean, y_test_mat),
-        mape_all = mape_mv(ensemble_mean, y_test_mat),
-        smape_all = smape_mv(ensemble_mean, y_test_mat),
-        mean_std = mean(ensemble_std),
+        mse=mse_mv(ensemble_mean_ot_sc, y_test_ot_sc),
+        mae=mae_mv(ensemble_mean_ot_sc, y_test_ot_sc),
+        rmse=rmse_mv(ensemble_mean_ot_sc, y_test_ot_sc),
+        r2=r2_mv(ensemble_mean_ot_sc, y_test_ot_sc),
+        mape=mape_mv(ensemble_mean_ot_sc, y_test_ot_sc),
+        smape=smape_mv(ensemble_mean_ot_sc, y_test_ot_sc),
+        mse_all=mse_mv(ensemble_mean, y_test_mat),
+        mae_all=mae_mv(ensemble_mean, y_test_mat),
+        rmse_all=rmse_mv(ensemble_mean, y_test_mat),
+        r2_all=r2_mv(ensemble_mean, y_test_mat),
+        mape_all=mape_mv(ensemble_mean, y_test_mat),
+        smape_all=smape_mv(ensemble_mean, y_test_mat),
+        mean_std=mean(ensemble_std),
     )
 
     @info "Step 3: Performance comparison on test"
@@ -366,24 +366,24 @@ function main()
     simple_avg = vec(mean(predictions_test; dims=1)) |> x -> reshape(x, d, n_test)
     simple_avg_ot_sc = simple_avg[ot_idx:ot_idx, :]
     simple_metrics = (
-        mse = mse_mv(simple_avg_ot_sc, y_test_ot_sc),
-        mae = mae_mv(simple_avg_ot_sc, y_test_ot_sc),
-        rmse = rmse_mv(simple_avg_ot_sc, y_test_ot_sc),
-        r2 = r2_mv(simple_avg_ot_sc, y_test_ot_sc),
-        mape = mape_mv(simple_avg_ot_sc, y_test_ot_sc),
-        smape = smape_mv(simple_avg_ot_sc, y_test_ot_sc),
-        mse_all = mse_mv(simple_avg, y_test_mat),
-        mae_all = mae_mv(simple_avg, y_test_mat),
-        rmse_all = rmse_mv(simple_avg, y_test_mat),
-        r2_all = r2_mv(simple_avg, y_test_mat),
-        mape_all = mape_mv(simple_avg, y_test_mat),
-        smape_all = smape_mv(simple_avg, y_test_mat),
+        mse=mse_mv(simple_avg_ot_sc, y_test_ot_sc),
+        mae=mae_mv(simple_avg_ot_sc, y_test_ot_sc),
+        rmse=rmse_mv(simple_avg_ot_sc, y_test_ot_sc),
+        r2=r2_mv(simple_avg_ot_sc, y_test_ot_sc),
+        mape=mape_mv(simple_avg_ot_sc, y_test_ot_sc),
+        smape=smape_mv(simple_avg_ot_sc, y_test_ot_sc),
+        mse_all=mse_mv(simple_avg, y_test_mat),
+        mae_all=mae_mv(simple_avg, y_test_mat),
+        rmse_all=rmse_mv(simple_avg, y_test_mat),
+        r2_all=r2_mv(simple_avg, y_test_mat),
+        mape_all=mape_mv(simple_avg, y_test_mat),
+        smape_all=smape_mv(simple_avg, y_test_mat),
     )
 
     @info "Dynamic ensemble metrics" ensemble_metrics...
     @info "Simple average metrics" simple_metrics...
     for (i, m) in enumerate(individual)
-        @info "Forecaster metrics" index=i path=m.path mse=m.mse mae=m.mae rmse=m.rmse r2=m.r2 mape=m.mape smape=m.smape
+        @info "Forecaster metrics" index = i path = m.path mse = m.mse mae = m.mae rmse = m.rmse r2 = m.r2 mape = m.mape smape = m.smape
     end
 
     # -------------------------------------------------------------------------
@@ -461,9 +461,9 @@ function main()
     end
 
     plt = plot(p1, p2, p3, p4, p5, p6, layout=(3, 2), size=(1200, 1200))
-    plot_file = "dynamic_neural_ensemble_rxinfer_$(base_meta.dataset).png"
+    plot_file = "viz/dynamic_neural_ensemble_rxinfer_$(base_meta.dataset).png"
     savefig(plt, plot_file)
-    @info "Saved visualization" file=plot_file
+    @info "Saved visualization" file = plot_file
 
     @info "Done"
 end
