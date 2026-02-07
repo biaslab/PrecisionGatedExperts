@@ -1,6 +1,6 @@
 using Lux
 
-export TimeSeriesLSTM, TimeSeriesCNN, build_model
+export TimeSeriesLSTM, TimeSeriesCNN, TimeSeriesMLP, build_model
 
 struct TimeSeriesLSTM{L,H} <: Lux.AbstractLuxContainerLayer{(:lstm_cell, :head)}
     lstm_cell::L
@@ -50,12 +50,43 @@ function (m::TimeSeriesCNN)(x::AbstractArray{T,3}, ps::NamedTuple, st::NamedTupl
     return y, st
 end
 
+struct TimeSeriesMLP{H} <: Lux.AbstractLuxContainerLayer{(:head,)}
+    head::H
+end
+
+function TimeSeriesMLP(
+    in_dims::Int,
+    seq_len::Int,
+    out_dims::Int;
+    hidden_dims::Int=64,
+    depth::Int=2
+)
+    depth >= 1 || error("depth must be >= 1")
+    layers = Any[Dense(in_dims * seq_len => hidden_dims, relu)]
+    for _ in 2:depth
+        push!(layers, Dense(hidden_dims => hidden_dims, relu))
+    end
+    push!(layers, Dense(hidden_dims => out_dims))
+    return TimeSeriesMLP(Chain(layers...))
+end
+
+function (m::TimeSeriesMLP)(x::AbstractArray{T,3}, ps::NamedTuple, st::NamedTuple) where {T}
+    x2 = reshape(x, :, size(x, 3))
+    y, st_head = m.head(x2, ps.head, st.head)
+    st = merge(st, (head=st_head,))
+    return y, st
+end
+
 function build_model(model_type::Symbol, config)
     if model_type == :TimeSeriesLSTM
         return TimeSeriesLSTM(config.input_dim, config.hidden_dim, config.out_dim)
     elseif model_type == :TimeSeriesCNN
         channels = get(config, :channels, 64)
         return TimeSeriesCNN(config.input_dim, config.out_dim; channels=channels)
+    elseif model_type == :TimeSeriesMLP
+        hidden_dims = get(config, :hidden_dim, 64)
+        depth = get(config, :depth, 2)
+        return TimeSeriesMLP(config.input_dim, config.seq_len, config.out_dim; hidden_dims=hidden_dims, depth=depth)
     else
         error("Unknown model_type=$(model_type)")
     end

@@ -14,69 +14,6 @@ using Statistics
 using ProbabilisticEnsembling
 
 # -----------------------------------------------------------------------------
-# Model Definition
-# -----------------------------------------------------------------------------
-
-struct TimeSeriesLSTM{L,H} <: Lux.AbstractLuxContainerLayer{(:lstm_cell, :head)}
-    lstm_cell::L
-    head::H
-end
-
-function TimeSeriesLSTM(in_dims::Int, hidden_dims::Int, out_dims::Int)
-    return TimeSeriesLSTM(
-        LSTMCell(in_dims => hidden_dims),
-        Chain(Dense(hidden_dims => 32, relu), Dense(32 => out_dims))
-    )
-end
-
-function (m::TimeSeriesLSTM)(x::AbstractArray{T,3}, ps::NamedTuple, st::NamedTuple) where {T}
-    # x shape: (features, seq_len, batch)
-    # Process sequence through LSTM cell
-    x_init, x_rest = Iterators.peel(LuxOps.eachslice(x, Val(2)))
-    (y, carry), st_lstm = m.lstm_cell(x_init, ps.lstm_cell, st.lstm_cell)
-
-    for x_t in x_rest
-        (y, carry), st_lstm = m.lstm_cell((x_t, carry), ps.lstm_cell, st_lstm)
-    end
-
-    # Pass final hidden state through head
-    y, st_head = m.head(y, ps.head, st.head)
-    st = merge(st, (lstm_cell=st_lstm, head=st_head))
-    return y, st
-end
-
-
-struct TimeSeriesCNN{C1,C2,H} <: Lux.AbstractLuxContainerLayer{(:conv1, :conv2, :head)}
-    conv1::C1
-    conv2::C2
-    head::H
-end
-
-function TimeSeriesCNN(in_dims::Int, out_dims::Int; channels::Int=64, k::Int=7, stride::Int=2)
-    return TimeSeriesCNN(
-        Conv((k,), in_dims => channels, relu; pad=(1,), stride=(stride,)),
-        Conv((k,), channels => channels, relu; pad=(1,), stride=(stride,)),
-        Chain(Dense(channels => channels, relu), Dense(channels => out_dims))
-    )
-end
-
-function (m::TimeSeriesCNN)(x::AbstractArray{T,3}, ps::NamedTuple, st::NamedTuple) where {T}
-    # x shape: (features, seq_len, batch)
-    # Permute to (seq_len, channels, batch) expected by 1D Conv
-    x = permutedims(x, (2, 1, 3))
-    x, st1 = m.conv1(x, ps.conv1, st.conv1)
-    x, st2 = m.conv2(x, ps.conv2, st.conv2)
-    # Global average pool over time dimension (first dim)
-    x = mean(x; dims=1)              # (1, C, N)
-    x = reshape(x, size(x, 2), size(x, 3)) # (C, N)
-    y, st_head = m.head(x, ps.head, st.head)
-    st = merge(st, (conv1=st1, conv2=st2, head=st_head))
-    return y, st
-end
-
-
-
-# -----------------------------------------------------------------------------
 # Loss Function
 # -----------------------------------------------------------------------------
 
@@ -245,7 +182,7 @@ function main()
     models_dir = joinpath(@__DIR__, "..", "models")
     mkpath(models_dir)
 
-    datasets = ["ETTh1", "ETTh2"]
+    datasets = ["exchange_rate"]
     seq_len = parse(Int, get(ENV, "SEQ_LEN", "96"))
     horizons = let hs = get(ENV, "HORIZONS", "")
         h = get(ENV, "HORIZON", "")
@@ -258,14 +195,16 @@ function main()
         end
     end
 
-    epochs = parse(Int, get(ENV, "EPOCHS", "25"))
+    epochs = parse(Int, get(ENV, "EPOCHS", "50"))
     batchsize = parse(Int, get(ENV, "BATCHSIZE", "128"))
     lr = parse(Float32, get(ENV, "LR", "0.001"))
     hidden_dim = parse(Int, get(ENV, "HIDDEN", "64"))
+    mlp_hidden = parse(Int, get(ENV, "MLP_HIDDEN", string(hidden_dim)))
+    mlp_depth = parse(Int, get(ENV, "MLP_DEPTH", "2"))
     cnn_channels = parse(Int, get(ENV, "CNN_CHANNELS", "64"))
     cnn_kernel = parse(Int, get(ENV, "CNN_KERNEL", "7"))
     cnn_stride = parse(Int, get(ENV, "CNN_STRIDE", "2"))
-    patience = parse(Int, get(ENV, "PATIENCE", "5"))
+    patience = parse(Int, get(ENV, "PATIENCE", "50"))
 
     dev = reactant_device()
     cdev = cpu_device()
@@ -273,17 +212,23 @@ function main()
 
     for ds in datasets
         ds_path = joinpath(data_dir, ds)
-        @info "Loading dataset" dataset=ds_path
+        @info "Loading dataset" dataset = ds_path
+
+        if occursin("ETTh", ds)
+            ratio_ds = (0.6, 0.2, 0.2)
+        else
+            ratio_ds = (0.7, 0.1, 0.2)
+        end
 
         Xmat, feat_cols = load_ett(ds_path)
-        @info "Loaded dataset" n_samples=size(Xmat, 1) n_features=length(feat_cols)
+        @info "Loaded dataset" n_samples = size(Xmat, 1) n_features = length(feat_cols)
 
         for H in horizons
-            @info "Training LSTM" dataset=ds horizon=H seq_len=seq_len
+            @info "Training LSTM" dataset = ds horizon = H seq_len = seq_len ratio = ratio_ds
 
             # Build sequences
             X3, Y2 = make_sequences(Xmat; seq_len=seq_len, horizon=H)
-            Xtr, Ytr, Xval, Yval, Xte, Yte = train_val_test_split(X3, Y2; ratios=(0.6, 0.2, 0.2))
+            Xtr, Ytr, Xval, Yval, Xte, Yte = train_val_test_split(X3, Y2; ratios=ratio_ds)
 
             # Scale data
             scaler = fit_scaler(Xtr)
@@ -297,7 +242,7 @@ function main()
             input_dim = size(Xtr, 1)
             out_dim = size(Ytr, 1)
 
-            @info "Data shapes" input_dim=input_dim out_dim=out_dim train=size(Xtr, 3) val=size(Xval, 3) test=size(Xte, 3)
+            @info "Data shapes" input_dim = input_dim out_dim = out_dim train = size(Xtr, 3) val = size(Xval, 3) test = size(Xte, 3)
 
             # Create model and dataloaders
             model = TimeSeriesLSTM(input_dim, hidden_dim, out_dim)
@@ -314,7 +259,7 @@ function main()
 
             # Compute test metrics
             test_metrics = compute_test_metrics(model, result.parameters, result.states, Xte, Yte_sc, scaler; dev=dev)
-            @info "Test metrics" dataset=ds horizon=H test_metrics...
+            @info "Test metrics" dataset = ds horizon = H test_metrics...
 
             # Save model
             model_path = joinpath(models_dir, "$(ds)_h$(H)_LSTM_enzyme.jld2")
@@ -341,9 +286,9 @@ function main()
                     test_metrics=test_metrics
                 )
             )
-            @info "Model saved" path=model_path
+            @info "Model saved" path = model_path
 
-            @info "Training CNN" dataset=ds horizon=H seq_len=seq_len
+            @info "Training CNN" dataset = ds horizon = H seq_len = seq_len
 
             cnn_model = TimeSeriesCNN(input_dim, out_dim; channels=cnn_channels, k=cnn_kernel, stride=cnn_stride)
             cnn_train_loader, cnn_val_loader = create_dataloaders(Xtr, Ytr, Xval, Yval; batchsize=batchsize, dev=dev)
@@ -357,7 +302,7 @@ function main()
             )
 
             cnn_test_metrics = compute_test_metrics(cnn_model, cnn_result.parameters, cnn_result.states, Xte, Yte_sc, scaler; dev=dev)
-            @info "CNN test metrics" dataset=ds horizon=H cnn_test_metrics...
+            @info "CNN test metrics" dataset = ds horizon = H cnn_test_metrics...
 
             cnn_model_path = joinpath(models_dir, "$(ds)_h$(H)_CNN_enzyme.jld2")
             jldsave(cnn_model_path;
@@ -385,11 +330,55 @@ function main()
                     test_metrics=cnn_test_metrics
                 )
             )
-            @info "CNN model saved" path=cnn_model_path
+            @info "CNN model saved" path = cnn_model_path
+
+            @info "Training MLP" dataset = ds horizon = H seq_len = seq_len
+
+            mlp_model = TimeSeriesMLP(input_dim, seq_len, out_dim; hidden_dims=mlp_hidden, depth=mlp_depth)
+            mlp_train_loader, mlp_val_loader = create_dataloaders(Xtr, Ytr, Xval, Yval; batchsize=batchsize, dev=dev)
+
+            mlp_result = train_lstm(
+                mlp_model, mlp_train_loader, mlp_val_loader;
+                epochs=epochs,
+                lr=lr,
+                patience=patience,
+                dev=dev
+            )
+
+            mlp_test_metrics = compute_test_metrics(mlp_model, mlp_result.parameters, mlp_result.states, Xte, Yte_sc, scaler; dev=dev)
+            @info "MLP test metrics" dataset = ds horizon = H mlp_test_metrics...
+
+            mlp_model_path = joinpath(models_dir, "$(ds)_h$(H)_MLP_enzyme.jld2")
+            jldsave(mlp_model_path;
+                model_type=:TimeSeriesMLP,
+                parameters=mlp_result.parameters,
+                states=mlp_result.states,
+                config=(
+                    input_dim=input_dim,
+                    seq_len=seq_len,
+                    hidden_dim=mlp_hidden,
+                    depth=mlp_depth,
+                    out_dim=out_dim
+                ),
+                meta=(
+                    dataset=ds,
+                    model="MLP",
+                    seq_len=seq_len,
+                    horizon=H,
+                    features=feat_cols,
+                    targets=feat_cols,
+                    scaler=scaler,
+                    split=(train=0.6, val=0.2, test=0.2),
+                    sizes=(train=size(Xtr, 3), val=size(Xval, 3), test=size(Xte, 3)),
+                    val_best=(epoch=mlp_result.best_epoch, mse=mlp_result.best_val_mse),
+                    test_metrics=mlp_test_metrics
+                )
+            )
+            @info "MLP model saved" path = mlp_model_path
         end
     end
 
-    @info "All models saved" directory=models_dir
+    @info "All models saved" directory = models_dir
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
