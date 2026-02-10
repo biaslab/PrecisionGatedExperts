@@ -13,6 +13,8 @@ using ExponentialFamily
 using ExponentialFamilyProjection
 using ExponentialFamilyProjection: ClosedFormStrategy
 using Distributions
+using ProgressMeter
+using Flux
 using Statistics
 using LinearAlgebra
 using Lux
@@ -26,58 +28,36 @@ includet("../src/ProbabilisticEnsembling.jl"); using .ProbabilisticEnsembling
 # Adaptive Mixture of Local Experts (Jacobs et al., 1991)
 # -----------------------------------------------------------------------------
 
-using Flux
-using Statistics
-
-# Set input_dim and n_experts as needed
-const input_dim =  size(features, 2)  # or set manually
-const n_experts = 3  # Change as needed
-
-# Define expert models (e.g., simple MLPs)
-experts = [Chain(Dense(input_dim, 16, relu), Dense(16, 1)) for _ in 1:n_experts]
-
-# Gating network: softmax over linear functions
-gating = Chain(Dense(input_dim, n_experts))
-
-# Softmax function for gating outputs
 function gating_probs(gating, x)
-    Flux.softmax(gating(x))
+    return Flux.softmax(gating(x))
 end
 
-# Mixture of experts prediction
-function moe_predict(experts, gating, x)
+function moe_predict(predictions_vec, gating, x)
     ps = gating_probs(gating, x)
-    ys = hcat([expert(x) for expert in experts]...)
-    sum(ps .* ys; dims=2)
+    preds = hcat(predictions_vec...)
+    return preds * ps
 end
 
-# Loss: negative log-likelihood (MSE for regression, weighted by gating)
-function moe_loss(experts, gating, x, y)
+function moe_var(predictions_vec, gating, x)
     ps = gating_probs(gating, x)
-    ys = hcat([expert(x) for expert in experts]...)
-    # Weighted MSE for each expert, summed over experts
-    mse = sum(ps .* (ys .- y).^2; dims=2)
-    mean(mse)
+    preds = hcat(predictions_vec...)
+    return (preds .- preds*ps).^2 * ps
 end
 
-# Training function
-function train_moe!(experts, gating, data, opt, n_epochs=100)
-    ps = Flux.params([experts; gating])
-    for epoch in 1:n_epochs
-        for (x, y) in data
-            gs = Flux.gradient(ps) do
-                moe_loss(experts, gating, x, y)
-            end
-            Flux.Optimise.update!(opt, ps, gs)
+function moe_loss(gating, preds, x, y)
+    ps = gating_probs(gating, x)
+    return ps' * [norm(pred .- y,2).^2 for pred in preds]
+end
+
+function train_moe!(predictions_train_vec, gating, features_train, y_train, opt; n_epochs=100)
+    opt_state = Flux.setup(opt, gating)
+    @showprogress for epoch in 1:n_epochs
+        for j in 1:length(features_train)
+            gs = gradient(m -> moe_loss(m, predictions_train_vec[:, j], features_train[j], y_train[j]), gating)
+            Flux.Optimise.update!(opt_state, gating, gs)
         end
     end
 end
-
-# Example usage (replace with your data loading)
-# data = [(x, y), ...]  # x: input, y: target
-# opt = ADAM(1e-3)
-# train_moe!(experts, gating, data, opt)
-# ŷ = moe_predict(experts, gating, x)
 
 reactant_device() = (
     try
@@ -150,7 +130,7 @@ function main()
 
     @info "Loading dataset" dataset = base_meta.dataset seq_len = base_meta.seq_len horizon = base_meta.horizon
 
-    data_dir = joinpath(@__DIR__, "..", "data")
+    data_dir = joinpath(@__DIR__, "data")
     ds_path = joinpath(data_dir, String(base_meta.dataset))
     Xmat, _ = load_ett(ds_path)
 
@@ -163,7 +143,6 @@ function main()
     Xte_s = scale_inputs(scaler, Xte)
     Yval_sc = scale_targets(scaler, Yval)
     Yte_sc = scale_targets(scaler, Yte)
-
 
     n_forecasters = length(models)
     n_train = size(Xval, 3)
@@ -219,30 +198,19 @@ function main()
     features_train = make_features(Xtr_s)
     features_test = make_features(Xte_s)
     n_features = length(features_train[1])
-    #N_FEATURES[] = n_features
 
+    gating = Flux.Chain(Flux.Dense(n_features, n_total))
 
     @info "Step 1: Training adaptive mixture of local experts (MLE)" n_features = n_features
-    # Prepare data for Flux: features_train and y_train as tuples
-    train_data = [(Float32.(features_train[j]), Float32.(y_train[j])) for j in 1:n_train]
+    
     opt = Flux.ADAM(1e-3)
-    train_moe!(experts, gating, train_data, opt, n_epochs=100)
+    train_moe!(predictions_train_vec, gating, features_train, y_train, opt, n_epochs=100)
 
     @info "Step 2: Testing adaptive mixture of local experts (MLE)"
-    # Predict on test set
-    ensemble_mean = hcat([moe_predict(experts, gating, Float32.(features_test[j])) for j in 1:n_test]...)
-    # For uncertainty, you could compute the variance across experts weighted by gating probabilities
-    function moe_var(experts, gating, x)
-        ps = gating_probs(gating, x)
-        ys = hcat([expert(x) for expert in experts]...)
-        μ = sum(ps .* ys; dims=2)
-        var = sum(ps .* (ys .- μ).^2; dims=2)
-        return var
-    end
-    ensemble_std = sqrt.(hcat([moe_var(experts, gating, Float32.(features_test[j])) for j in 1:n_test]...))
 
-    # For visualization, you can also extract the gating weights for each test sample
-    gating_weights = hcat([gating_probs(gating, Float32.(features_test[j])) for j in 1:n_test]...)
+    ensemble_mean = hcat([moe_predict(predictions_test_vec[:, j], gating, features_test[j]) for j in 1:n_test]...)
+    ensemble_std = sqrt.(hcat([moe_var(predictions_test_vec[:,j], gating, features_test[j]) for j in 1:n_test]...))
+    gating_weights = hcat([gating_probs(gating, features_test[j]) for j in 1:n_test]...)
 
     y_test_mat = Float64.(Yte_sc)
     y_test_ot_sc = y_test_mat[ot_idx:ot_idx, :]
@@ -349,18 +317,18 @@ function main()
     )
 
     p3 = plot(title="Dynamic Precision Weights",
-        xlabel="t", ylabel="γ(x) = exp(w'x)",
+        xlabel="t", ylabel="Gate softmax probabilities",
         legend=:topright
     )
     for i in 1:n_total
-        plot!(p3, x_test, γ_values_all[i, :], label="F$(i)", lw=2, color=colors[mod1(i, length(colors))])
+        plot!(p3, x_test, gating_weights[i, :], label="F$(i)", lw=2, color=colors[mod1(i, length(colors))])
     end
 
     p4 = plot(title="Uncertainty (Dynamic)",
         xlabel="t", ylabel="Standard Deviation (σ)",
         legend=:topright
     )
-    plot!(p4, x_test, ensemble_std, label="Dynamic σ", lw=2, color=:blue)
+    plot!(p4, x_test, sum(ensemble_std,dims=1)', label="Dynamic σ", lw=2, color=:blue)
 
     all_mses = vcat([m.mse for m in individual], [simple_metrics.mse, ensemble_metrics.mse])
     all_labels = vcat(["F$(i)" for i in 1:n_total], ["Simple Avg", "Dynamic"])
@@ -373,13 +341,12 @@ function main()
         xrotation=45
     )
 
-    normalized_weights = γ_values_all ./ sum(γ_values_all; dims=1)
     p6 = plot(title="Normalized Dynamic Weights",
         xlabel="t", ylabel="Weight (normalized)",
         legend=:outerright
     )
     for i in 1:n_total
-        plot!(p6, x_test, normalized_weights[i, :], label="F$(i)", lw=2, color=colors[mod1(i, length(colors))])
+        plot!(p6, x_test, gating_weights[i, :], label="F$(i)", lw=2, color=colors[mod1(i, length(colors))])
     end
 
     plt = plot(p1, p2, p3, p4, p5, p6, layout=(3, 2), size=(1200, 1200))

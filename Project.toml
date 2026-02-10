@@ -1,7 +1,7 @@
 name = "ProbabilisticEnsembling"
 uuid = "dab4be3b-02fa-4a9b-b857-091df78264db"
-authors = ["Mykola Lukashchuk <m.lukashchuk@tue.nl>", "Kyrylo Yemets <kyrylo.v.yemets@lpnu.ua>"]
 version = "0.0.1"
+authors = ["Mykola Lukashchuk <m.lukashchuk@tue.nl>", "Kyrylo Yemets <kyrylo.v.yemets@lpnu.ua>"]
 
 [deps]
 ADTypes = "47edcb42-4c32-4615-8424-f2b9edc5f35b"
@@ -18,6 +18,7 @@ Lux = "b2108857-7c20-44ae-9111-449ecde12c47"
 MLUtils = "f1d291b0-491e-4a28-83b9-f70985020b54"
 NNlib = "872c559c-99b0-510c-b3b7-b6c96a88d5cd"
 Optim = "429524aa-4258-5aef-a3af-852621145aeb"
+ProgressMeter = "92933f4c-e287-5a05-a399-4b506db050ca"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 Reactant = "3c362404-f566-11ee-1572-e11a4b42c853"
 RxInfer = "86711068-29c9-4ff7-b620-ae75d7495b3d"
@@ -34,5 +35,6 @@ JLD2 = "0.6"
 Lux = "1.4"
 MLUtils = "0.4"
 Optim = "1.13"
+ProgressMeter = "1.11.0"
 Reactant = "0.2"
 RxInfer = "4"
