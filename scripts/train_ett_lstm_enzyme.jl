@@ -178,11 +178,11 @@ end
 
 function main()
     # Settings
-    data_dir = joinpath(@__DIR__, "..", "data")
-    models_dir = joinpath(@__DIR__, "..", "models")
+    data_dir = joinpath("..", "data")
+    models_dir = joinpath("..", "models")
     mkpath(models_dir)
 
-    datasets = ["traffic"]
+    datasets = ["ETTh1", "ETTh2", "exchange_rate"]
     seq_len = parse(Int, get(ENV, "SEQ_LEN", "96"))
     horizons = let hs = get(ENV, "HORIZONS", "")
         h = get(ENV, "HORIZON", "")
@@ -191,7 +191,7 @@ function main()
         elseif !isempty(h)
             [parse(Int, h)]
         else
-            [720]
+            [192, 336, 720]
         end
     end
 
@@ -224,6 +224,7 @@ function main()
         @info "Loaded dataset" n_samples = size(Xmat, 1) n_features = length(feat_cols)
 
         for H in horizons
+            seq_len = H
             @info "Training LSTM" dataset = ds horizon = H seq_len = seq_len ratio = ratio_ds
 
             # Build sequences
@@ -262,7 +263,7 @@ function main()
             @info "Test metrics" dataset = ds horizon = H test_metrics...
 
             # Save model
-            model_path = joinpath(models_dir, "$(ds)_h$(H)_LSTM_enzyme.jld2")
+            model_path = joinpath(models_dir, "$(ds)_h$(H)_s$(seq_len)_LSTM_enzyme.jld2")
             jldsave(model_path;
                 model_type=:TimeSeriesLSTM,
                 parameters=result.parameters,
@@ -304,7 +305,7 @@ function main()
             cnn_test_metrics = compute_test_metrics(cnn_model, cnn_result.parameters, cnn_result.states, Xte, Yte_sc, scaler; dev=dev)
             @info "CNN test metrics" dataset = ds horizon = H cnn_test_metrics...
 
-            cnn_model_path = joinpath(models_dir, "$(ds)_h$(H)_CNN_enzyme.jld2")
+            cnn_model_path = joinpath(models_dir, "$(ds)_h$(H)_s$(seq_len)_CNN_enzyme.jld2")
             jldsave(cnn_model_path;
                 model_type=:TimeSeriesCNN,
                 parameters=cnn_result.parameters,
@@ -348,7 +349,7 @@ function main()
             mlp_test_metrics = compute_test_metrics(mlp_model, mlp_result.parameters, mlp_result.states, Xte, Yte_sc, scaler; dev=dev)
             @info "MLP test metrics" dataset = ds horizon = H mlp_test_metrics...
 
-            mlp_model_path = joinpath(models_dir, "$(ds)_h$(H)_MLP_enzyme.jld2")
+            mlp_model_path = joinpath(models_dir, "$(ds)_h$(H)_s$(seq_len)_MLP_enzyme.jld2")
             jldsave(mlp_model_path;
                 model_type=:TimeSeriesMLP,
                 parameters=mlp_result.parameters,
