@@ -4,7 +4,7 @@
 Adaptive mixture of local experts (Jacobs,Jordan,Nowlan,Hinton)
 
 Usage:
-    julia scripts/adaptive_mixture_local_experts.jl 
+    julia scripts/adaptive_mixture_local_experts.jl
 """
 
 using Revise
@@ -14,12 +14,14 @@ using ExponentialFamilyProjection
 using ExponentialFamilyProjection: ClosedFormStrategy
 using Distributions
 using ProgressMeter
-using Flux
+using ADTypes
+using Optimisers
 using Statistics
 using LinearAlgebra
 using Lux
 using Reactant
 using Plots
+using Random
 
 includet("../src/ProbabilisticEnsembling.jl"); using .ProbabilisticEnsembling
 
@@ -28,35 +30,54 @@ includet("../src/ProbabilisticEnsembling.jl"); using .ProbabilisticEnsembling
 # Adaptive Mixture of Local Experts (Jacobs et al., 1991)
 # -----------------------------------------------------------------------------
 
-function gating_probs(gating, x)
-    return Flux.softmax(gating(x))
+function stable_softmax(logits)
+    z = logits .- maximum(logits)
+    p = exp.(z)
+    return p ./ sum(p)
 end
 
-function moe_predict(predictions_vec, gating, x)
-    ps = gating_probs(gating, x)
+function gating_probs(gating, ps, st, x)
+    logits, _ = gating(Float32.(x), ps, st)
+    return stable_softmax(vec(logits))
+end
+
+function moe_predict(predictions_vec, gating, ps, st, x)
+    probs = gating_probs(gating, ps, st, x)
     preds = hcat(predictions_vec...)
-    return preds * ps
+    return preds * probs
 end
 
-function moe_var(predictions_vec, gating, x)
-    ps = gating_probs(gating, x)
+function moe_var(predictions_vec, gating, ps, st, x)
+    probs = gating_probs(gating, ps, st, x)
     preds = hcat(predictions_vec...)
-    return (preds .- preds*ps).^2 * ps
+    return (preds .- preds * probs).^2 * probs
 end
 
-function moe_loss(gating, preds, x, y)
-    ps = gating_probs(gating, x)
-    return ps' * [norm(pred .- y,2).^2 for pred in preds]
+function moe_objective(gating, ps, st, data)
+    preds, x, y = data
+    probs = gating_probs(gating, ps, st, x)
+    losses = [sum(abs2, pred .- y) for pred in preds]
+    return dot(probs, losses), st, (;)
 end
 
 function train_moe!(predictions_train_vec, gating, features_train, y_train, opt; n_epochs=100)
-    opt_state = Flux.setup(opt, gating)
+    rng = Random.default_rng()
+    ps, st = Lux.setup(rng, gating)
+    train_state = Lux.Training.TrainState(gating, ps, st, opt)
+    ad = AutoEnzyme()
+
+    y_train_f32 = [Float32.(y) for y in y_train]
+    features_train_f32 = [Float32.(x) for x in features_train]
+    predictions_train_f32 = [Float32.(predictions_train_vec[i, j]) for i in axes(predictions_train_vec, 1), j in axes(predictions_train_vec, 2)]
+
     @showprogress for epoch in 1:n_epochs
         for j in 1:length(features_train)
-            gs = gradient(m -> moe_loss(m, predictions_train_vec[:, j], features_train[j], y_train[j]), gating)
-            Flux.Optimise.update!(opt_state, gating, gs)
+            data_j = (predictions_train_f32[:, j], features_train_f32[j], y_train_f32[j])
+            (_, _, _, train_state) = Lux.Training.single_train_step!(ad, moe_objective, data_j, train_state)
         end
     end
+
+    return train_state
 end
 
 reactant_device() = (
@@ -130,7 +151,7 @@ function main()
 
     @info "Loading dataset" dataset = base_meta.dataset seq_len = base_meta.seq_len horizon = base_meta.horizon
 
-    data_dir = joinpath(@__DIR__, "data")
+    data_dir = joinpath("..", "data")
     ds_path = joinpath(data_dir, String(base_meta.dataset))
     Xmat, _ = load_ett(ds_path)
 
@@ -199,18 +220,18 @@ function main()
     features_test = make_features(Xte_s)
     n_features = length(features_train[1])
 
-    gating = Flux.Chain(Flux.Dense(n_features, n_total))
+    gating = Chain(Dense(n_features => n_total))
 
     @info "Step 1: Training adaptive mixture of local experts (MLE)" n_features = n_features
-    
-    opt = Flux.ADAM(1e-3)
-    train_moe!(predictions_train_vec, gating, features_train, y_train, opt, n_epochs=100)
+
+    opt = Optimisers.Adam(1f-3)
+    gating_state = train_moe!(predictions_train_vec, gating, features_train, y_train, opt, n_epochs=100)
 
     @info "Step 2: Testing adaptive mixture of local experts (MLE)"
 
-    ensemble_mean = hcat([moe_predict(predictions_test_vec[:, j], gating, features_test[j]) for j in 1:n_test]...)
-    ensemble_std = sqrt.(hcat([moe_var(predictions_test_vec[:,j], gating, features_test[j]) for j in 1:n_test]...))
-    gating_weights = hcat([gating_probs(gating, features_test[j]) for j in 1:n_test]...)
+    ensemble_mean = hcat([moe_predict(predictions_test_vec[:, j], gating, gating_state.parameters, gating_state.states, features_test[j]) for j in 1:n_test]...)
+    ensemble_std = sqrt.(hcat([moe_var(predictions_test_vec[:,j], gating, gating_state.parameters, gating_state.states, features_test[j]) for j in 1:n_test]...))
+    gating_weights = hcat([gating_probs(gating, gating_state.parameters, gating_state.states, features_test[j]) for j in 1:n_test]...)
 
     y_test_mat = Float64.(Yte_sc)
     y_test_ot_sc = y_test_mat[ot_idx:ot_idx, :]
@@ -350,7 +371,7 @@ function main()
     end
 
     plt = plot(p1, p2, p3, p4, p5, p6, layout=(3, 2), size=(1200, 1200))
-    plot_file = "viz/adaptive_mixture_local_experts_dynamic_$(base_meta.dataset).png"
+    plot_file = "../viz/adaptive_mixture_local_experts_dynamic_$(base_meta.dataset).png"
     savefig(plt, plot_file)
     @info "Saved visualization" file = plot_file
 
