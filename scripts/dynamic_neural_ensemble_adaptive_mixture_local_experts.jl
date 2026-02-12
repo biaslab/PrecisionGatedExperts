@@ -60,7 +60,23 @@ function moe_objective(gating, ps, st, data)
     return dot(probs, losses), st, (;)
 end
 
-function train_moe!(predictions_train_vec, gating, features_train, y_train, opt; n_epochs=100)
+function average_moe_loss(predictions_vec, features, y, gating, ps, st)
+    st_eval = Lux.testmode(st)
+    total = 0.0f0
+    for j in eachindex(features)
+        probs = gating_probs(gating, ps, st_eval, features[j])
+        losses = [sum(abs2, pred .- y[j]) for pred in predictions_vec[:, j]]
+        total += dot(probs, losses)
+    end
+    return total / length(features)
+end
+
+function train_moe!(
+    predictions_train_vec, features_train, y_train,
+    predictions_val_vec, features_val, y_val,
+    gating, opt;
+    n_epochs=100, patience=50, min_delta=1f-6
+)
     rng = Random.default_rng()
     ps, st = Lux.setup(rng, gating)
     train_state = Lux.Training.TrainState(gating, ps, st, opt)
@@ -69,15 +85,48 @@ function train_moe!(predictions_train_vec, gating, features_train, y_train, opt;
     y_train_f32 = [Float32.(y) for y in y_train]
     features_train_f32 = [Float32.(x) for x in features_train]
     predictions_train_f32 = [Float32.(predictions_train_vec[i, j]) for i in axes(predictions_train_vec, 1), j in axes(predictions_train_vec, 2)]
+    y_val_f32 = [Float32.(y) for y in y_val]
+    features_val_f32 = [Float32.(x) for x in features_val]
+    predictions_val_f32 = [Float32.(predictions_val_vec[i, j]) for i in axes(predictions_val_vec, 1), j in axes(predictions_val_vec, 2)]
+
+    best_val_loss = Inf32
+    best_epoch = 0
+    best_ps = train_state.parameters
+    best_st = train_state.states
+    patience_counter = 0
 
     @showprogress for epoch in 1:n_epochs
-        for j in 1:length(features_train)
+        for j in eachindex(features_train_f32)
             data_j = (predictions_train_f32[:, j], features_train_f32[j], y_train_f32[j])
             (_, _, _, train_state) = Lux.Training.single_train_step!(ad, moe_objective, data_j, train_state)
         end
+
+        train_loss = average_moe_loss(
+            predictions_train_f32, features_train_f32, y_train_f32,
+            gating, train_state.parameters, train_state.states
+        )
+        val_loss = average_moe_loss(
+            predictions_val_f32, features_val_f32, y_val_f32,
+            gating, train_state.parameters, train_state.states
+        )
+        @info "Gating epoch" epoch train_loss val_loss
+
+        if val_loss < best_val_loss - min_delta
+            best_val_loss = val_loss
+            best_epoch = epoch
+            best_ps = train_state.parameters
+            best_st = train_state.states
+            patience_counter = 0
+        else
+            patience_counter += 1
+            if patience_counter >= patience
+                @info "Early stopping gating training" epoch best_epoch best_val_loss
+                break
+            end
+        end
     end
 
-    return train_state
+    return (parameters=best_ps, states=best_st, best_epoch=best_epoch, best_val_loss=best_val_loss)
 end
 
 reactant_device() = (
@@ -160,44 +209,55 @@ function main()
     Xtr, Ytr, Xval, Yval, Xte, Yte = train_val_test_split(X3, Y2; ratios=(split.train, split.val, split.test))
 
     scaler = base_meta.scaler
-    Xtr_s = scale_inputs(scaler, Xval)
+    Xtr_s = scale_inputs(scaler, Xtr)
+    Xval_s = scale_inputs(scaler, Xval)
     Xte_s = scale_inputs(scaler, Xte)
+    Ytr_sc = scale_targets(scaler, Ytr)
     Yval_sc = scale_targets(scaler, Yval)
     Yte_sc = scale_targets(scaler, Yte)
 
     n_forecasters = length(models)
-    n_train = size(Xval, 3)
+    n_train = size(Xtr, 3)
+    n_val = size(Xval, 3)
     n_test = size(Xte, 3)
-    d = size(Yval, 1)
+    d = size(Ytr, 1)
     ot_idx = d  # OT is last column
 
     # Add two constant baselines: per-dimension min and max from train targets
     n_total = n_forecasters + 2
     predictions_train = Array{Float64}(undef, n_total, d, n_train)
+    predictions_val = Array{Float64}(undef, n_total, d, n_val)
     predictions_test = Array{Float64}(undef, n_total, d, n_test)
 
-    @info "Running forecasters" n_forecasters n_train n_test output_dim = d
+    @info "Running forecasters" n_forecasters n_train n_val n_test output_dim = d
 
     for (i, m) in enumerate(models)
         model = build_model(m.model_type, m.config)
         yhat_tr_sc = predict_unscaled(model, m.parameters, m.states, Xtr_s)
+        yhat_val_sc = predict_unscaled(model, m.parameters, m.states, Xval_s)
         yhat_te_sc = predict_unscaled(model, m.parameters, m.states, Xte_s)
 
         predictions_train[i, :, :] = Float64.(yhat_tr_sc)
+        predictions_val[i, :, :] = Float64.(yhat_val_sc)
         predictions_test[i, :, :] = Float64.(yhat_te_sc)
         @info "Forecaster ready" index = i model_type = m.model_type path = model_paths[i]
     end
 
-    y_train = to_vecs(Float64.(Yval_sc))
+    y_train = to_vecs(Float64.(Ytr_sc))
+    y_val = to_vecs(Float64.(Yval_sc))
     y_test = to_vecs(Float64.(Yte_sc))
 
-    y_q10 = [quantile(Float64.(view(Yval_sc, i, :)), 0.1) for i in 1:d]
-    y_q90 = [quantile(Float64.(view(Yval_sc, i, :)), 0.9) for i in 1:d]
+    y_q10 = [quantile(Float64.(view(Ytr_sc, i, :)), 0.1) for i in 1:d]
+    y_q90 = [quantile(Float64.(view(Ytr_sc, i, :)), 0.9) for i in 1:d]
     idx_min = n_forecasters + 1
     idx_max = n_forecasters + 2
     for j in 1:n_train
         predictions_train[idx_min, :, j] = y_q10
         predictions_train[idx_max, :, j] = y_q90
+    end
+    for j in 1:n_val
+        predictions_val[idx_min, :, j] = y_q10
+        predictions_val[idx_max, :, j] = y_q90
     end
     for j in 1:n_test
         predictions_test[idx_min, :, j] = y_q10
@@ -206,10 +266,14 @@ function main()
     @info "Added constant baselines" q10_idx = idx_min q90_idx = idx_max
 
     predictions_train_vec = Array{Vector{Float64}}(undef, n_total, n_train)
+    predictions_val_vec = Array{Vector{Float64}}(undef, n_total, n_val)
     predictions_test_vec = Array{Vector{Float64}}(undef, n_total, n_test)
     for i in 1:n_total
         for j in 1:n_train
             predictions_train_vec[i, j] = Vector{Float64}(predictions_train[i, :, j])
+        end
+        for j in 1:n_val
+            predictions_val_vec[i, j] = Vector{Float64}(predictions_val[i, :, j])
         end
         for j in 1:n_test
             predictions_test_vec[i, j] = Vector{Float64}(predictions_test[i, :, j])
@@ -217,6 +281,7 @@ function main()
     end
 
     features_train = make_features(Xtr_s)
+    features_val = make_features(Xval_s)
     features_test = make_features(Xte_s)
     n_features = length(features_train[1])
 
@@ -225,7 +290,13 @@ function main()
     @info "Step 1: Training adaptive mixture of local experts (MLE)" n_features = n_features
 
     opt = Optimisers.Adam(1f-3)
-    gating_state = train_moe!(predictions_train_vec, gating, features_train, y_train, opt, n_epochs=100)
+    gating_state = train_moe!(
+        predictions_train_vec, features_train, y_train,
+        predictions_val_vec, features_val, y_val,
+        gating, opt;
+        n_epochs=100, patience=50
+    )
+    @info "Best gating checkpoint (validation)" best_epoch = gating_state.best_epoch best_val_loss = gating_state.best_val_loss
 
     @info "Step 2: Testing adaptive mixture of local experts (MLE)"
 
