@@ -73,9 +73,9 @@ end
 
 function train_moe!(
     predictions_train_vec, features_train, y_train,
-    predictions_val_vec, features_val, y_val,
+    predictions_monitor_vec, features_monitor, y_monitor,
     gating, opt;
-    n_epochs=100, patience=50, min_delta=1f-6
+    n_epochs=100, patience=50, min_delta=1f-6, monitor_label="val"
 )
     rng = Random.default_rng()
     ps, st = Lux.setup(rng, gating)
@@ -85,11 +85,11 @@ function train_moe!(
     y_train_f32 = [Float32.(y) for y in y_train]
     features_train_f32 = [Float32.(x) for x in features_train]
     predictions_train_f32 = [Float32.(predictions_train_vec[i, j]) for i in axes(predictions_train_vec, 1), j in axes(predictions_train_vec, 2)]
-    y_val_f32 = [Float32.(y) for y in y_val]
-    features_val_f32 = [Float32.(x) for x in features_val]
-    predictions_val_f32 = [Float32.(predictions_val_vec[i, j]) for i in axes(predictions_val_vec, 1), j in axes(predictions_val_vec, 2)]
+    y_monitor_f32 = [Float32.(y) for y in y_monitor]
+    features_monitor_f32 = [Float32.(x) for x in features_monitor]
+    predictions_monitor_f32 = [Float32.(predictions_monitor_vec[i, j]) for i in axes(predictions_monitor_vec, 1), j in axes(predictions_monitor_vec, 2)]
 
-    best_val_loss = Inf32
+    best_monitor_loss = Inf32
     best_epoch = 0
     best_ps = train_state.parameters
     best_st = train_state.states
@@ -105,14 +105,14 @@ function train_moe!(
             predictions_train_f32, features_train_f32, y_train_f32,
             gating, train_state.parameters, train_state.states
         )
-        val_loss = average_moe_loss(
-            predictions_val_f32, features_val_f32, y_val_f32,
+        monitor_loss = average_moe_loss(
+            predictions_monitor_f32, features_monitor_f32, y_monitor_f32,
             gating, train_state.parameters, train_state.states
         )
-        @info "Gating epoch" epoch train_loss val_loss
+        @info "Gating epoch" epoch train_loss monitor_label monitor_loss
 
-        if val_loss < best_val_loss - min_delta
-            best_val_loss = val_loss
+        if monitor_loss < best_monitor_loss - min_delta
+            best_monitor_loss = monitor_loss
             best_epoch = epoch
             best_ps = train_state.parameters
             best_st = train_state.states
@@ -120,13 +120,40 @@ function train_moe!(
         else
             patience_counter += 1
             if patience_counter >= patience
-                @info "Early stopping gating training" epoch best_epoch best_val_loss
+                @info "Early stopping gating training" epoch best_epoch monitor_label best_monitor_loss
                 break
             end
         end
     end
 
-    return (parameters=best_ps, states=best_st, best_epoch=best_epoch, best_val_loss=best_val_loss)
+    return (parameters=best_ps, states=best_st, best_epoch=best_epoch, best_monitor_loss=best_monitor_loss)
+end
+
+function parse_bool_flag(v::AbstractString, flag::AbstractString)
+    lv = lowercase(v)
+    lv == "true" && return true
+    lv == "false" && return false
+    error("Flag $(flag) expects true|false, got: $(v)")
+end
+
+function parse_cli_args(args::Vector{String})
+    train_set = true
+    model_paths = String[]
+    i = 1
+    while i <= length(args)
+        arg = args[i]
+        if arg == "--train_set"
+            i == length(args) && error("Missing value for --train_set (expected true|false)")
+            train_set = parse_bool_flag(args[i + 1], "--train_set")
+            i += 2
+        elseif startswith(arg, "--")
+            error("Unknown flag: $(arg)")
+        else
+            push!(model_paths, arg)
+            i += 1
+        end
+    end
+    return (; train_set, model_paths)
 end
 
 reactant_device() = (
@@ -179,12 +206,14 @@ end
 # -----------------------------------------------------------------------------
 
 function main()
-    if length(ARGS) < 2
-        println("Usage: julia scripts/adaptive_mixture_local_experts.jl <model1.jld2> <model2.jld2> [more...]")
+    parsed = parse_cli_args(ARGS)
+    model_paths = parsed.model_paths
+    train_set = parsed.train_set
+
+    if length(model_paths) < 2
+        println("Usage: julia scripts/adaptive_mixture_local_experts.jl [--train_set true|false] <model1.jld2> <model2.jld2> [more...]")
         return
     end
-
-    model_paths = ARGS
 
     models = map(load_jld2_model, model_paths)
 
@@ -290,13 +319,22 @@ function main()
     @info "Step 1: Training adaptive mixture of local experts (MLE)" n_features = n_features
 
     opt = Optimisers.Adam(1f-3)
-    gating_state = train_moe!(
-        predictions_train_vec, features_train, y_train,
-        predictions_val_vec, features_val, y_val,
-        gating, opt;
-        n_epochs=100, patience=50
-    )
-    @info "Best gating checkpoint (validation)" best_epoch = gating_state.best_epoch best_val_loss = gating_state.best_val_loss
+    gating_state = if train_set
+        train_moe!(
+            predictions_train_vec, features_train, y_train,
+            predictions_val_vec, features_val, y_val,
+            gating, opt;
+            n_epochs=100, patience=50, min_delta=1f-6, monitor_label="val"
+        )
+    else
+        train_moe!(
+            predictions_val_vec, features_val, y_val,
+            predictions_train_vec, features_train, y_train,
+            gating, opt;
+            n_epochs=100, patience=1, min_delta=1f-3, monitor_label="train"
+        )
+    end
+    @info "Best gating checkpoint" train_set best_epoch = gating_state.best_epoch best_monitor_loss = gating_state.best_monitor_loss
 
     @info "Step 2: Testing adaptive mixture of local experts (MLE)"
 
