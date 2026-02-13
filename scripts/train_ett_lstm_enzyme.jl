@@ -58,6 +58,7 @@ function train_lstm(
     patience_counter = 0
 
     for epoch in 1:epochs
+        GC.gc()
         # Training
         total_loss = 0.0f0
         total_samples = 0
@@ -224,7 +225,6 @@ function main()
         @info "Loaded dataset" n_samples = size(Xmat, 1) n_features = length(feat_cols)
 
         for H in horizons
-            GC.gc()
             seq_len = H
             @info "Training LSTM" dataset = ds horizon = H seq_len = seq_len ratio = ratio_ds
 
