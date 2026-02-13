@@ -178,8 +178,8 @@ end
 
 function main()
     # Settings
-    data_dir = joinpath("..", "data")
-    models_dir = joinpath("..", "models")
+    data_dir = joinpath("data")
+    models_dir = joinpath("models")
     mkpath(models_dir)
 
     datasets = ["ETTh1", "ETTh2", "exchange_rate"]
@@ -224,6 +224,7 @@ function main()
         @info "Loaded dataset" n_samples = size(Xmat, 1) n_features = length(feat_cols)
 
         for H in horizons
+            GC.gc()
             seq_len = H
             @info "Training LSTM" dataset = ds horizon = H seq_len = seq_len ratio = ratio_ds
 
