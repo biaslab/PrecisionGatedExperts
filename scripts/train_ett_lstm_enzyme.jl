@@ -58,6 +58,7 @@ function train_lstm(
     patience_counter = 0
 
     for epoch in 1:epochs
+        GC.gc()
         # Training
         total_loss = 0.0f0
         total_samples = 0
@@ -117,24 +118,163 @@ end
 # Data Loading
 # -----------------------------------------------------------------------------
 
-function create_dataloaders(Xtr, Ytr, Xval, Yval; batchsize::Int=128, dev=reactant_device())
-    # Xtr shape: (features, seq_len, n_samples)
-    # Ytr shape: (out_features, n_samples)
+struct LazyWindowDataset
+    X::Matrix{Float32}
+    starts::Vector{Int}
+    scaler::StandardScaler
+    seq_len::Int
+    horizon::Int
+end
 
-    train_loader = DataLoader(
-        (Float32.(Xtr), Float32.(Ytr));
-        batchsize=batchsize,
-        shuffle=true,
-        partial=false
-    ) |> dev
+MLUtils.numobs(ds::LazyWindowDataset) = length(ds.starts)
 
-    val_loader = DataLoader(
-        (Float32.(Xval), Float32.(Yval));
-        batchsize=batchsize,
-        shuffle=false,
-        partial=false
-    ) |> dev
+function MLUtils.getobs(ds::LazyWindowDataset, i::Int)
+    s = ds.starts[i]
+    e = s + ds.seq_len - 1
+    t = e + ds.horizon
 
+    μx = reshape(ds.scaler.μ, :, 1)
+    σx = reshape(ds.scaler.σ, :, 1)
+
+    x = @views (ds.X[:, s:e] .- μx) ./ σx
+    y = @views (ds.X[:, t] .- ds.scaler.μ) ./ ds.scaler.σ
+    return Float32.(x), Float32.(y)
+end
+
+function MLUtils.getobs(ds::LazyWindowDataset, idxs::AbstractVector{<:Integer})
+    f = size(ds.X, 1)
+    b = length(idxs)
+    Xb = Array{Float32}(undef, f, ds.seq_len, b)
+    Yb = Array{Float32}(undef, f, b)
+
+    μ = ds.scaler.μ
+    σ = ds.scaler.σ
+
+    @inbounds for j in 1:b
+        s = ds.starts[idxs[j]]
+        e = s + ds.seq_len - 1
+        t = e + ds.horizon
+        @views Xb[:, :, j] = (ds.X[:, s:e] .- reshape(μ, :, 1)) ./ reshape(σ, :, 1)
+        @views Yb[:, j] = (ds.X[:, t] .- μ) ./ σ
+    end
+    return Xb, Yb
+end
+
+function split_window_starts(T::Int, seq_len::Int, horizon::Int; ratios=(0.6, 0.2, 0.2))
+    N = T - seq_len - horizon + 1
+    N >= 3 || error("Time series too short for seq_len=$(seq_len), horizon=$(horizon).")
+
+    r1, r2, r3 = ratios
+    @assert abs(r1 + r2 + r3 - 1.0) < 1e-6 "Ratios must sum to 1.0"
+
+    n_tr = max(round(Int, N * r1), 1)
+    n_va = max(round(Int, N * r2), 1)
+    n_te = N - n_tr - n_va
+    if n_te < 1
+        n_te = 1
+        n_va = max(n_va - 1, 1)
+        n_tr = N - n_va - n_te
+    end
+
+    train_starts = collect(1:n_tr)
+    val_starts = collect(n_tr + 1:n_tr + n_va)
+    test_starts = collect(n_tr + n_va + 1:N)
+    return train_starts, val_starts, test_starts
+end
+
+function compare_old_vs_current_split_counts(
+    T::Int,
+    seq_len::Int,
+    horizon::Int,
+    train_starts::Vector{Int},
+    val_starts::Vector{Int},
+    test_starts::Vector{Int};
+    ratios=(0.6, 0.2, 0.2)
+)
+    # Old path count logic:
+    # N = size(make_sequences(X), 3) == T - seq_len - horizon + 1
+    # then train_val_test_split uses round/max as below.
+    N = T - seq_len - horizon + 1
+    r1, r2, r3 = ratios
+    @assert abs(r1 + r2 + r3 - 1.0) < 1e-6 "Ratios must sum to 1.0"
+    old_train = max(round(Int, N * r1), 1)
+    old_val = max(round(Int, N * r2), 1)
+    old_test = max(N - old_train - old_val, 1)
+    @assert old_train + old_val + old_test <= N "Old split logic is invalid for this configuration."
+
+    new_train = length(train_starts)
+    new_val = length(val_starts)
+    new_test = length(test_starts)
+
+    same = (old_train == new_train) && (old_val == new_val) && (old_test == new_test)
+    return (
+        same=same,
+        old=(train=old_train, val=old_val, test=old_test),
+        new=(train=new_train, val=new_val, test=new_test),
+        total_windows=N
+    )
+end
+
+function fit_scaler_from_starts(X::Matrix{Float32}, starts::Vector{Int}, seq_len::Int)
+    f = size(X, 1)
+    sumv = zeros(Float64, f)
+    sumsq = zeros(Float64, f)
+    total = 0
+
+    for s in starts
+        e = s + seq_len - 1
+        @views w = X[:, s:e]
+        sumv .+= vec(sum(w; dims=2))
+        sumsq .+= vec(sum(abs2, w; dims=2))
+        total += seq_len
+    end
+
+    μ = sumv ./ total
+    var = (sumsq .- (sumv .^ 2) ./ total) ./ max(total - 1, 1)
+    σ = sqrt.(max.(var, 0.0)) .+ 1.0f-6
+    return StandardScaler(Float32.(μ), Float32.(σ))
+end
+
+function materialize_scaled_windows(
+    X::Matrix{Float32},
+    starts::Vector{Int},
+    scaler::StandardScaler;
+    seq_len::Int,
+    horizon::Int
+)
+    f = size(X, 1)
+    n = length(starts)
+    X3 = Array{Float32}(undef, f, seq_len, n)
+    Y2 = Array{Float32}(undef, f, n)
+    μ = scaler.μ
+    σ = scaler.σ
+
+    @inbounds for i in 1:n
+        s = starts[i]
+        e = s + seq_len - 1
+        t = e + horizon
+        @views X3[:, :, i] = (X[:, s:e] .- reshape(μ, :, 1)) ./ reshape(σ, :, 1)
+        @views Y2[:, i] = (X[:, t] .- μ) ./ σ
+    end
+
+    return X3, Y2
+end
+
+function create_dataloaders(
+    X::Matrix{Float32},
+    train_starts::Vector{Int},
+    val_starts::Vector{Int},
+    scaler::StandardScaler;
+    seq_len::Int,
+    horizon::Int,
+    batchsize::Int=128,
+    dev=reactant_device()
+)
+    train_ds = LazyWindowDataset(X, train_starts, scaler, seq_len, horizon)
+    val_ds = LazyWindowDataset(X, val_starts, scaler, seq_len, horizon)
+
+    train_loader = DataLoader(train_ds; batchsize=batchsize, shuffle=true, partial=false) |> dev
+    val_loader = DataLoader(val_ds; batchsize=batchsize, shuffle=false, partial=false) |> dev
     return train_loader, val_loader
 end
 
@@ -178,11 +318,11 @@ end
 
 function main()
     # Settings
-    data_dir = joinpath("data")
-    models_dir = joinpath("models")
+    data_dir = joinpath("..", "data")
+    models_dir = joinpath("..", "models")
     mkpath(models_dir)
 
-    datasets = ["ETTh1", "ETTh2", "exchange_rate"]
+    datasets = ["electricity"]
     seq_len = parse(Int, get(ENV, "SEQ_LEN", "96"))
     horizons = let hs = get(ENV, "HORIZONS", "")
         h = get(ENV, "HORIZON", "")
@@ -191,7 +331,7 @@ function main()
         elseif !isempty(h)
             [parse(Int, h)]
         else
-            [192, 336, 720]
+            [720]
         end
     end
 
@@ -221,79 +361,86 @@ function main()
         end
 
         Xmat, feat_cols = load_ett(ds_path)
-        @info "Loaded dataset" n_samples = size(Xmat, 1) n_features = length(feat_cols)
+        Xmat = Float32.(Xmat)
+        @info "Loaded dataset" n_timesteps = size(Xmat, 2) n_features = length(feat_cols)
 
         for H in horizons
             GC.gc()
             seq_len = H
             @info "Training LSTM" dataset = ds horizon = H seq_len = seq_len ratio = ratio_ds
 
-            # Build sequences
-            X3, Y2 = make_sequences(Xmat; seq_len=seq_len, horizon=H)
-            Xtr, Ytr, Xval, Yval, Xte, Yte = train_val_test_split(X3, Y2; ratios=ratio_ds)
+            train_starts, val_starts, test_starts = split_window_starts(
+                size(Xmat, 2), seq_len, H; ratios=ratio_ds
+            )
+            split_check = compare_old_vs_current_split_counts(
+                size(Xmat, 2), seq_len, H, train_starts, val_starts, test_starts; ratios=ratio_ds
+            )
+            @info "Split count check" dataset = ds horizon = H total_windows = split_check.total_windows old = split_check.old new = split_check.new same = split_check.same
+            split_check.same || error("Split mismatch detected for $(ds), horizon=$(H). old=$(split_check.old), new=$(split_check.new)")
 
-            # Scale data
-            scaler = fit_scaler(Xtr)
-            Xtr = scale_inputs(scaler, Xtr)
-            Xval = scale_inputs(scaler, Xval)
-            Xte = scale_inputs(scaler, Xte)
-            Ytr = scale_targets(scaler, Ytr)
-            Yval = scale_targets(scaler, Yval)
-            Yte_sc = scale_targets(scaler, Yte)
+            scaler = fit_scaler_from_starts(Xmat, train_starts, seq_len)
+            Xte, Yte_sc = materialize_scaled_windows(
+                Xmat, test_starts, scaler; seq_len=seq_len, horizon=H
+            )
 
-            input_dim = size(Xtr, 1)
-            out_dim = size(Ytr, 1)
+            input_dim = size(Xmat, 1)
+            out_dim = input_dim
 
-            @info "Data shapes" input_dim = input_dim out_dim = out_dim train = size(Xtr, 3) val = size(Xval, 3) test = size(Xte, 3)
+            @info "Data shapes" input_dim = input_dim out_dim = out_dim train = length(train_starts) val = length(val_starts) test = length(test_starts)
 
             # Create model and dataloaders
-            model = TimeSeriesLSTM(input_dim, hidden_dim, out_dim)
-            train_loader, val_loader = create_dataloaders(Xtr, Ytr, Xval, Yval; batchsize=batchsize, dev=dev)
+            # model = TimeSeriesLSTM(input_dim, hidden_dim, out_dim)
+            # train_loader, val_loader = create_dataloaders(Xtr, Ytr, Xval, Yval; batchsize=batchsize, dev=dev)
 
-            # Train
-            result = train_lstm(
-                model, train_loader, val_loader;
-                epochs=epochs,
-                lr=lr,
-                patience=patience,
-                dev=dev
-            )
+            # # Train
+            # result = train_lstm(
+            #     model, train_loader, val_loader;
+            #     epochs=epochs,
+            #     lr=lr,
+            #     patience=patience,
+            #     dev=dev
+            # )
 
-            # Compute test metrics
-            test_metrics = compute_test_metrics(model, result.parameters, result.states, Xte, Yte_sc, scaler; dev=dev)
-            @info "Test metrics" dataset = ds horizon = H test_metrics...
+            # # Compute test metrics
+            # test_metrics = compute_test_metrics(model, result.parameters, result.states, Xte, Yte_sc, scaler; dev=dev)
+            # @info "Test metrics" dataset = ds horizon = H test_metrics...
 
-            # Save model
-            model_path = joinpath(models_dir, "$(ds)_h$(H)_s$(seq_len)_LSTM_enzyme.jld2")
-            jldsave(model_path;
-                model_type=:TimeSeriesLSTM,
-                parameters=result.parameters,
-                states=result.states,
-                config=(
-                    input_dim=input_dim,
-                    hidden_dim=hidden_dim,
-                    out_dim=out_dim
-                ),
-                meta=(
-                    dataset=ds,
-                    model="LSTM",
-                    seq_len=seq_len,
-                    horizon=H,
-                    features=feat_cols,
-                    targets=feat_cols,
-                    scaler=scaler,
-                    split=(train=0.6, val=0.2, test=0.2),
-                    sizes=(train=size(Xtr, 3), val=size(Xval, 3), test=size(Xte, 3)),
-                    val_best=(epoch=result.best_epoch, mse=result.best_val_mse),
-                    test_metrics=test_metrics
-                )
-            )
-            @info "Model saved" path = model_path
+            # # Save model
+            # model_path = joinpath(models_dir, "$(ds)_h$(H)_s$(seq_len)_LSTM_enzyme.jld2")
+            # jldsave(model_path;
+            #     model_type=:TimeSeriesLSTM,
+            #     parameters=result.parameters,
+            #     states=result.states,
+            #     config=(
+            #         input_dim=input_dim,
+            #         hidden_dim=hidden_dim,
+            #         out_dim=out_dim
+            #     ),
+            #     meta=(
+            #         dataset=ds,
+            #         model="LSTM",
+            #         seq_len=seq_len,
+            #         horizon=H,
+            #         features=feat_cols,
+            #         targets=feat_cols,
+            #         scaler=scaler,
+            #         split=(train=0.6, val=0.2, test=0.2),
+            #         sizes=(train=size(Xtr, 3), val=size(Xval, 3), test=size(Xte, 3)),
+            #         val_best=(epoch=result.best_epoch, mse=result.best_val_mse),
+            #         test_metrics=test_metrics
+            #     )
+            # )
+            # @info "Model saved" path = model_path
+
+            GC.gc()
 
             @info "Training CNN" dataset = ds horizon = H seq_len = seq_len
 
             cnn_model = TimeSeriesCNN(input_dim, out_dim; channels=cnn_channels, k=cnn_kernel, stride=cnn_stride)
-            cnn_train_loader, cnn_val_loader = create_dataloaders(Xtr, Ytr, Xval, Yval; batchsize=batchsize, dev=dev)
+            cnn_train_loader, cnn_val_loader = create_dataloaders(
+                Xmat, train_starts, val_starts, scaler;
+                seq_len=seq_len, horizon=H, batchsize=batchsize, dev=dev
+            )
 
             cnn_result = train_lstm(
                 cnn_model, cnn_train_loader, cnn_val_loader;
@@ -326,18 +473,23 @@ function main()
                     features=feat_cols,
                     targets=feat_cols,
                     scaler=scaler,
-                    split=(train=0.6, val=0.2, test=0.2),
-                    sizes=(train=size(Xtr, 3), val=size(Xval, 3), test=size(Xte, 3)),
+                    split=(train=ratio_ds[1], val=ratio_ds[2], test=ratio_ds[3]),
+                    sizes=(train=length(train_starts), val=length(val_starts), test=length(test_starts)),
                     val_best=(epoch=cnn_result.best_epoch, mse=cnn_result.best_val_mse),
                     test_metrics=cnn_test_metrics
                 )
             )
             @info "CNN model saved" path = cnn_model_path
 
+            GC.gc()
+
             @info "Training MLP" dataset = ds horizon = H seq_len = seq_len
 
             mlp_model = TimeSeriesMLP(input_dim, seq_len, out_dim; hidden_dims=mlp_hidden, depth=mlp_depth)
-            mlp_train_loader, mlp_val_loader = create_dataloaders(Xtr, Ytr, Xval, Yval; batchsize=batchsize, dev=dev)
+            mlp_train_loader, mlp_val_loader = create_dataloaders(
+                Xmat, train_starts, val_starts, scaler;
+                seq_len=seq_len, horizon=H, batchsize=batchsize, dev=dev
+            )
 
             mlp_result = train_lstm(
                 mlp_model, mlp_train_loader, mlp_val_loader;
@@ -370,8 +522,8 @@ function main()
                     features=feat_cols,
                     targets=feat_cols,
                     scaler=scaler,
-                    split=(train=0.6, val=0.2, test=0.2),
-                    sizes=(train=size(Xtr, 3), val=size(Xval, 3), test=size(Xte, 3)),
+                    split=(train=ratio_ds[1], val=ratio_ds[2], test=ratio_ds[3]),
+                    sizes=(train=length(train_starts), val=length(val_starts), test=length(test_starts)),
                     val_best=(epoch=mlp_result.best_epoch, mse=mlp_result.best_val_mse),
                     test_metrics=mlp_test_metrics
                 )
