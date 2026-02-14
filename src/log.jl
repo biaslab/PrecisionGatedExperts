@@ -1,5 +1,8 @@
 using RxInfer
+using ClosedFormExpectations
 using ClosedFormExpectations: LogGamma
+using ExponentialFamilyProjection
+using ExponentialFamilyProjection: ClosedFormStrategy
 
 """
     Log
@@ -32,9 +35,20 @@ end
 
 # Marginal rule for free energy computation
 # This is called when computing the marginal of `in` (γ) given messages from both sides
+# q(γ) ∝ m_in(γ) × m_out(log(γ))  =>  log q(γ) = log m_in(γ) + log m_out(log(γ))
+# We want to project this onto a Gamma distribution for `in` (γ).
 @marginalrule Log(:in) (m_out::UnivariateGaussianDistributionsFamily, m_in::GammaDistributionsFamily) = begin
-    # Combine the incoming message from γ prior (Gamma) with the backward message from z (via Log)
-    # The marginal is the product of the prior and likelihood
-    # For now, return the prior as the marginal (will be updated by projection)
-    return m_in
+    σ = max(std(m_out), sqrt(eps(Float64)))
+    log_normal = LogNormal(mean(m_out), σ)
+    prj = ProjectedTo(Gamma; parameters = ProjectionParameters(strategy = ClosedFormStrategy()))
+
+    supplementary = convert(Gamma, m_in)
+    α = max(shape(supplementary), sqrt(eps(Float64)))
+    θ = max(scale(supplementary), sqrt(eps(Float64)))
+    # With supplementary projection, natural parameters are shifted by subtraction.
+    # Choosing θ_init < θ keeps the effective η₂ strictly negative.
+    initial = Gamma(α, max(0.5 * θ, sqrt(eps(Float64))))
+
+    # Project q(γ) ∝ LogNormal(γ) * m_in(γ)
+    return project_to(prj, log_normal, supplementary; initialpoint = initial)
 end
