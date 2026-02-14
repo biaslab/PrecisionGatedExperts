@@ -64,6 +64,7 @@ function train_lstm(
         total_samples = 0
 
         for (x, y) in train_loader
+            GC.gc()
             (_, loss, _, train_state) = Lux.Training.single_train_step!(
                 ad, lossfn, (x, y), train_state
             )
@@ -167,18 +168,18 @@ function split_window_starts(T::Int, seq_len::Int, horizon::Int; ratios=(0.6, 0.
     r1, r2, r3 = ratios
     @assert abs(r1 + r2 + r3 - 1.0) < 1e-6 "Ratios must sum to 1.0"
 
-    n_tr = max(round(Int, N * r1), 1)
-    n_va = max(round(Int, N * r2), 1)
+    # Keep exactly the same counting logic as train_val_test_split in src/utils.jl
+    n_tr = round(Int, N * r1)
+    n_va = round(Int, N * r2)
     n_te = N - n_tr - n_va
-    if n_te < 1
-        n_te = 1
-        n_va = max(n_va - 1, 1)
-        n_tr = N - n_va - n_te
-    end
+    n_tr = max(n_tr, 1)
+    n_va = max(n_va, 1)
+    n_te = max(n_te, 1)
+    @assert n_tr + n_va + n_te <= N "Invalid split sizes for N=$(N), ratios=$(ratios)"
 
     train_starts = collect(1:n_tr)
-    val_starts = collect(n_tr + 1:n_tr + n_va)
-    test_starts = collect(n_tr + n_va + 1:N)
+    val_starts = collect(n_tr+1:n_tr+n_va)
+    test_starts = collect(n_tr+n_va+1:N)
     return train_starts, val_starts, test_starts
 end
 
@@ -217,22 +218,32 @@ end
 
 function fit_scaler_from_starts(X::Matrix{Float32}, starts::Vector{Int}, seq_len::Int)
     f = size(X, 1)
-    sumv = zeros(Float64, f)
-    sumsq = zeros(Float64, f)
-    total = 0
+    total = length(starts) * seq_len
+    μ = zeros(Float32, f)
 
+    # Accumulate in the same column-wise traversal order as reshape(Xtr, f, :).
     for s in starts
-        e = s + seq_len - 1
-        @views w = X[:, s:e]
-        sumv .+= vec(sum(w; dims=2))
-        sumsq .+= vec(sum(abs2, w; dims=2))
-        total += seq_len
+        for off in 0:seq_len-1
+            t = s + off
+            @inbounds @views μ .+= X[:, t]
+        end
     end
+    μ ./= Float32(total)
 
-    μ = sumv ./ total
-    var = (sumsq .- (sumv .^ 2) ./ total) ./ max(total - 1, 1)
-    σ = sqrt.(max.(var, 0.0)) .+ 1.0f-6
-    return StandardScaler(Float32.(μ), Float32.(σ))
+    # Unbiased variance (corrected=true), then add epsilon exactly like old scaler.
+    ss = zeros(Float32, f)
+    for s in starts
+        for off in 0:seq_len-1
+            t = s + off
+            @inbounds @views begin
+                d = X[:, t] .- μ
+                ss .+= d .* d
+            end
+        end
+    end
+    σ = sqrt.(ss ./ Float32(max(total - 1, 1))) .+ 1.0f-6
+
+    return StandardScaler(μ, σ)
 end
 
 function materialize_scaled_windows(
@@ -331,11 +342,11 @@ function main()
         elseif !isempty(h)
             [parse(Int, h)]
         else
-            [720]
+            [192]
         end
     end
 
-    epochs = parse(Int, get(ENV, "EPOCHS", "50"))
+    epochs = parse(Int, get(ENV, "EPOCHS", "10"))
     batchsize = parse(Int, get(ENV, "BATCHSIZE", "128"))
     lr = parse(Float32, get(ENV, "LR", "0.001"))
     hidden_dim = parse(Int, get(ENV, "HIDDEN", "64"))
@@ -388,49 +399,54 @@ function main()
 
             @info "Data shapes" input_dim = input_dim out_dim = out_dim train = length(train_starts) val = length(val_starts) test = length(test_starts)
 
-            # Create model and dataloaders
-            # model = TimeSeriesLSTM(input_dim, hidden_dim, out_dim)
-            # train_loader, val_loader = create_dataloaders(Xtr, Ytr, Xval, Yval; batchsize=batchsize, dev=dev)
+            @info "Training LSTMOneStep" dataset = ds horizon = H seq_len = seq_len n_steps = 8
 
-            # # Train
-            # result = train_lstm(
-            #     model, train_loader, val_loader;
-            #     epochs=epochs,
-            #     lr=lr,
-            #     patience=patience,
-            #     dev=dev
-            # )
+            lstm8_model = TimeSeriesLSTMOneStep(input_dim, seq_len, hidden_dim, out_dim; n_steps=8)
+            lstm8_train_loader, lstm8_val_loader = create_dataloaders(
+                Xmat, train_starts, val_starts, scaler;
+                seq_len=seq_len, horizon=H, batchsize=batchsize, dev=dev
+            )
 
-            # # Compute test metrics
-            # test_metrics = compute_test_metrics(model, result.parameters, result.states, Xte, Yte_sc, scaler; dev=dev)
-            # @info "Test metrics" dataset = ds horizon = H test_metrics...
+            lstm8_result = train_lstm(
+                lstm8_model, lstm8_train_loader, lstm8_val_loader;
+                epochs=epochs,
+                lr=lr,
+                patience=patience,
+                dev=dev
+            )
 
-            # # Save model
-            # model_path = joinpath(models_dir, "$(ds)_h$(H)_s$(seq_len)_LSTM_enzyme.jld2")
-            # jldsave(model_path;
-            #     model_type=:TimeSeriesLSTM,
-            #     parameters=result.parameters,
-            #     states=result.states,
-            #     config=(
-            #         input_dim=input_dim,
-            #         hidden_dim=hidden_dim,
-            #         out_dim=out_dim
-            #     ),
-            #     meta=(
-            #         dataset=ds,
-            #         model="LSTM",
-            #         seq_len=seq_len,
-            #         horizon=H,
-            #         features=feat_cols,
-            #         targets=feat_cols,
-            #         scaler=scaler,
-            #         split=(train=0.6, val=0.2, test=0.2),
-            #         sizes=(train=size(Xtr, 3), val=size(Xval, 3), test=size(Xte, 3)),
-            #         val_best=(epoch=result.best_epoch, mse=result.best_val_mse),
-            #         test_metrics=test_metrics
-            #     )
-            # )
-            # @info "Model saved" path = model_path
+            lstm8_test_metrics = compute_test_metrics(
+                lstm8_model, lstm8_result.parameters, lstm8_result.states, Xte, Yte_sc, scaler; dev=dev
+            )
+            @info "LSTMOneStep test metrics" dataset = ds horizon = H lstm8_test_metrics...
+
+            lstm8_model_path = joinpath(models_dir, "$(ds)_h$(H)_s$(seq_len)_LSTMOneStep8_enzyme.jld2")
+            jldsave(lstm8_model_path;
+                model_type=:TimeSeriesLSTMOneStep,
+                parameters=lstm8_result.parameters,
+                states=lstm8_result.states,
+                config=(
+                    input_dim=input_dim,
+                    seq_len=seq_len,
+                    hidden_dim=hidden_dim,
+                    out_dim=out_dim,
+                    n_steps=8
+                ),
+                meta=(
+                    dataset=ds,
+                    model="LSTMOneStep",
+                    seq_len=seq_len,
+                    horizon=H,
+                    features=feat_cols,
+                    targets=feat_cols,
+                    scaler=scaler,
+                    split=(train=ratio_ds[1], val=ratio_ds[2], test=ratio_ds[3]),
+                    sizes=(train=length(train_starts), val=length(val_starts), test=length(test_starts)),
+                    val_best=(epoch=lstm8_result.best_epoch, mse=lstm8_result.best_val_mse),
+                    test_metrics=lstm8_test_metrics
+                )
+            )
+            @info "LSTMOneStep model saved" path = lstm8_model_path
 
             GC.gc()
 
@@ -483,40 +499,41 @@ function main()
 
             GC.gc()
 
-            @info "Training MLP" dataset = ds horizon = H seq_len = seq_len
+            @info "Training NLinear" dataset = ds horizon = H seq_len = seq_len
 
-            mlp_model = TimeSeriesMLP(input_dim, seq_len, out_dim; hidden_dims=mlp_hidden, depth=mlp_depth)
-            mlp_train_loader, mlp_val_loader = create_dataloaders(
+            nlinear_model = TimeSeriesNLinear(input_dim, seq_len, out_dim)
+            nlinear_train_loader, nlinear_val_loader = create_dataloaders(
                 Xmat, train_starts, val_starts, scaler;
                 seq_len=seq_len, horizon=H, batchsize=batchsize, dev=dev
             )
 
-            mlp_result = train_lstm(
-                mlp_model, mlp_train_loader, mlp_val_loader;
+            nlinear_result = train_lstm(
+                nlinear_model, nlinear_train_loader, nlinear_val_loader;
                 epochs=epochs,
                 lr=lr,
                 patience=patience,
                 dev=dev
             )
 
-            mlp_test_metrics = compute_test_metrics(mlp_model, mlp_result.parameters, mlp_result.states, Xte, Yte_sc, scaler; dev=dev)
-            @info "MLP test metrics" dataset = ds horizon = H mlp_test_metrics...
+            nlinear_test_metrics = compute_test_metrics(
+                nlinear_model, nlinear_result.parameters, nlinear_result.states, Xte, Yte_sc, scaler; dev=dev
+            )
+            @info "NLinear test metrics" dataset = ds horizon = H nlinear_test_metrics...
 
-            mlp_model_path = joinpath(models_dir, "$(ds)_h$(H)_s$(seq_len)_MLP_enzyme.jld2")
-            jldsave(mlp_model_path;
-                model_type=:TimeSeriesMLP,
-                parameters=mlp_result.parameters,
-                states=mlp_result.states,
+            nlinear_model_path = joinpath(models_dir, "$(ds)_h$(H)_s$(seq_len)_MLP_enzyme.jld2")
+            jldsave(nlinear_model_path;
+                model_type=:TimeSeriesNLinear,
+                parameters=nlinear_result.parameters,
+                states=nlinear_result.states,
                 config=(
                     input_dim=input_dim,
                     seq_len=seq_len,
-                    hidden_dim=mlp_hidden,
-                    depth=mlp_depth,
+                    bias=true,
                     out_dim=out_dim
                 ),
                 meta=(
                     dataset=ds,
-                    model="MLP",
+                    model="NLinear",
                     seq_len=seq_len,
                     horizon=H,
                     features=feat_cols,
@@ -524,11 +541,11 @@ function main()
                     scaler=scaler,
                     split=(train=ratio_ds[1], val=ratio_ds[2], test=ratio_ds[3]),
                     sizes=(train=length(train_starts), val=length(val_starts), test=length(test_starts)),
-                    val_best=(epoch=mlp_result.best_epoch, mse=mlp_result.best_val_mse),
-                    test_metrics=mlp_test_metrics
+                    val_best=(epoch=nlinear_result.best_epoch, mse=nlinear_result.best_val_mse),
+                    test_metrics=nlinear_test_metrics
                 )
             )
-            @info "MLP model saved" path = mlp_model_path
+            @info "NLinear model saved" path = nlinear_model_path
         end
     end
 
