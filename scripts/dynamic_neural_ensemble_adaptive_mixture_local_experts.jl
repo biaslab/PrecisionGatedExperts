@@ -7,7 +7,6 @@ Usage:
     julia scripts/adaptive_mixture_local_experts.jl
 """
 
-using Revise
 using RxInfer
 using ExponentialFamily
 using ExponentialFamilyProjection
@@ -22,8 +21,8 @@ using Lux
 using Reactant
 using Plots
 using Random
+using ProbabilisticEnsembling
 
-includet("../src/ProbabilisticEnsembling.jl"); using .ProbabilisticEnsembling
 
 
 # -----------------------------------------------------------------------------
@@ -229,7 +228,7 @@ function main()
 
     @info "Loading dataset" dataset = base_meta.dataset seq_len = base_meta.seq_len horizon = base_meta.horizon
 
-    data_dir = joinpath("..", "data")
+    data_dir = joinpath(@__DIR__, "..", "data")
     ds_path = joinpath(data_dir, String(base_meta.dataset))
     Xmat, _ = load_ett(ds_path)
 
@@ -345,65 +344,56 @@ function main()
     y_test_mat = Float64.(Yte_sc)
     y_test_ot_sc = y_test_mat[ot_idx:ot_idx, :]
     ensemble_mean_ot_sc = ensemble_mean[ot_idx:ot_idx, :]
+    use_ot_metrics = occursin("ETTh", String(base_meta.dataset))
+    metrics_scope = "all-columns"
+    y_eval = y_test_mat
+    ensemble_eval = ensemble_mean
+    if use_ot_metrics
+        metrics_scope = "OT-only"
+        y_eval = y_test_ot_sc
+        ensemble_eval = ensemble_mean_ot_sc
+    end
     ensemble_metrics = (
-        mse=mse_mv(ensemble_mean_ot_sc, y_test_ot_sc),
-        mae=mae_mv(ensemble_mean_ot_sc, y_test_ot_sc),
-        rmse=rmse_mv(ensemble_mean_ot_sc, y_test_ot_sc),
-        r2=r2_mv(ensemble_mean_ot_sc, y_test_ot_sc),
-        mape=mape_mv(ensemble_mean_ot_sc, y_test_ot_sc),
-        smape=smape_mv(ensemble_mean_ot_sc, y_test_ot_sc),
-        mse_all=mse_mv(ensemble_mean, y_test_mat),
-        mae_all=mae_mv(ensemble_mean, y_test_mat),
-        rmse_all=rmse_mv(ensemble_mean, y_test_mat),
-        r2_all=r2_mv(ensemble_mean, y_test_mat),
-        mape_all=mape_mv(ensemble_mean, y_test_mat),
-        smape_all=smape_mv(ensemble_mean, y_test_mat),
+        mse=mse_mv(ensemble_eval, y_eval),
+        mae=mae_mv(ensemble_eval, y_eval),
         mean_std=mean(ensemble_std),
     )
 
     @info "Step 3: Performance comparison on test"
+    @info "Metric scope" dataset = base_meta.dataset scope = metrics_scope
     individual = []
     for i in 1:n_total
         yhat = predictions_test[i, :, :]
         yhat_ot_sc = yhat[ot_idx:ot_idx, :]
+        yhat_eval = yhat
+        if use_ot_metrics
+            yhat_eval = yhat_ot_sc
+        end
         push!(individual, (
             path=i <= n_forecasters ? model_paths[i] : (i == idx_min ? "const_q10_train" : "const_q90_train"),
-            mse=mse_mv(yhat_ot_sc, y_test_ot_sc),
-            mae=mae_mv(yhat_ot_sc, y_test_ot_sc),
-            rmse=rmse_mv(yhat_ot_sc, y_test_ot_sc),
-            r2=r2_mv(yhat_ot_sc, y_test_ot_sc),
-            mape=mape_mv(yhat_ot_sc, y_test_ot_sc),
-            smape=smape_mv(yhat_ot_sc, y_test_ot_sc),
-            mse_all=mse_mv(yhat, y_test_mat),
-            mae_all=mae_mv(yhat, y_test_mat),
-            rmse_all=rmse_mv(yhat, y_test_mat),
-            r2_all=r2_mv(yhat, y_test_mat),
-            mape_all=mape_mv(yhat, y_test_mat),
-            smape_all=smape_mv(yhat, y_test_mat),
+            mse=mse_mv(yhat_eval, y_eval),
+            mae=mae_mv(yhat_eval, y_eval),
         ))
     end
 
     simple_avg = vec(mean(predictions_test; dims=1)) |> x -> reshape(x, d, n_test)
     simple_avg_ot_sc = simple_avg[ot_idx:ot_idx, :]
+    simple_eval = simple_avg
+    if use_ot_metrics
+        simple_eval = simple_avg_ot_sc
+    end
     simple_metrics = (
-        mse=mse_mv(simple_avg_ot_sc, y_test_ot_sc),
-        mae=mae_mv(simple_avg_ot_sc, y_test_ot_sc),
-        rmse=rmse_mv(simple_avg_ot_sc, y_test_ot_sc),
-        r2=r2_mv(simple_avg_ot_sc, y_test_ot_sc),
-        mape=mape_mv(simple_avg_ot_sc, y_test_ot_sc),
-        smape=smape_mv(simple_avg_ot_sc, y_test_ot_sc),
-        mse_all=mse_mv(simple_avg, y_test_mat),
-        mae_all=mae_mv(simple_avg, y_test_mat),
-        rmse_all=rmse_mv(simple_avg, y_test_mat),
-        r2_all=r2_mv(simple_avg, y_test_mat),
-        mape_all=mape_mv(simple_avg, y_test_mat),
-        smape_all=smape_mv(simple_avg, y_test_mat),
+        mse=mse_mv(simple_eval, y_eval),
+        mae=mae_mv(simple_eval, y_eval),
     )
 
     @info "Dynamic ensemble metrics" ensemble_metrics...
     @info "Simple average metrics" simple_metrics...
+    println("METRIC|kind=dynamic|mse=$(ensemble_metrics.mse)|mae=$(ensemble_metrics.mae)")
+    println("METRIC|kind=average|mse=$(simple_metrics.mse)|mae=$(simple_metrics.mae)")
     for (i, m) in enumerate(individual)
-        @info "Forecaster metrics" index = i path = m.path mse = m.mse mae = m.mae rmse = m.rmse r2 = m.r2 mape = m.mape smape = m.smape
+        @info "Forecaster metrics" index = i path = m.path mse = m.mse mae = m.mae
+        println("METRIC|kind=forecaster|index=$(i)|path=$(m.path)|mse=$(m.mse)|mae=$(m.mae)")
     end
 
     # -------------------------------------------------------------------------
@@ -464,7 +454,7 @@ function main()
     all_labels = vcat(["F$(i)" for i in 1:n_total], ["Simple Avg", "Dynamic"])
     bar_colors = vcat(fill(:gray, n_total), [:orange, :blue])
     p5 = bar(1:length(all_mses), all_mses,
-        title="MSE Comparison (Test Set, avg over dims)",
+        title=use_ot_metrics ? "MSE Comparison (Test Set, OT only)" : "MSE Comparison (Test Set, all columns)",
         xlabel="Method", ylabel="MSE",
         xticks=(1:length(all_mses), all_labels),
         legend=false, color=bar_colors,
@@ -480,7 +470,7 @@ function main()
     end
 
     plt = plot(p1, p2, p3, p4, p5, p6, layout=(3, 2), size=(1200, 1200))
-    plot_file = "../viz/adaptive_mixture_local_experts_dynamic_$(base_meta.dataset).png"
+    plot_file = "viz/adaptive_mixture_local_experts_dynamic_$(base_meta.dataset).png"
     savefig(plt, plot_file)
     @info "Saved visualization" file = plot_file
 

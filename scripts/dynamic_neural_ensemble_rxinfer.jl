@@ -220,7 +220,7 @@ function main()
         data=(y=y_train, features=features_train, predictions=predictions_train_vec),
         constraints=dynamic_ensemble_constraints(),
         initialization=dynamic_ensemble_init(w_priors_init),
-        iterations=30,
+        iterations=100,
         free_energy=false,
         showprogress=true,
     )
@@ -304,8 +304,11 @@ function main()
 
     @info "Dynamic ensemble metrics" ensemble_metrics...
     @info "Simple average metrics" simple_metrics...
+    println("METRIC|kind=dynamic|mse=$(ensemble_metrics.mse)|mae=$(ensemble_metrics.mae)")
+    println("METRIC|kind=average|mse=$(simple_metrics.mse)|mae=$(simple_metrics.mae)")
     for (i, m) in enumerate(individual)
         @info "Forecaster metrics" index = i path = m.path mse = m.mse mae = m.mae
+        println("METRIC|kind=forecaster|index=$(i)|path=$(m.path)|mse=$(m.mse)|mae=$(m.mae)")
     end
 
     # -------------------------------------------------------------------------
