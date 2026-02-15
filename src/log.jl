@@ -38,15 +38,25 @@ end
 # q(γ) ∝ m_in(γ) × m_out(log(γ))  =>  log q(γ) = log m_in(γ) + log m_out(log(γ))
 # We want to project this onto a Gamma distribution for `in` (γ).
 @marginalrule Log(:in) (m_out::UnivariateGaussianDistributionsFamily, m_in::GammaDistributionsFamily) = begin
-    log_normal = LogNormal(mean(m_out), std(m_out))
-    prj = ProjectedTo(Gamma; parameters = ProjectionParameters(strategy = ClosedFormStrategy()))
+    σ = max(std(m_out), sqrt(eps(Float64)))
+    log_normal = LogNormal(mean(m_out), σ)
+    prj = ProjectedTo(Gamma; parameters = ProjectionParameters(
+        strategy = ClosedFormStrategy(),
+        niterations = 50,
+        tolerance = 1e-6,
+        stepsize = ExponentialFamilyProjection.Manopt.ArmijoLinesearch(
+            initial_stepsize = 1e-2,
+            stop_increasing_at_step = 0
+        ),
+        direction = ExponentialFamilyProjection.BoundedNormUpdateRule(0.5)
+    ))
 
     supplementary = convert(Gamma, m_in)
-    α = shape(supplementary)
-    θ = scale(supplementary)
+    α = max(shape(supplementary), sqrt(eps(Float64)))
+    θ = max(scale(supplementary), sqrt(eps(Float64)))
     # With supplementary projection, natural parameters are shifted by subtraction.
     # Choosing θ_init < θ keeps the effective η₂ strictly negative.
-    initial = Gamma(α, 0.5 * θ)
+    initial = Gamma(α, max(0.1 * θ, sqrt(eps(Float64))))
 
     # Project q(γ) ∝ LogNormal(γ) * m_in(γ)
     return project_to(prj, log_normal, supplementary; initialpoint = initial)

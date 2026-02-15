@@ -53,17 +53,21 @@ using ProbabilisticEnsembling
 # Dynamic Ensemble Model Definition
 # =============================================================================
 
-@model function dynamic_ensemble_model(n_forecasters, n_obs, features, predictions, y, w_priors, τ_priors)
+@model function dynamic_ensemble_model(n_forecasters, n_obs, features, predictions, y, w_priors, τ_priors, β_priors)
     # features: Vector of vectors, each of length n_features
     # predictions: [n_forecasters × n_obs] - forecaster outputs
     # w_priors: vector of MvNormal priors for gating weights
+    # β_priors: vector of Gamma priors for per-expert rate hyperparameters
 
-    local w, z, γ, τ
+    local w, z, γ, τ, β
 
-    # Gating weights for each forecaster
+    # Per-expert hierarchical rate hyperprior for γ
+    # Each forecaster gets its own learned rate, shared across observations j
+    # Conjugate: Gamma prior on rate of GammaShapeRate → closed-form updates
     for i in 1:n_forecasters
         w[i] ~ w_priors[i]
         τ[i] ~ τ_priors[i]
+        β[i] ~ β_priors[i]
     end
 
     # For each observation
@@ -73,19 +77,20 @@ using ProbabilisticEnsembling
             z[i, j] ~ softdot(features[j], w[i], τ[i])
 
             # γ = exp(z) via Log node: z = Log(γ)
-            # Use GammaShapeScale for CFE compatibility
-            γ[i, j] ~ GammaShapeScale(1.0, 1.0)
+            # Hierarchical prior: γ shares learned rate β[i] across observations j
+            γ[i, j] ~ GammaShapeRate(1.0, β[i])
             z[i, j] ~ Log(γ[i, j])
 
             # Likelihood: observation given forecaster i's prediction
+
             y[j] ~ NormalMeanPrecision(predictions[i, j], γ[i, j])
         end
     end
 end
 
 @constraints function dynamic_ensemble_constraints()
-    # Mean-field factorization: all variables factorize
-    q(w, z, γ, τ) = q(w)q(z, γ)q(τ)
+    # Mean-field factorization with per-expert β in its own group
+    q(w, z, γ, τ, β) = q(w)q(z, γ)q(τ)q(β)
     q(z) :: ProjectedTo(NormalMeanVariance, parameters=ProjectionParameters(strategy=ClosedFormStrategy()))
     q(γ) :: ProjectedTo(Gamma, parameters=ProjectionParameters(strategy=ClosedFormStrategy()))
 end
@@ -95,6 +100,7 @@ end
     q(z) = NormalMeanVariance(0.0, 1.0)
     q(γ) = GammaShapeScale(1.0, 1.0)
     q(τ) = GammaShapeScale(1.0, 1.0)
+    q(β) = GammaShapeRate(1.0, 1.0)
 end
 
 # =============================================================================
@@ -168,6 +174,7 @@ function demo_dynamic_ensemble(true_function, feature_type=:bias)
 
     n_train = 500
     noise_level = 0.15
+    n_iterations = 60
 
     x_train = collect(range(0, 2π, length=n_train))
     y_train = true_function.(x_train) .+ noise_level .* randn(n_train)
@@ -207,9 +214,11 @@ function demo_dynamic_ensemble(true_function, feature_type=:bias)
     @info "Step 2: Training Dynamic Ensemble using RxInfer"
 
     # Initial priors on gating weights
-    w_priors_init = [MvNormalMeanPrecision(zeros(n_features), 0.1 * diagm(ones(n_features))) for _ in 1:n_forecasters]
+    w_priors_init = [MvNormalMeanScalePrecision(zeros(n_features), 10) for _ in 1:n_forecasters]
     # Priors on τ (softdot precision)
-    τ_priors_init = [ GammaShapeScale(1.0, 1e12)  for _ in 1:n_forecasters ]
+    τ_priors_init = [GammaShapeScale(2, 5) for _ in 1:n_forecasters]
+    # Per-expert rate hyperpriors for γ
+    β_priors_init = [GammaShapeRate(50.0, 2.0) for _ in 1:n_forecasters]
 
     @info "Running variational inference with projection..."
 
@@ -218,19 +227,21 @@ function demo_dynamic_ensemble(true_function, feature_type=:bias)
             n_forecasters = n_forecasters,
             n_obs = n_train,
             w_priors = w_priors_init,
-            τ_priors = τ_priors_init
+            τ_priors = τ_priors_init,
+            β_priors = β_priors_init
         ),
         data = (y = y_train, features = features_train, predictions = predictions_train),
         constraints = dynamic_ensemble_constraints(),
         initialization = dynamic_ensemble_init(n_features),
-        iterations = 30,
+        iterations = n_iterations,
         free_energy = true,
         showprogress = true
     )
 
-    # Extract learned weight posteriors
+    # Extract learned posteriors
     w_posteriors = dynamic_result.posteriors[:w][end]
     τ_posteriors = dynamic_result.posteriors[:τ][end]
+    β_posteriors = dynamic_result.posteriors[:β][end]
 
     @info "Learned Gating Weight Posteriors"
     for (i, (name, _)) in enumerate(forecasters)
@@ -243,6 +254,12 @@ function demo_dynamic_ensemble(true_function, feature_type=:bias)
     for (i, (name, _)) in enumerate(forecasters)
         τ_means = mean(τ_posteriors[i])
         @info "  Forecaster higher level precision $i" name τ_mean=round(τ_means, digits=4)
+    end
+
+    @info "Learned Per-Expert Rate Hyperpriors"
+    for (i, (name, _)) in enumerate(forecasters)
+        β_mean = mean(β_posteriors[i])
+        @info "  Forecaster $i" name β_mean=round(β_mean, digits=4)
     end
 
     # =========================================================================
@@ -270,7 +287,8 @@ function demo_dynamic_ensemble(true_function, feature_type=:bias)
             n_forecasters = n_forecasters,
             n_obs = n_test,
             w_priors = w_posteriors,
-            τ_priors = τ_posteriors
+            τ_priors = τ_posteriors,
+            β_priors = β_posteriors
         ),
         data = (y = y_missing, features = features_test, predictions = predictions_test),
         constraints = dynamic_ensemble_constraints(),
@@ -298,7 +316,8 @@ function demo_dynamic_ensemble(true_function, feature_type=:bias)
     static_result = infer(
         model = static_ensemble_model(n_forecasters=n_forecasters, priors=static_priors),
         data = (y = y_train, predictions = predictions_train),
-        iterations = 20
+        iterations = n_iterations,
+        free_energy = true,
     )
     γ_posteriors = static_result.posteriors[:γ][end]
 
@@ -626,6 +645,39 @@ function demo_dynamic_ensemble(true_function, feature_type=:bias)
 
     savefig(p7, "variance_decomposition.png")
     @info "Saved variance decomposition" file="variance_decomposition.png"
+
+    # ==========================================================================
+    # Plot 8: Free Energy Convergence (Dynamic vs Static)
+    # ==========================================================================
+    dynamic_fe = dynamic_result.free_energy
+    static_fe = static_result.free_energy
+
+    dynamic_tail = dynamic_fe[max(1, end - 9):end]
+    static_tail = static_fe[max(1, end - 9):end]
+    dynamic_tail_slope = (dynamic_tail[end] - dynamic_tail[1]) / max(length(dynamic_tail) - 1, 1)
+    static_tail_slope = (static_tail[end] - static_tail[1]) / max(length(static_tail) - 1, 1)
+    @info "Free Energy Stats (Dynamic)"
+    @info "  first5" values=round.(dynamic_fe[1:min(5, end)], digits=3)
+    @info "  last5" values=round.(dynamic_fe[max(1, end - 4):end], digits=3)
+    @info "  monotonic_nonincreasing" value=all(diff(dynamic_fe) .<= 0)
+    @info "  tail_slope_last10" value=round(dynamic_tail_slope, digits=6)
+    @info "Free Energy Stats (Static)"
+    @info "  first5" values=round.(static_fe[1:min(5, end)], digits=3)
+    @info "  last5" values=round.(static_fe[max(1, end - 4):end], digits=3)
+    @info "  monotonic_nonincreasing" value=all(diff(static_fe) .<= 0)
+    @info "  tail_slope_last10" value=round(static_tail_slope, digits=6)
+
+    p8 = plot(1:length(dynamic_fe), dynamic_fe,
+        xlabel="Iteration", ylabel="Free Energy",
+        title="Variational Free Energy Convergence",
+        label="Dynamic", lw=2, color=:blue, marker=:circle, markersize=3
+    )
+    plot!(p8, 1:length(static_fe), static_fe,
+        label="Static", lw=2, color=:red, marker=:square, markersize=3
+    )
+
+    savefig(p8, "free_energy_convergence.png")
+    @info "Saved free energy convergence" file="free_energy_convergence.png"
 
     return (
         w_posteriors = w_posteriors,
