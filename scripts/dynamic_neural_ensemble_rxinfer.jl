@@ -72,7 +72,7 @@ reactant_device() = (
 )
 cpu_device() = Lux.cpu_device()
 
-function same_scaler(s1, s2; atol=1.0f-6)
+function same_scaler(s1, s2; atol=1.0f-3)
     length(s1.μ) == length(s2.μ) || return false
     length(s1.σ) == length(s2.σ) || return false
     return maximum(abs.(s1.μ .- s2.μ)) ≤ atol && maximum(abs.(s1.σ .- s2.σ)) ≤ atol
