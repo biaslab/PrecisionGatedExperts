@@ -34,7 +34,7 @@ using Plots
 
     for j in 1:n_obs
         for i in 1:n_forecasters
-            z[i, j] ~ softdot(features[j], w[i], τ[i])
+            z[i, j] ~ softdot(features[j], w[i], τ[i]) where {meta = LowRankMeta()}
 
             γ[i, j] ~ GammaShapeScale(1.0, 1.0)
             z[i, j] ~ Log(γ[i, j])
