@@ -333,7 +333,7 @@ function main()
     models_dir = joinpath("..", "models")
     mkpath(models_dir)
 
-    datasets = ["ETTh1","ETTh2","exchange_rate"]
+    datasets = ["ETTh2"]
     seq_len = parse(Int, get(ENV, "SEQ_LEN", "96"))
     horizons = let hs = get(ENV, "HORIZONS", "")
         h = get(ENV, "HORIZON", "")
@@ -342,7 +342,7 @@ function main()
         elseif !isempty(h)
             [parse(Int, h)]
         else
-            [96, 192, 336, 720]
+            [720]
         end
     end
 
