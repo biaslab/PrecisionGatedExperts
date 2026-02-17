@@ -1,5 +1,6 @@
 import BayesBase: PointMass
 using ReactiveMP
+using LinearAlgebra: BLAS
 
 using LowRankMatrices
 
@@ -16,9 +17,7 @@ end
     my = mean(q_y)
     mx = mean(q_x)
     mγ = mean(q_γ)
-    Dθ = mγ * LowRankMatrix(mx, mx)
-    zθ = mγ * mx * my
-    return convert(promote_variate_type(variate_form(typeof(q_x)), NormalWeightedMeanPrecision), zθ, Dθ)
+    return LowRankNormalWeightedMeanPrecision(mγ * mx * my, mx, mγ)
 end
 
 @rule ReactiveMP.softdot(:γ, Marginalisation) (q_y::Any, q_θ::Any, q_x::Any, meta::LowRankMeta) = begin
@@ -29,7 +28,5 @@ end
     my = mean(q_y)
     mθ = mean(q_θ)
     mγ = mean(q_γ)
-    Dx = mγ * LowRankMatrix(mθ, mθ)
-    zx = mγ * mθ * my
-    return convert(promote_variate_type(variate_form(typeof(q_θ)), NormalWeightedMeanPrecision), zx, Dx)
+    return LowRankNormalWeightedMeanPrecision(mγ * mθ * my, mθ, mγ)
 end
