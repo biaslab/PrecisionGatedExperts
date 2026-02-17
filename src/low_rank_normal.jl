@@ -1,4 +1,4 @@
-using LinearAlgebra: BLAS
+using LinearAlgebra: BLAS, copytri!
 using BayesBase
 using ExponentialFamily
 using LowRankMatrices
@@ -20,7 +20,7 @@ Compact rank-1 Normal message in natural parametrization:
     Λ = scale * u * u'   (rank-1 precision, stored as O(n))
 
 Produced by softdot rules. During message product with a prior or accumulator,
-the rank-1 precision is applied via in-place BLAS.ger! rank-1 updates onto
+the rank-1 precision is applied via in-place BLAS.syr! rank-1 updates onto
 a dense MvNormalWeightedMeanPrecision.
 """
 struct LowRankNormalWeightedMeanPrecision{T <: Real, V <: AbstractVector{T}} <: AbstractMvNormal
@@ -45,18 +45,20 @@ Base.precision(d::LR) = invcov(d)
 # ─── Product rules ────────────────────────────────────────────────────────────
 # Strategy: LR messages stay compact (O(n) each). When meeting a prior or
 # an existing MvNormalWeightedMeanPrecision with dense Matrix precision,
-# the rank-1 update is applied in-place via BLAS.ger!.
+# the rank-1 update is applied in-place via BLAS.syr!.
 #
 # No prod(LR, LR) rule is defined — this keeps the foldl type-stable.
 # The prior comes first, creates a dense MvNormalWeightedMeanPrecision,
 # and all subsequent LR messages update it in-place.
 
-# --- MvNormalWeightedMeanPrecision × LR → in-place ger! ---
+# --- MvNormalWeightedMeanPrecision × LR → in-place syr! ---
 BayesBase.default_prod_rule(::Type{<:MvNormalWeightedMeanPrecision}, ::Type{<:LR}) = PreserveTypeProd(Distribution)
 
 function BayesBase.prod(::PreserveTypeProd{Distribution}, left::MvNormalWeightedMeanPrecision{T, V, M}, right::LR) where {T, V, M <: Matrix}
     weightedmean(left) .+= right.xi
-    BLAS.ger!(right.scale, right.u, right.u, invcov(left))
+    Λ = invcov(left)
+    BLAS.syr!('U', right.scale, right.u, Λ)
+    copytri!(Λ, 'U')
     return left
 end
 
@@ -77,7 +79,8 @@ function BayesBase.prod(::PreserveTypeProd{Distribution}, left::MvNormalMeanScal
     @inbounds for i in 1:n
         Λ[i, i] = γ
     end
-    BLAS.ger!(right.scale, right.u, right.u, Λ)
+    BLAS.syr!('U', right.scale, right.u, Λ)
+    copytri!(Λ, 'U')
     xi = Vector{T}(weightedmean(left))
     xi .+= right.xi
     return MvNormalWeightedMeanPrecision(xi, Λ)
