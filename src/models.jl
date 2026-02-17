@@ -1,6 +1,6 @@
 using Lux
 
-export TimeSeriesLSTM, TimeSeriesLSTMOneStep, TimeSeriesCNN, TimeSeriesMLP, TimeSeriesNLinear, TimeSeriesDLinear, build_model
+export TimeSeriesLSTM, TimeSeriesLSTMOneStep, TimeSeriesCNN, TimeSeriesMLP, TimeSeriesNLinear, TimeSeriesNConv, TimeSeriesDLinear, build_model
 
 struct TimeSeriesLSTM{L,H} <: Lux.AbstractLuxContainerLayer{(:lstm_cell, :head)}
     lstm_cell::L
@@ -156,6 +156,55 @@ function (m::TimeSeriesNLinear)(x::AbstractArray{T,3}, ps::NamedTuple, st::Named
     return y, st
 end
 
+struct TimeSeriesNConv{C} <: Lux.AbstractLuxContainerLayer{(:conv,)}
+    conv::C
+    in_dims::Int
+    seq_len::Int
+    out_dims::Int
+    kernel_size::Int
+end
+
+function TimeSeriesNConv(
+    in_dims::Int,
+    seq_len::Int,
+    out_dims::Int;
+    kernel_size::Int=25
+)
+    in_dims == out_dims || error(
+        "TimeSeriesNConv is channel-independent and requires out_dims == in_dims. Got in_dims=$(in_dims), out_dims=$(out_dims)."
+    )
+    kernel_size >= 1 || error("kernel_size must be >= 1")
+    isodd(kernel_size) || error("kernel_size must be odd, got $(kernel_size)")
+    pad = (kernel_size ÷ 2,)
+    # Depthwise temporal convolution: one independent kernel per channel (no channel mixing).
+    return TimeSeriesNConv(
+        Conv((kernel_size,), in_dims => out_dims; pad=pad, groups=in_dims),
+        in_dims,
+        seq_len,
+        out_dims,
+        kernel_size
+    )
+end
+
+function (m::TimeSeriesNConv)(x::AbstractArray{T,3}, ps::NamedTuple, st::NamedTuple) where {T}
+    size(x, 1) == m.in_dims || error("Expected in_dims=$(m.in_dims), got $(size(x, 1)).")
+    size(x, 2) == m.seq_len || error("Expected seq_len=$(m.seq_len), got $(size(x, 2)).")
+
+    f = size(x, 1)
+    bsz = size(x, 3)
+    x_last = @view x[:, m.seq_len, :]                      # (F, B)
+    x_norm = x .- reshape(x_last, f, 1, bsz)               # (F, T, B)
+
+    # Channel-independent (depthwise) temporal conv over (T, F, B).
+    x2 = permutedims(x_norm, (2, 1, 3))                      # (T, F, B)
+    y2, st_conv = m.conv(x2, ps.conv, st.conv)               # (T, F, B)
+    y = @view(y2[m.seq_len, :, :])                            # (F, B)
+    y .+= x_last
+
+    st = merge(st, (conv=st_conv,))
+    return y, st
+end
+
 struct TimeSeriesDLinear{HT,HS} <: Lux.AbstractLuxContainerLayer{(:trend_head, :seasonal_head)}
     trend_head::HT
     seasonal_head::HS
@@ -246,6 +295,9 @@ function build_model(model_type::Symbol, config)
     elseif model_type == :TimeSeriesNLinear
         bias = get(config, :bias, true)
         return TimeSeriesNLinear(config.input_dim, config.seq_len, config.out_dim; bias=bias)
+    elseif model_type == :TimeSeriesNConv
+        kernel_size = get(config, :kernel_size, 25)
+        return TimeSeriesNConv(config.input_dim, config.seq_len, config.out_dim; kernel_size=kernel_size)
     elseif model_type == :TimeSeriesDLinear
         kernel_size = get(config, :kernel_size, 25)
         bias = get(config, :bias, true)

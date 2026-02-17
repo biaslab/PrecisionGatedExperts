@@ -110,18 +110,18 @@ end
 # Run one horizon
 # =============================================================================
 
-function run_horizon(horizon::Int; models_dir = joinpath(@__DIR__, "..", "models"),
+function run_horizon(horizon::Int, dataset::AbstractString = "ETTh1"; models_dir = joinpath(@__DIR__, "..", "models"),
                      data_dir = joinpath(@__DIR__, "..", "data"),
                      n_iterations = 30, α = 1.0)
 
     # --- Discover and load models ---
-    pattern = "ETTh1_h$(horizon)_"
+    pattern = "$(dataset)_h$(horizon)_"
     paths = filter(f -> startswith(basename(f), pattern) && !contains(basename(f), "_s"),
                    readdir(models_dir; join = true))
     paths = filter(f -> endswith(f, ".jld2"), paths)
 
     if isempty(paths)
-        @warn "No models found for ETTh1 h=$horizon, skipping"
+        @warn "No models found for $(dataset) h=$horizon, skipping"
         return nothing
     end
 
@@ -138,7 +138,7 @@ function run_horizon(horizon::Int; models_dir = joinpath(@__DIR__, "..", "models
     end
 
     @info "=" ^ 70
-    @info "ETTh1  horizon=$horizon  models=$(length(models)): $(model_names)"
+    @info "$(dataset)  horizon=$horizon  models=$(length(models)): $(model_names)"
     @info "=" ^ 70
 
     # --- Load & split data ---
@@ -286,7 +286,7 @@ function run_horizon(horizon::Int; models_dir = joinpath(@__DIR__, "..", "models
     # =====================================================================
     # Metrics (OT, scaled space)
     # =====================================================================
-    @info "RESULTS  —  ETTh1 h=$horizon (OT column, scaled)"
+    @info "RESULTS  —  $(dataset) h=$horizon (OT column, scaled)"
 
     ens_mse   = mse(ensemble_pred, y_test_ot)
     ens_mae   = mae(ensemble_pred, y_test_ot)
@@ -311,14 +311,14 @@ function run_horizon(horizon::Int; models_dir = joinpath(@__DIR__, "..", "models
     # Plots
     # =====================================================================
     mkpath("viz")
-    prefix = "viz/hier_etth1_h$(horizon)"
+    prefix = "viz/hier_$(dataset)_h$(horizon)"
     x_ax = 1:n_test
 
     colors = [:red, :green, :orange, :purple, :brown, :pink, :cyan, :gray]
 
     # --- Predictions ---
     p1 = plot(x_ax, y_test_ot, label = "True OT", lw = 2, color = :black, ls = :dot,
-              title = "ETTh1 h=$horizon — Hierarchical α=$α vs Forecasters (OT)",
+              title = "$(dataset) h=$horizon — Hierarchical α=$α vs Forecasters (OT)",
               xlabel = "t", ylabel = "OT (scaled)", legend = :topright)
     plot!(p1, x_ax, ensemble_pred, ribbon = 2 .* ensemble_std,
           label = "Hierarchical ±2σ", lw = 2, color = :blue, fillalpha = 0.3)
@@ -376,39 +376,51 @@ end
 # =============================================================================
 
 function main()
+    datasets = ["ETTh1", "ETTh2"]
     horizons = [96, 192, 336, 720]
-    results = []
 
-    for h in horizons
-        r = run_horizon(h)
-        r !== nothing && push!(results, r)
+    results_by_dataset = Dict{String, Vector{Any}}()
+
+    # Run all experiments first.
+    for dataset in datasets
+        results = []
+
+        for h in horizons
+            r = run_horizon(h, dataset)
+            r !== nothing && push!(results, r)
+        end
+        results_by_dataset[dataset] = results
     end
 
-    # --- Summary table ---
-    println("\n" * "=" ^ 90)
-    println("SUMMARY  —  ETTh1 OT column, Hierarchical α=1 vs Simple Average")
-    println("=" ^ 90)
-    println(rpad("Horizon", 10),
-            rpad("Method", 15),
-            rpad("MSE", 12), rpad("MAE", 12), rpad("RMSE", 12),
-            rpad("R²", 12), rpad("SMAPE", 12))
-    println("-" ^ 90)
-    for r in results
-        println(rpad(r.horizon, 10),
-                rpad("Hierarchical", 15),
-                rpad(round(r.ens_mse,  digits = 6), 12),
-                rpad(round(r.ens_mae,  digits = 6), 12),
-                rpad(round(r.ens_rmse, digits = 6), 12),
-                rpad(round(r.ens_r2,   digits = 6), 12),
-                rpad(round(r.ens_smape, digits = 4), 12))
-        println(rpad("", 10),
-                rpad("Simple Avg", 15),
-                rpad(round(r.sa_mse,  digits = 6), 12),
-                rpad(round(r.sa_mae,  digits = 6), 12),
-                rpad(round(r.sa_rmse, digits = 6), 12),
-                rpad(round(r.sa_r2,   digits = 6), 12),
-                rpad(round(r.sa_smape, digits = 4), 12))
+    # Print reports after all runs are done, so run logs don't appear between reports.
+    for dataset in datasets
+        results = get(results_by_dataset, dataset, Any[])
+        # --- Summary table ---
+        println("\n" * "=" ^ 90)
+        println("SUMMARY  —  $(dataset) OT column, Hierarchical α=1 vs Simple Average")
+        println("=" ^ 90)
+        println(rpad("Horizon", 10),
+                rpad("Method", 15),
+                rpad("MSE", 12), rpad("MAE", 12), rpad("RMSE", 12),
+                rpad("R²", 12), rpad("SMAPE", 12))
         println("-" ^ 90)
+        for r in results
+            println(rpad(r.horizon, 10),
+                    rpad("Hierarchical", 15),
+                    rpad(round(r.ens_mse,  digits = 6), 12),
+                    rpad(round(r.ens_mae,  digits = 6), 12),
+                    rpad(round(r.ens_rmse, digits = 6), 12),
+                    rpad(round(r.ens_r2,   digits = 6), 12),
+                    rpad(round(r.ens_smape, digits = 4), 12))
+            println(rpad("", 10),
+                    rpad("Simple Avg", 15),
+                    rpad(round(r.sa_mse,  digits = 6), 12),
+                    rpad(round(r.sa_mae,  digits = 6), 12),
+                    rpad(round(r.sa_rmse, digits = 6), 12),
+                    rpad(round(r.sa_r2,   digits = 6), 12),
+                    rpad(round(r.sa_smape, digits = 4), 12))
+            println("-" ^ 90)
+        end
     end
 end
 

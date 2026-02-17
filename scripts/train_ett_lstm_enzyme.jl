@@ -39,7 +39,7 @@ function train_lstm(
     cdev = cpu_device()
 
     ps, st = Lux.setup(Random.default_rng(), model) |> dev
-    train_state = Lux.Training.TrainState(model, ps, st, Adam(lr))
+    train_state = Lux.Training.TrainState(model, ps, st, AdamW(lr))
 
     # Compile model for inference
     model_compiled = if dev isa ReactantDevice
@@ -333,7 +333,7 @@ function main()
     models_dir = joinpath("..", "models")
     mkpath(models_dir)
 
-    datasets = ["electricity"]
+    datasets = ["ETTh1","ETTh2","exchange_rate"]
     seq_len = parse(Int, get(ENV, "SEQ_LEN", "96"))
     horizons = let hs = get(ENV, "HORIZONS", "")
         h = get(ENV, "HORIZON", "")
@@ -342,11 +342,11 @@ function main()
         elseif !isempty(h)
             [parse(Int, h)]
         else
-            [192]
+            [96, 192, 336, 720]
         end
     end
 
-    epochs = parse(Int, get(ENV, "EPOCHS", "10"))
+    epochs = parse(Int, get(ENV, "EPOCHS", "50"))
     batchsize = parse(Int, get(ENV, "BATCHSIZE", "128"))
     lr = parse(Float32, get(ENV, "LR", "0.001"))
     hidden_dim = parse(Int, get(ENV, "HIDDEN", "64"))
@@ -355,6 +355,8 @@ function main()
     cnn_channels = parse(Int, get(ENV, "CNN_CHANNELS", "64"))
     cnn_kernel = parse(Int, get(ENV, "CNN_KERNEL", "7"))
     cnn_stride = parse(Int, get(ENV, "CNN_STRIDE", "2"))
+    nconv_kernel = parse(Int, get(ENV, "NCONV_KERNEL", "25"))
+    dlinear_kernel = parse(Int, get(ENV, "DLINEAR_KERNEL", "25"))
     patience = parse(Int, get(ENV, "PATIENCE", "50"))
 
     dev = reactant_device()
@@ -376,7 +378,6 @@ function main()
         @info "Loaded dataset" n_timesteps = size(Xmat, 2) n_features = length(feat_cols)
 
         for H in horizons
-            seq_len = H
             @info "Training LSTM" dataset = ds horizon = H seq_len = seq_len ratio = ratio_ds
 
             train_starts, val_starts, test_starts = split_window_starts(
@@ -398,56 +399,54 @@ function main()
 
             @info "Data shapes" input_dim = input_dim out_dim = out_dim train = length(train_starts) val = length(val_starts) test = length(test_starts)
 
-            @info "Training LSTMOneStep" dataset = ds horizon = H seq_len = seq_len n_steps = 8
+            # @info "Training LSTM" dataset = ds horizon = H seq_len = seq_len
 
-            lstm8_model = TimeSeriesLSTMOneStep(input_dim, seq_len, hidden_dim, out_dim; n_steps=8)
-            lstm8_train_loader, lstm8_val_loader = create_dataloaders(
-                Xmat, train_starts, val_starts, scaler;
-                seq_len=seq_len, horizon=H, batchsize=batchsize, dev=dev
-            )
+            # lstm_model = TimeSeriesLSTM(input_dim, hidden_dim, out_dim)
+            # lstm_train_loader, lstm_val_loader = create_dataloaders(
+            #     Xmat, train_starts, val_starts, scaler;
+            #     seq_len=seq_len, horizon=H, batchsize=batchsize, dev=dev
+            # )
 
-            lstm8_result = train_lstm(
-                lstm8_model, lstm8_train_loader, lstm8_val_loader;
-                epochs=epochs,
-                lr=lr,
-                patience=patience,
-                dev=dev
-            )
+            # lstm_result = train_lstm(
+            #     lstm_model, lstm_train_loader, lstm_val_loader;
+            #     epochs=epochs,
+            #     lr=lr,
+            #     patience=patience,
+            #     dev=dev
+            # )
 
-            lstm8_test_metrics = compute_test_metrics(
-                lstm8_model, lstm8_result.parameters, lstm8_result.states, Xte, Yte_sc, scaler; dev=dev
-            )
-            @info "LSTMOneStep test metrics" dataset = ds horizon = H lstm8_test_metrics...
+            # lstm_test_metrics = compute_test_metrics(
+            #     lstm_model, lstm_result.parameters, lstm_result.states, Xte, Yte_sc, scaler; dev=dev
+            # )
+            # @info "LSTM test metrics" dataset = ds horizon = H lstm_test_metrics...
 
-            lstm8_model_path = joinpath(models_dir, "$(ds)_h$(H)_s$(seq_len)_LSTMOneStep8_enzyme.jld2")
-            jldsave(lstm8_model_path;
-                model_type=:TimeSeriesLSTMOneStep,
-                parameters=lstm8_result.parameters,
-                states=lstm8_result.states,
-                config=(
-                    input_dim=input_dim,
-                    seq_len=seq_len,
-                    hidden_dim=hidden_dim,
-                    out_dim=out_dim,
-                    n_steps=8
-                ),
-                meta=(
-                    dataset=ds,
-                    model="LSTMOneStep",
-                    seq_len=seq_len,
-                    horizon=H,
-                    features=feat_cols,
-                    targets=feat_cols,
-                    scaler=scaler,
-                    split=(train=ratio_ds[1], val=ratio_ds[2], test=ratio_ds[3]),
-                    sizes=(train=length(train_starts), val=length(val_starts), test=length(test_starts)),
-                    val_best=(epoch=lstm8_result.best_epoch, mse=lstm8_result.best_val_mse),
-                    test_metrics=lstm8_test_metrics
-                )
-            )
-            @info "LSTMOneStep model saved" path = lstm8_model_path
+            # lstm_model_path = joinpath(models_dir, "$(ds)_h$(H)_s$(seq_len)_LSTM_enzyme.jld2")
+            # jldsave(lstm_model_path;
+            #     model_type=:TimeSeriesLSTM,
+            #     parameters=lstm_result.parameters,
+            #     states=lstm_result.states,
+            #     config=(
+            #         input_dim=input_dim,
+            #         hidden_dim=hidden_dim,
+            #         out_dim=out_dim
+            #     ),
+            #     meta=(
+            #         dataset=ds,
+            #         model="LSTM",
+            #         seq_len=seq_len,
+            #         horizon=H,
+            #         features=feat_cols,
+            #         targets=feat_cols,
+            #         scaler=scaler,
+            #         split=(train=ratio_ds[1], val=ratio_ds[2], test=ratio_ds[3]),
+            #         sizes=(train=length(train_starts), val=length(val_starts), test=length(test_starts)),
+            #         val_best=(epoch=lstm_result.best_epoch, mse=lstm_result.best_val_mse),
+            #         test_metrics=lstm_test_metrics
+            #     )
+            # )
+            # @info "LSTM model saved" path = lstm_model_path
 
-            GC.gc()
+            # GC.gc()
 
             @info "Training CNN" dataset = ds horizon = H seq_len = seq_len
 
@@ -545,6 +544,109 @@ function main()
                 )
             )
             @info "NLinear model saved" path = nlinear_model_path
+
+            GC.gc()
+
+            @info "Training NConv" dataset = ds horizon = H seq_len = seq_len kernel = nconv_kernel
+
+            nconv_model = TimeSeriesNConv(input_dim, seq_len, out_dim; kernel_size=nconv_kernel)
+            nconv_train_loader, nconv_val_loader = create_dataloaders(
+                Xmat, train_starts, val_starts, scaler;
+                seq_len=seq_len, horizon=H, batchsize=batchsize, dev=dev
+            )
+
+            nconv_result = train_lstm(
+                nconv_model, nconv_train_loader, nconv_val_loader;
+                epochs=epochs,
+                lr=lr,
+                patience=patience,
+                dev=dev
+            )
+
+            nconv_test_metrics = compute_test_metrics(
+                nconv_model, nconv_result.parameters, nconv_result.states, Xte, Yte_sc, scaler; dev=dev
+            )
+            @info "NConv test metrics" dataset = ds horizon = H nconv_test_metrics...
+
+            nconv_model_path = joinpath(models_dir, "$(ds)_h$(H)_s$(seq_len)_NConv_enzyme.jld2")
+            jldsave(nconv_model_path;
+                model_type=:TimeSeriesNConv,
+                parameters=nconv_result.parameters,
+                states=nconv_result.states,
+                config=(
+                    input_dim=input_dim,
+                    seq_len=seq_len,
+                    kernel_size=nconv_kernel,
+                    out_dim=out_dim
+                ),
+                meta=(
+                    dataset=ds,
+                    model="NConv",
+                    seq_len=seq_len,
+                    horizon=H,
+                    features=feat_cols,
+                    targets=feat_cols,
+                    scaler=scaler,
+                    split=(train=ratio_ds[1], val=ratio_ds[2], test=ratio_ds[3]),
+                    sizes=(train=length(train_starts), val=length(val_starts), test=length(test_starts)),
+                    val_best=(epoch=nconv_result.best_epoch, mse=nconv_result.best_val_mse),
+                    test_metrics=nconv_test_metrics
+                )
+            )
+            @info "NConv model saved" path = nconv_model_path
+
+            GC.gc()
+
+            @info "Training DLinear" dataset = ds horizon = H seq_len = seq_len kernel = dlinear_kernel
+
+            dlinear_model = TimeSeriesDLinear(input_dim, seq_len, out_dim; kernel_size=dlinear_kernel)
+            dlinear_train_loader, dlinear_val_loader = create_dataloaders(
+                Xmat, train_starts, val_starts, scaler;
+                seq_len=seq_len, horizon=H, batchsize=batchsize, dev=dev
+            )
+
+            dlinear_result = train_lstm(
+                dlinear_model, dlinear_train_loader, dlinear_val_loader;
+                epochs=epochs,
+                lr=lr,
+                patience=patience,
+                dev=dev
+            )
+
+            dlinear_test_metrics = compute_test_metrics(
+                dlinear_model, dlinear_result.parameters, dlinear_result.states, Xte, Yte_sc, scaler; dev=dev
+            )
+            @info "DLinear test metrics" dataset = ds horizon = H dlinear_test_metrics...
+
+            dlinear_model_path = joinpath(models_dir, "$(ds)_h$(H)_s$(seq_len)_DLinear_enzyme.jld2")
+            jldsave(dlinear_model_path;
+                model_type=:TimeSeriesDLinear,
+                parameters=dlinear_result.parameters,
+                states=dlinear_result.states,
+                config=(
+                    input_dim=input_dim,
+                    seq_len=seq_len,
+                    kernel_size=dlinear_kernel,
+                    bias=true,
+                    out_dim=out_dim
+                ),
+                meta=(
+                    dataset=ds,
+                    model="DLinear",
+                    seq_len=seq_len,
+                    horizon=H,
+                    features=feat_cols,
+                    targets=feat_cols,
+                    scaler=scaler,
+                    split=(train=ratio_ds[1], val=ratio_ds[2], test=ratio_ds[3]),
+                    sizes=(train=length(train_starts), val=length(val_starts), test=length(test_starts)),
+                    val_best=(epoch=dlinear_result.best_epoch, mse=dlinear_result.best_val_mse),
+                    test_metrics=dlinear_test_metrics
+                )
+            )
+            @info "DLinear model saved" path = dlinear_model_path
+
+            GC.gc()
         end
     end
 
