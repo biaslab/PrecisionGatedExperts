@@ -35,3 +35,5 @@ data/traffic.csv
 data/ETTh1.csv
 data/ETTh2.csv
 data/exchange_rate.csv
+
+final_results/*

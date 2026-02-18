@@ -245,7 +245,7 @@ function run_static_univariate(spec::ExperimentSpecifier{Univariate,Static})
         ),
     )
 
-    results_dir = joinpath(@__DIR__, "final_results")
+    results_dir = "final_results"
     mkpath(results_dir)
     ds_name = typeof(spec.dataset).parameters[1]
     fname = "$(ds_name)_h$(spec.horizon)_$(spec.column)_static.jld2"

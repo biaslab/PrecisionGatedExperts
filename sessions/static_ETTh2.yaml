@@ -2,13 +2,13 @@ params:
   prediction_type: "univariate"
   column: "OT"
   model_type: "static"
-  dataset: "ETTh1"
-  dataset_path: "/Users/mykola/repos/probabilistic_ensemble_forecasting/data/ETTh1.csv"
+  dataset: "ETTh2"
+  dataset_path: "data/ETTh2.csv"
   horizon: 96
   inference_iterations: 500
   prediction_iterations: 1
   experts:
-    - "/Users/mykola/repos/probabilistic_ensemble_forecasting/models/ETTh2_h96_s96_MLP_enzyme.jld2"
+    - "models/ETTh1_h96_s96_MLP_enzyme.jld2"
   priors:
     γ:
       type: "GammaShapeRate"
