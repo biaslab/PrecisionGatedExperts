@@ -1,8 +1,8 @@
 params:
   prediction_type: "multivariate"
   model_type: "static"
-  dataset: "ETTh1"
-  dataset_path: "data/ETTh1.csv"
+  dataset: "electricity"
+  dataset_path: "data/electricity.csv"
   horizon: 96
   inference_iterations: 500
   prediction_iterations: 1

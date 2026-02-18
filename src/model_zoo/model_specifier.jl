@@ -85,6 +85,10 @@ function run_experiment(spec::ExperimentSpecifier{Univariate,Static})
     return run_static_univariate(spec)
 end
 
+function run_experiment(spec::ExperimentSpecifier{Multivariate,Static})
+    return run_static_multivariate(spec)
+end
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -115,6 +119,7 @@ end
 
 load_dataset(::Val{:ETTh1}, path::String) = load_ett(path)
 load_dataset(::Val{:ETTh2}, path::String) = load_ett(path)
+load_dataset(::Val{:electricity}, path::String) = load_ett(path)
 
 # ---------------------------------------------------------------------------
 # Expert prediction generation
@@ -135,6 +140,31 @@ function generate_expert_predictions(::Univariate, experts, scaler, Xval_s, Xte_
         yhat_te  = inverse_targets(scaler, predict_unscaled(model, m.parameters, m.states, Xte_s))
         predictions_val[i, :]  = Float64.(yhat_val[col_idx, :])
         predictions_test[i, :] = Float64.(yhat_te[col_idx, :])
+        @info "Expert ready" index=i model_type=m.model_type
+    end
+
+    return predictions_val, predictions_test
+end
+
+function generate_expert_predictions(::Multivariate, experts, scaler, Xval_s, Xte_s)
+    n_forecasters = length(experts)
+    n_val  = size(Xval_s, 3)
+    n_test = size(Xte_s, 3)
+
+    predictions_val  = Matrix{Vector{Float64}}(undef, n_forecasters, n_val)
+    predictions_test = Matrix{Vector{Float64}}(undef, n_forecasters, n_test)
+
+    @info "Generating expert predictions (multivariate)" n_forecasters n_val n_test
+    for (i, m) in enumerate(experts)
+        model    = build_model(m.model_type, m.config)
+        yhat_val = inverse_targets(scaler, predict_unscaled(model, m.parameters, m.states, Xval_s))
+        yhat_te  = inverse_targets(scaler, predict_unscaled(model, m.parameters, m.states, Xte_s))
+        for j in 1:n_val
+            predictions_val[i, j] = Float64.(yhat_val[:, j])
+        end
+        for j in 1:n_test
+            predictions_test[i, j] = Float64.(yhat_te[:, j])
+        end
         @info "Expert ready" index=i model_type=m.model_type
     end
 
@@ -259,6 +289,146 @@ function run_static_univariate(spec::ExperimentSpecifier{Univariate,Static})
         ensemble_metrics = ensemble_metrics,
         predictions_test = predictions_test,
         y_test           = y_test,
+        spec             = results.spec,
+    )
+    @info "Results saved" path=results_path
+
+    return results
+end
+
+# ---------------------------------------------------------------------------
+# Static Multivariate pipeline
+# ---------------------------------------------------------------------------
+
+function run_static_multivariate(spec::ExperimentSpecifier{Multivariate,Static})
+    # 1. Load expert models
+    @info "Loading expert models" n=length(spec.experts)
+    experts = map(load_jld2_model, spec.experts)
+    base_meta = experts[1].meta
+
+    # 2. Load raw data & split
+    Xmat, feat_cols = load_dataset(spec.dataset, spec.dataset_path)
+
+    d       = length(feat_cols)
+    seq_len = Int(base_meta.seq_len)
+    horizon = Int(base_meta.horizon)
+    X3, Y2  = make_sequences(Xmat; seq_len=seq_len, horizon=horizon)
+
+    split = base_meta.split
+    _, _, Xval, Yval, Xte, Yte = train_val_test_split(X3, Y2; ratios=(split.train, split.val, split.test))
+
+    scaler = base_meta.scaler
+    n_scaler = length(scaler.μ)
+    n_feat   = size(Xval, 1)
+    n_scaler == n_feat || error(
+        "Scaler dimension ($n_scaler) from expert model does not match " *
+        "dataset features ($n_feat). The expert was likely trained on a " *
+        "different dataset. Check that `dataset_path` in the YAML matches " *
+        "the experts' training data."
+    )
+    Xval_s = scale_inputs(scaler, Xval)
+    Xte_s  = scale_inputs(scaler, Xte)
+
+    n_val  = size(Xval, 3)
+    n_test = size(Xte, 3)
+
+    # Ground truth as vectors of vectors (for RxInfer)
+    y_val  = [Float64.(Yval[:, j]) for j in 1:n_val]
+    y_test = [Float64.(Yte[:, j])  for j in 1:n_test]
+
+    # 3. Generate expert predictions
+    predictions_val, predictions_test = generate_expert_predictions(
+        spec.prediction_type, experts, scaler, Xval_s, Xte_s
+    )
+
+    n_forecasters = length(experts)
+
+    # 4. Fit static ensemble on validation data
+    @info "Fitting static multivariate ensemble on validation data" d n_forecasters
+    result = infer(
+        model       = multivariate_ensemble_precision_model(n_forecasters=n_forecasters, priors=spec.priors),
+        data        = (y=y_val, X=predictions_val),
+        iterations  = spec.inference_iterations,
+        free_energy = true,
+        showprogress = true
+    )
+
+    free_energy  = result.free_energy
+    γ_posteriors = result.posteriors[:γ][end]
+    γ_means      = map(mean, γ_posteriors)
+    weights      = γ_means ./ sum(γ_means)
+
+    # Per-expert validation MSE (multivariate)
+    Yval_mat = Float64.(Yval)
+    @info "Learned precision weights"
+    for i in 1:n_forecasters
+        pred_mat_i = reduce(hcat, predictions_val[i, :])  # (d, n_val)
+        mse_i = mse_mv(pred_mat_i, Yval_mat)
+        @info "Expert $i" E_γ=round(γ_means[i]; digits=4) val_MSE=round(mse_i; digits=6) weight=round(weights[i]; digits=4)
+    end
+
+    # 5. Ensemble predictions on test
+    @info "Generating ensemble predictions on test"
+    posterior_priors = Dict{Symbol,Any}(:γ => γ_posteriors)
+    prediction_array = [missing for _ in 1:n_test]
+    infer_test = infer(
+        model      = multivariate_ensemble_precision_model(n_forecasters=n_forecasters, priors=posterior_priors),
+        data       = (y=prediction_array, X=predictions_test),
+        iterations = spec.prediction_iterations
+    )
+
+    ensemble_preds = infer_test.predictions[:y][end]
+    ensemble_mean  = reduce(hcat, map(mean, ensemble_preds))  # (d, n_test)
+    ensemble_std   = reduce(hcat, map(std, ensemble_preds))   # (d, n_test)
+
+    # 6. Metrics (multivariate)
+    Yte_mat = Float64.(Yte)
+    ensemble_metrics = (
+        mse   = mse_mv(ensemble_mean, Yte_mat),
+        mae   = mae_mv(ensemble_mean, Yte_mat),
+        rmse  = rmse_mv(ensemble_mean, Yte_mat),
+        r2    = r2_mv(ensemble_mean, Yte_mat),
+        mape  = mape_mv(ensemble_mean, Yte_mat),
+        smape = smape_mv(ensemble_mean, Yte_mat),
+    )
+
+    @info "Ensemble test metrics (multivariate)" ensemble_metrics...
+
+    # 7. Save results
+    results = (
+        γ_posteriors     = γ_posteriors,
+        weights          = weights,
+        free_energy      = free_energy,
+        ensemble_mean    = ensemble_mean,
+        ensemble_std     = ensemble_std,
+        ensemble_metrics = ensemble_metrics,
+        predictions_test = predictions_test,
+        y_test           = Yte_mat,
+        spec             = (
+            prediction_type = string(typeof(spec.prediction_type)),
+            model_type      = string(typeof(spec.model_type)),
+            column          = nothing,
+            horizon         = spec.horizon,
+            dataset         = typeof(spec.dataset).parameters[1],
+            dataset_path    = spec.dataset_path,
+            experts         = spec.experts,
+        ),
+    )
+
+    results_dir = "final_results"
+    mkpath(results_dir)
+    ds_name = typeof(spec.dataset).parameters[1]
+    fname = "$(ds_name)_h$(spec.horizon)_multivariate_static.jld2"
+    results_path = joinpath(results_dir, fname)
+    JLD2.jldsave(results_path;
+        γ_posteriors     = γ_posteriors,
+        weights          = weights,
+        free_energy      = free_energy,
+        ensemble_mean    = ensemble_mean,
+        ensemble_std     = ensemble_std,
+        ensemble_metrics = ensemble_metrics,
+        predictions_test = predictions_test,
+        y_test           = Yte_mat,
         spec             = results.spec,
     )
     @info "Results saved" path=results_path
