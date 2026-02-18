@@ -121,6 +121,10 @@ function run_experiment(spec::ExperimentSpecifier{Univariate,Dynamic})
     return run_dynamic_univariate(spec)
 end
 
+function run_experiment(spec::ExperimentSpecifier{Multivariate,Dynamic})
+    return run_dynamic_multivariate(spec)
+end
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -627,6 +631,177 @@ function run_dynamic_univariate(spec::ExperimentSpecifier{Univariate,Dynamic})
         ensemble_metrics = ensemble_metrics,
         predictions_test = predictions_test,
         y_test           = y_test,
+        spec             = results.spec,
+    )
+    @info "Results saved" path=results_path
+
+    return results
+end
+
+# ---------------------------------------------------------------------------
+# Dynamic Multivariate pipeline
+# ---------------------------------------------------------------------------
+
+function run_dynamic_multivariate(spec::ExperimentSpecifier{Multivariate,Dynamic})
+    # 1. Load expert models
+    @info "Loading expert models" n=length(spec.experts)
+    experts = map(load_jld2_model, spec.experts)
+    base_meta = experts[1].meta
+
+    # 2. Load raw data & split
+    Xmat, feat_cols = load_dataset(spec.dataset, spec.dataset_path)
+
+    d       = length(feat_cols)
+    seq_len = Int(base_meta.seq_len)
+    horizon = Int(base_meta.horizon)
+    X3, Y2  = make_sequences(Xmat; seq_len=seq_len, horizon=horizon)
+
+    split = base_meta.split
+    _, _, Xval, Yval, Xte, Yte = train_val_test_split(X3, Y2; ratios=(split.train, split.val, split.test))
+
+    scaler = base_meta.scaler
+    n_scaler = length(scaler.μ)
+    n_feat   = size(Xval, 1)
+    n_scaler == n_feat || error(
+        "Scaler dimension ($n_scaler) from expert model does not match " *
+        "dataset features ($n_feat). The expert was likely trained on a " *
+        "different dataset. Check that `dataset_path` in the YAML matches " *
+        "the experts' training data."
+    )
+    Xval_s = scale_inputs(scaler, Xval)
+    Xte_s  = scale_inputs(scaler, Xte)
+
+    n_val  = size(Xval, 3)
+    n_test = size(Xte, 3)
+
+    # Ground truth as vectors of vectors (for RxInfer)
+    y_val  = [Float64.(Yval[:, j]) for j in 1:n_val]
+    y_test = [Float64.(Yte[:, j])  for j in 1:n_test]
+
+    # 3. Generate expert predictions
+    predictions_val, predictions_test = generate_expert_predictions(
+        spec.prediction_type, experts, scaler, Xval_s, Xte_s
+    )
+
+    n_forecasters = length(experts)
+
+    # 4. Construct features from scaled inputs
+    features_val  = make_features(Xval_s)
+    features_test = make_features(Xte_s)
+
+    # 5. Fit dynamic ensemble on validation data
+    @info "Fitting dynamic multivariate ensemble on validation data" d n_forecasters n_val
+    result = infer(
+        model       = multivariate_dynamic_ensemble(
+            n_forecasters = n_forecasters,
+            n_obs         = n_val,
+            priors        = spec.priors,
+        ),
+        data          = (y = y_val, features = features_val, predictions = predictions_val),
+        constraints   = multivariate_dynamic_ensemble_constraints(),
+        initialization = multivariate_dynamic_ensemble_init(spec.priors),
+        iterations    = spec.inference_iterations,
+        free_energy   = true,
+        showprogress  = true,
+    )
+
+    free_energy    = result.free_energy
+    w_posteriors   = result.posteriors[:w][end]
+    τ_posteriors   = result.posteriors[:τ][end]
+    β_posteriors   = result.posteriors[:β][end]
+    γ_posteriors   = result.posteriors[:γ][end]  # (n_forecasters, n_val)
+
+    γ_means_val = mean.(γ_posteriors)
+
+    # Per-expert validation MSE (multivariate)
+    Yval_mat = Float64.(Yval)
+    @info "Learned dynamic weights on validation"
+    for i in 1:n_forecasters
+        pred_mat_i = reduce(hcat, predictions_val[i, :])  # (d, n_val)
+        mse_i = mse_mv(pred_mat_i, Yval_mat)
+        avg_γ = mean(γ_means_val[i, :])
+        @info "Expert $i" avg_E_γ=round(avg_γ; digits=4) val_MSE=round(mse_i; digits=6)
+    end
+
+    # 6. Ensemble predictions on test
+    @info "Generating dynamic ensemble predictions on test"
+    posterior_priors = Dict{Symbol,Any}(:w => w_posteriors, :τ => τ_posteriors, :β => β_posteriors)
+    prediction_array = [missing for _ in 1:n_test]
+
+    infer_test = infer(
+        model       = multivariate_dynamic_ensemble(
+            n_forecasters = n_forecasters,
+            n_obs         = n_test,
+            priors        = posterior_priors,
+        ),
+        data          = (y = prediction_array, features = features_test, predictions = predictions_test),
+        constraints   = multivariate_dynamic_ensemble_constraints(),
+        initialization = multivariate_dynamic_ensemble_init(posterior_priors),
+        iterations    = spec.prediction_iterations,
+        free_energy   = false,
+        showprogress  = true,
+    )
+
+    ensemble_preds = infer_test.predictions[:y][end]
+    ensemble_mean  = reduce(hcat, map(mean, ensemble_preds))  # (d, n_test)
+    ensemble_std   = reduce(hcat, map(std, ensemble_preds))   # (d, n_test)
+
+    # Extract dynamic precision weights on test
+    γ_test_posteriors = infer_test.posteriors[:γ][end]
+    γ_means_test      = mean.(γ_test_posteriors)
+
+    # 7. Metrics (multivariate)
+    Yte_mat = Float64.(Yte)
+    ensemble_metrics = (
+        mse   = mse_mv(ensemble_mean, Yte_mat),
+        mae   = mae_mv(ensemble_mean, Yte_mat),
+        rmse  = rmse_mv(ensemble_mean, Yte_mat),
+        r2    = r2_mv(ensemble_mean, Yte_mat),
+        mape  = mape_mv(ensemble_mean, Yte_mat),
+        smape = smape_mv(ensemble_mean, Yte_mat),
+    )
+
+    @info "Ensemble test metrics (multivariate)" ensemble_metrics...
+
+    # 8. Save results
+    results = (
+        w_posteriors     = w_posteriors,
+        τ_posteriors     = τ_posteriors,
+        β_posteriors     = β_posteriors,
+        γ_test           = γ_means_test,
+        free_energy      = free_energy,
+        ensemble_mean    = ensemble_mean,
+        ensemble_std     = ensemble_std,
+        ensemble_metrics = ensemble_metrics,
+        predictions_test = predictions_test,
+        y_test           = Yte_mat,
+        spec             = (
+            prediction_type = string(typeof(spec.prediction_type)),
+            model_type      = string(typeof(spec.model_type)),
+            column          = nothing,
+            horizon         = spec.horizon,
+            dataset         = typeof(spec.dataset).parameters[1],
+            dataset_path    = spec.dataset_path,
+            experts         = spec.experts,
+        ),
+    )
+
+    results_dir = "final_results"
+    mkpath(results_dir)
+    ds_name = typeof(spec.dataset).parameters[1]
+    fname = "$(ds_name)_h$(spec.horizon)_multivariate_dynamic.jld2"
+    results_path = joinpath(results_dir, fname)
+    JLD2.jldsave(results_path;
+        w_posteriors     = w_posteriors,
+        τ_posteriors     = τ_posteriors,
+        β_posteriors     = β_posteriors,
+        γ_test           = γ_means_test,
+        free_energy      = free_energy,
+        ensemble_mean    = ensemble_mean,
+        ensemble_std     = ensemble_std,
+        ensemble_metrics = ensemble_metrics,
+        predictions_test = predictions_test,
+        y_test           = Yte_mat,
         spec             = results.spec,
     )
     @info "Results saved" path=results_path

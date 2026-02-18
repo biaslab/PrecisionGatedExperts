@@ -18,6 +18,7 @@ include("model_zoo/univariate_y/dynamic.jl")
 
 # model zoo multivariate_y
 include("model_zoo/multivariate_y/static_ensemble.jl")
+include("model_zoo/multivariate_y/dynamic.jl")
 
 # model running
 include("model_zoo/model_specifier.jl")
