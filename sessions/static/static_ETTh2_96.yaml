@@ -17,4 +17,4 @@ params:
     γ:
       type: "GammaShapeRate"
       shape: 1.0
-      rate: 1.0e-12
+      rate: 1.0

@@ -694,7 +694,7 @@ function run_dynamic_multivariate(spec::ExperimentSpecifier{Multivariate,Dynamic
     prediction_array = [missing for _ in 1:n_test]
 
     infer_test = infer(
-        model       = multivariate_dynamic_ensemble(
+        model = multivariate_dynamic_ensemble(
             n_forecasters = n_forecasters,
             n_obs         = n_test,
             priors        = posterior_priors,
