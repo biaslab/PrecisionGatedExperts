@@ -42,8 +42,6 @@ function parse_model_type(s::String)
     error("Unknown model_type: $s")
 end
 
-
-
 function run_experiment(path_to_yaml::String)
     config = YAML.load_file(path_to_yaml)
     p      = config["params"]
