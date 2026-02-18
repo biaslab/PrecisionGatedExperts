@@ -15,10 +15,14 @@ include("low_rank_softdot.jl")
 # model zoo univariate_y
 include("model_zoo/univariate_y/static_ensemble.jl")
 include("model_zoo/univariate_y/dynamic.jl")
+include("model_zoo/univariate_y/hierarchial.jl")
 
 # model zoo multivariate_y
 include("model_zoo/multivariate_y/static_ensemble.jl")
 include("model_zoo/multivariate_y/dynamic.jl")
+
+# model types & prior parsing
+include("model_zoo/model_types.jl")
 
 # model running
 include("model_zoo/model_specifier.jl")

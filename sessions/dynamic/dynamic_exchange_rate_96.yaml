@@ -23,5 +23,5 @@ params:
       rate: 1.0
     w:
       type: "MvNormalMeanScalePrecision"
-      n_features: 22
+      n_features: 25
       scale: 1.0
