@@ -13,7 +13,19 @@ params:
     - "models/electricity_h336_s96_DLinear_enzyme.jld2"
     - "models/electricity_h336_s96_Nconv_enzyme.jld2"
   priors:
-    γ:
+    β:
       type: "GammaShapeRate"
       shape: 1.0
-      rate: 1.0e-12
+      rate: 1.0
+    τ:
+      type: "GammaShapeRate"
+      shape: 1.0
+      rate: 1.0
+    w:
+      type: "MvNormalMeanScalePrecision"
+      n_features: 964
+      scale: 1.0
+    ρ:
+      type: "GammaShapeRate"
+      shape: 1.0
+      rate: 1.0
