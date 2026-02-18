@@ -1,14 +1,12 @@
 using YAML
-using RxInfer
+
 using Distributions
 using Statistics
 using JLD2
 using Lux
 using Reactant
 
-using ProbabilisticEnsembling
-
-include("univariate_y/static_ensemble.jl")
+export run_experiment
 
 # prediction_type: univariate | multivariate
 struct Univariate end
@@ -49,7 +47,7 @@ function parse_model_type(s::String)
     error("Unknown model_type: $s")
 end
 
-function parse_priors(cfg::Dict, n_forecasters::Int)
+function parse_priors(::Static, cfg::Dict, n_forecasters::Int)
     priors = Dict{Symbol,Any}()
     if haskey(cfg, "γ")
         γ_cfg = cfg["γ"]
@@ -71,7 +69,7 @@ function run_experiment(path_to_yaml::String)
     dataset               = Val(Symbol(p["dataset"]))
     dataset_path          = p["dataset_path"]
     experts               = String.(p["experts"])
-    priors                = parse_priors(p["priors"], length(experts))
+    priors                = parse_priors(model_type, p["priors"], length(experts))
     inference_iterations  = p["inference_iterations"]
     prediction_iterations = p["prediction_iterations"]
 
@@ -119,6 +117,31 @@ load_dataset(::Val{:ETTh1}, path::String) = load_ett(path)
 load_dataset(::Val{:ETTh2}, path::String) = load_ett(path)
 
 # ---------------------------------------------------------------------------
+# Expert prediction generation
+# ---------------------------------------------------------------------------
+
+function generate_expert_predictions(::Univariate, experts, scaler, Xval_s, Xte_s, col_idx)
+    n_forecasters = length(experts)
+    n_val  = size(Xval_s, 3)
+    n_test = size(Xte_s, 3)
+
+    predictions_val  = Matrix{Float64}(undef, n_forecasters, n_val)
+    predictions_test = Matrix{Float64}(undef, n_forecasters, n_test)
+
+    @info "Generating expert predictions" n_forecasters n_val n_test
+    for (i, m) in enumerate(experts)
+        model    = build_model(m.model_type, m.config)
+        yhat_val = inverse_targets(scaler, predict_unscaled(model, m.parameters, m.states, Xval_s))
+        yhat_te  = inverse_targets(scaler, predict_unscaled(model, m.parameters, m.states, Xte_s))
+        predictions_val[i, :]  = Float64.(yhat_val[col_idx, :])
+        predictions_test[i, :] = Float64.(yhat_te[col_idx, :])
+        @info "Expert ready" index=i model_type=m.model_type
+    end
+
+    return predictions_val, predictions_test
+end
+
+# ---------------------------------------------------------------------------
 # Static Univariate pipeline
 # ---------------------------------------------------------------------------
 
@@ -140,31 +163,20 @@ function run_static_univariate(spec::ExperimentSpecifier{Univariate,Static})
     split = base_meta.split
     _, _, Xval, Yval, Xte, Yte = train_val_test_split(X3, Y2; ratios=(split.train, split.val, split.test))
 
-    scaler  = base_meta.scaler
-    Xval_s  = scale_inputs(scaler, Xval)
-    Xte_s   = scale_inputs(scaler, Xte)
+    scaler = base_meta.scaler
+    Xval_s = scale_inputs(scaler, Xval)
+    Xte_s  = scale_inputs(scaler, Xte)
 
-    # Extract univariate targets for the chosen column
     y_val  = Float64.(Yval[col_idx, :])
     y_test = Float64.(Yte[col_idx, :])
 
+    # 3. Generate expert predictions
+    predictions_val, predictions_test = generate_expert_predictions(
+        spec.prediction_type, experts, scaler, Xval_s, Xte_s, col_idx
+    )
+
     n_forecasters = length(experts)
-    n_val  = length(y_val)
     n_test = length(y_test)
-
-    # 3. Generate expert predictions (univariate column only)
-    predictions_val  = Matrix{Float64}(undef, n_forecasters, n_val)
-    predictions_test = Matrix{Float64}(undef, n_forecasters, n_test)
-
-    @info "Generating expert predictions" n_forecasters n_val n_test column=spec.column
-    for (i, m) in enumerate(experts)
-        model    = build_model(m.model_type, m.config)
-        yhat_val = inverse_targets(scaler, predict_unscaled(model, m.parameters, m.states, Xval_s))
-        yhat_te  = inverse_targets(scaler, predict_unscaled(model, m.parameters, m.states, Xte_s))
-        predictions_val[i, :]  = Float64.(yhat_val[col_idx, :])
-        predictions_test[i, :] = Float64.(yhat_te[col_idx, :])
-        @info "Expert ready" index=i model_type=m.model_type
-    end
 
     # 4. Fit static ensemble on validation data
     @info "Fitting static ensemble on validation data"

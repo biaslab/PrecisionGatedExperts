@@ -1,5 +1,7 @@
 module ProbabilisticEnsembling
 
+using RxInfer
+
 include("utils.jl")
 include("log.jl")
 include("extra.jl")
