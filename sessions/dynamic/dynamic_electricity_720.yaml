@@ -1,17 +1,17 @@
 params:
   prediction_type: "multivariate"
-  model_type: "hierarchical"
+  model_type: "dynamic"
   dataset: "electricity"
   dataset_path: "data/electricity.csv"
-  horizon: 96
+  horizon: 720
   inference_iterations: 500
   prediction_iterations: 1
   experts:
-    - "models/electricity_h96_s96_CNN_enzyme.jld2"
-    - "models/electricity_h96_s96_MLP_enzyme.jld2"
-    - "models/electricity_h96_s96_LSTM_enzyme.jld2"
-    - "models/electricity_h96_s96_DLinear_enzyme.jld2"
-    - "models/electricity_h96_s96_Nconv_enzyme.jld2"
+    - "models/electricity_h720_s96_CNN_enzyme.jld2"
+    - "models/electricity_h720_s96_MLP_enzyme.jld2"
+    - "models/electricity_h720_s96_LSTM_enzyme.jld2"
+    - "models/electricity_h720_s96_DLinear_enzyme.jld2"
+    - "models/electricity_h720_s96_NConv_enzyme.jld2"
   priors:
     β:
       type: "GammaShapeRate"
@@ -25,7 +25,3 @@ params:
       type: "MvNormalMeanScalePrecision"
       n_features: 964
       scale: 1.0
-    ρ:
-      type: "GammaShapeRate"
-      shape: 1.0
-      rate: 1.0
