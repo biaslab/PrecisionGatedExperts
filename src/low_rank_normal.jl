@@ -23,7 +23,7 @@ Produced by softdot rules. During message product with a prior or accumulator,
 the rank-1 precision is applied via in-place BLAS.syr! rank-1 updates onto
 a dense MvNormalWeightedMeanPrecision.
 """
-struct LowRankNormalWeightedMeanPrecision{T <: Real, V <: AbstractVector{T}} <: AbstractMvNormal
+struct LowRankNormalWeightedMeanPrecision{T <: Real, V <: AbstractVector{T}}
     xi::V
     u::V
     scale::T
