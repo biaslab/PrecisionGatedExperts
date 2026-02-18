@@ -1,5 +1,6 @@
 import BayesBase: PointMass
 using ReactiveMP
+using ReactiveMP: score, AverageEnergy, SoftDot
 using LinearAlgebra: BLAS
 
 using LowRankMatrices
@@ -29,4 +30,9 @@ end
     mθ = mean(q_θ)
     mγ = mean(q_γ)
     return LowRankNormalWeightedMeanPrecision(mγ * mθ * my, mθ, mγ)
+end
+
+# Average Energy: delegate to default SoftDot (no low-rank specialization)
+@average_energy ReactiveMP.softdot (q_y::Any, q_θ::Any, q_x::Any, q_γ::Any, meta::LowRankMeta) = begin
+    return score(AverageEnergy(), SoftDot, Val{(:y, :θ, :x, :γ)}(), marginals, nothing)
 end
