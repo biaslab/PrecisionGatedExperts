@@ -9,7 +9,7 @@
 
     for j in 1:n_obs
         for i in 1:n_forecasters
-            z[i, j] ~ softdot(features[j], w[i], τ[i])
+            z[i, j] ~ softdot(features[j], w[i], τ[i]) where {meta = LowRankMeta()}
             β[i, j] ~ GammaShapeRate(1.0, ρ[i])
             z[i, j] ~ Log(β[i, j])
             γ[i, j] ~ GammaShapeRate(priors[:α], β[i, j])
