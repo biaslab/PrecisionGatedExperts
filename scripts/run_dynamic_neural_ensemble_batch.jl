@@ -9,26 +9,14 @@ Usage:
 
 const DATASETS = ["ETTh1", "ETTh2", "exchange_rate"]
 const HORIZONS = [720]
-const MODEL_TYPES = ["MLP", "CNN", "LSTM"]
 
-function find_model_file(models_dir::AbstractString, dataset::AbstractString, horizon::Int, model_type::AbstractString)
-    direct = joinpath(models_dir, "$(dataset)_h$(horizon)_$(model_type)_enzyme.jld2")
-    with_seq = joinpath(models_dir, "$(dataset)_h$(horizon)_s$(horizon)_$(model_type)_enzyme.jld2")
-
-    # Rule:
-    # - horizon 96: use only checkpoints without explicit seq_len suffix.
-    # - other horizons: use only checkpoints with _s<horizon>_ suffix.
-    if horizon == 96
-        if isfile(direct)
-            return direct
-        end
-        return nothing
-    else
-        if isfile(with_seq)
-            return with_seq
-        end
-        return nothing
-    end
+function discover_model_files(models_dir::AbstractString, dataset::AbstractString, horizon::Int)
+    pattern = "$(dataset)_h$(horizon)_"
+    paths = filter(f -> startswith(basename(f), pattern) && contains(basename(f), "_s"),
+                   readdir(models_dir; join = true))
+    paths = filter(f -> endswith(f, ".jld2"), paths)
+    sort!(paths)
+    return paths
 end
 
 function parse_metric_lines(output::AbstractString)
@@ -80,25 +68,15 @@ function write_result_csv(file::AbstractString, model_names::Vector{String}, mod
 end
 
 function run_one(root::AbstractString, models_dir::AbstractString, results_dir::AbstractString, dataset::String, horizon::Int)
-    model_paths = String[]
-    model_names = String[]
-
-    for model_type in MODEL_TYPES
-        path = find_model_file(models_dir, dataset, horizon, model_type)
-        if path === nothing
-            @warn "Missing model checkpoint" dataset horizon model_type
-            continue
-        end
-        @info "Found model checkpoint" dataset horizon model_type path
-        push!(model_paths, path)
-        push!(model_names, model_type)
-    end
+    model_paths = discover_model_files(models_dir, dataset, horizon)
+    model_names = [splitext(basename(path))[1] for path in model_paths]
 
     if length(model_paths) < 2
         @warn "Not enough model checkpoints for ensemble (need at least 2)" dataset horizon found=length(model_paths)
         return
     end
 
+    @info "Found model checkpoints" dataset horizon count=length(model_paths) model_names
     @info "Running ensemble task" dataset horizon models=model_paths
 
     script = joinpath(root, "scripts", "dynamic_neural_ensemble_rxinfer.jl")
@@ -133,17 +111,16 @@ function run_one(root::AbstractString, models_dir::AbstractString, results_dir::
     model_metrics = Vector{Any}()
     model_names_csv = String[]
 
-    # Keep user-selected neural models in fixed order first.
-    for model_type in model_names
-        needle = "_$(model_type)_enzyme.jld2"
-        idx = findfirst(f -> occursin(needle, f.path), forecasters)
+    # Keep discovered checkpoints in fixed order first.
+    for model_path in model_paths
+        idx = findfirst(f -> normpath(f.path) == normpath(model_path) || basename(f.path) == basename(model_path), forecasters)
         if idx === nothing
-            @warn "Missing parsed model metric" dataset horizon model_type
+            @warn "Missing parsed model metric" dataset horizon model_path
             println(output)
             return
         end
         push!(model_metrics, forecasters[idx])
-        push!(model_names_csv, model_type)
+        push!(model_names_csv, splitext(basename(model_path))[1])
     end
 
     # Add constant baselines if present in dynamic script output.

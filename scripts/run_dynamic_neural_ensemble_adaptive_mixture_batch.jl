@@ -11,19 +11,14 @@ Usage:
 
 const DATASETS = ["ETTh2", "exchange_rate", "ETTh1"]
 const HORIZONS = [720, 96, 192, 336 ]
-const MODEL_TYPES = ["MLP", "CNN", "LSTM"]
 
-function find_model_file(models_dir::AbstractString, dataset::AbstractString, horizon::Int, model_type::AbstractString)
-    direct = joinpath(models_dir, "$(dataset)_h$(horizon)_$(model_type)_enzyme.jld2")
-    with_seq = joinpath(models_dir, "$(dataset)_h$(horizon)_s$(horizon)_$(model_type)_enzyme.jld2")
-
-    # Rule:
-    # - horizon 96: use only checkpoints without explicit seq_len suffix.
-    # - other horizons: use only checkpoints with _s<horizon>_ suffix.
-    if horizon == 96
-        return isfile(direct) ? direct : nothing
-    end
-    return isfile(with_seq) ? with_seq : nothing
+function discover_model_files(models_dir::AbstractString, dataset::AbstractString, horizon::Int)
+    pattern = "$(dataset)_h$(horizon)_"
+    paths = filter(f -> startswith(basename(f), pattern) && contains(basename(f), "_s"),
+                   readdir(models_dir; join = true))
+    paths = filter(f -> endswith(f, ".jld2"), paths)
+    sort!(paths)
+    return paths
 end
 
 function parse_metric_lines(output::AbstractString)
@@ -110,21 +105,15 @@ function run_one_mode(root::AbstractString, dataset::String, horizon::Int, model
 end
 
 function run_one(root::AbstractString, models_dir::AbstractString, results_dir::AbstractString, dataset::String, horizon::Int)
-    model_paths = String[]
-    for model_type in MODEL_TYPES
-        path = find_model_file(models_dir, dataset, horizon, model_type)
-        if path === nothing
-            @warn "Missing model checkpoint" dataset horizon model_type
-            continue
-        end
-        @info "Found model checkpoint" dataset horizon model_type path
-        push!(model_paths, path)
-    end
+    model_paths = discover_model_files(models_dir, dataset, horizon)
 
     if length(model_paths) < 2
         @warn "Not enough model checkpoints for ensemble (need at least 2)" dataset horizon found=length(model_paths)
         return
     end
+
+    model_names = [splitext(basename(path))[1] for path in model_paths]
+    @info "Found model checkpoints" dataset horizon count=length(model_paths) model_names
 
     train_res = run_one_mode(root, dataset, horizon, model_paths, true)
     val_res = run_one_mode(root, dataset, horizon, model_paths, false)

@@ -116,7 +116,7 @@ function run_horizon(horizon::Int, dataset::AbstractString = "ETTh1"; models_dir
 
     # --- Discover and load models ---
     pattern = "$(dataset)_h$(horizon)_"
-    paths = filter(f -> startswith(basename(f), pattern) && !contains(basename(f), "_s"),
+    paths = filter(f -> startswith(basename(f), pattern) && contains(basename(f), "_s"),
                    readdir(models_dir; join = true))
     paths = filter(f -> endswith(f, ".jld2"), paths)
 
