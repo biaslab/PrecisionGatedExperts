@@ -1,17 +1,17 @@
 params:
   prediction_type: "multivariate"
   model_type: "dynamic"
-  dataset: "traffic"
-  dataset_path: "data/traffic.csv"
+  dataset: "electricity"
+  dataset_path: "data/electricity.csv"
   horizon: 336
   inference_iterations: 500
   prediction_iterations: 1
   experts:
-    - "models/traffic_h336_s96_CNN_enzyme.jld2"
-    - "models/traffic_h336_s96_MLP_enzyme.jld2"
-    - "models/traffic_h336_s96_LSTM_enzyme.jld2"
-    - "models/traffic_h336_s96_DLinear_enzyme.jld2"
-    - "models/traffic_h336_s96_NConv_enzyme.jld2"
+    - "models/electricity_h336_s96_CNN_enzyme.jld2"
+    - "models/electricity_h336_s96_MLP_enzyme.jld2"
+    - "models/electricity_h336_s96_LSTM_enzyme.jld2"
+    - "models/electricity_h336_s96_DLinear_enzyme.jld2"
+    - "models/electricity_h336_s96_NConv_enzyme.jld2"
   priors:
     β:
       type: "GammaShapeRate"
@@ -23,5 +23,5 @@ params:
       rate: 1.0
     w:
       type: "MvNormalMeanScalePrecision"
-      n_features: 2587
+      n_features: 964
       scale: 1.0
