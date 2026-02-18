@@ -10,4 +10,10 @@ include("low_rank_normal.jl")
 # low rank softdot
 include("low_rank_softdot.jl")
 
+# model zoo univariate_y
+include("model_zoo/univariate_y/static_ensemble.jl")
+
+# model zoo multivariate_y
+include("model_zoo/multivariate_y/static_ensemble.jl")
+
 end
