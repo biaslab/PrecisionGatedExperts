@@ -1,38 +1,50 @@
 # probabilistic_ensemble_forecasting
 
-You can training scripts with:
+## Running experiments
+
+All experiments are configured via YAML session files and launched through `run_experiment`:
 
 ```bash
-julia --project=. scripts/train_ett_lstm_enzyme.jl
+julia --project=. -e 'using ProbabilisticEnsembling; run_experiment("sessions/dynamic/dynamic_ETTh1_96.yaml")'
 ```
 
-Run inference with trained model: 
+Pre-configured session files are available under `sessions/` for three ensemble types:
 
-```bash
-julia --project=. scripts/infer_ett_enzyme.jl models/ETTh1_h96_CNN_enzyme.jld2
-```
+- `sessions/static/` - static ensemble
+- `sessions/dynamic/` - dynamic ensemble
+- `sessions/hierarchical/` - hierarchical ensemble
 
-Run static ensemble model with neural models: 
+Each YAML file specifies the dataset, horizon, expert models, priors, and iteration counts. Example (`sessions/dynamic/dynamic_ETTh1_96.yaml`):
 
-```bash
-julia --project=. scripts/neural_ensemble_rxinfer.jl models/ETTh1_h96_CNN_enzyme.jld2 models/ETTh1_h96_LSTM_enzyme.jld2
-```
-
-Run the dynamic ensemble with neural models:
-
-Models must come from the same dataset and use the same horizon. The dataset name is stored at the top of each model file’s name. The dataset used at inference time is determined by the models you pass in. You can pass two or more models as arguments after the script name.
-Right now constant models like quantile 10 and quantile 90 added by default to each combination of models. 
-
-Example (CNN + LSTM trained on ETTh1 with horizon 96):
-
-```bash
-julia --project=. scripts/dynamic_neural_ensemble_rxinfer.jl models/ETTh1_h96_CNN_enzyme.jld2 models/ETTh1_h96_LSTM_enzyme.jld2
-```
-
-General usage:
-
-```bash
-julia --project=. scripts/dynamic_neural_ensemble_rxinfer.jl <model_path_1> <model_path_2> ... <model_path_n>
+```yaml
+params:
+  prediction_type: "univariate"
+  column: "OT"
+  model_type: "dynamic"
+  dataset: "ETTh1"
+  dataset_path: "data/ETTh1.csv"
+  horizon: 96
+  inference_iterations: 500
+  prediction_iterations: 1
+  experts:
+    - "models/ETTh1_h96_s96_CNN_enzyme.jld2"
+    - "models/ETTh1_h96_s96_MLP_enzyme.jld2"
+    - "models/ETTh1_h96_s96_LSTM_enzyme.jld2"
+    - "models/ETTh1_h96_s96_DLinear_enzyme.jld2"
+    - "models/ETTh1_h96_s96_NConv_enzyme.jld2"
+  priors:
+    β:
+      type: "GammaShapeRate"
+      shape: 1.0
+      rate: 1.0
+    τ:
+      type: "GammaShapeRate"
+      shape: 1.0
+      rate: 1.0
+    w:
+      type: "MvNormalMeanScalePrecision"
+      n_features: 22
+      scale: 1.0
 ```
 
 ## Datasets
