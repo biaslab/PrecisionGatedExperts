@@ -59,4 +59,3 @@ The training/inference scripts auto-detect these CSVs from `data/`. Trained mode
 
 Notes
 - Splits are chronological: the first block is used for training, the next for validation, and the final for testing.
-- Horizons denote one-step-ahead offsets; for example, horizon 96 predicts the value 96 steps after the end of each input window.
