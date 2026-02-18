@@ -53,7 +53,7 @@ function run_experiment(path_to_yaml::String)
     dataset               = Val(Symbol(p["dataset"]))
     dataset_path          = p["dataset_path"]
     experts               = String.(p["experts"])
-    priors                = parse_priors(model_type, p["priors"], length(experts))
+    priors                = parse_priors(model_type, p["priors"], length(experts) + 2)
     inference_iterations  = p["inference_iterations"]
     prediction_iterations = p["prediction_iterations"]
 
@@ -139,14 +139,15 @@ load_dataset(::Val{:exchange_rate}, path::String) = load_ett(path)
 # ---------------------------------------------------------------------------
 
 function generate_expert_predictions(::Univariate, experts, scaler, Xval_s, Xte_s, col_idx)
-    n_forecasters = length(experts)
+    n_model_forecasters = length(experts)
+    n_forecasters = n_model_forecasters + 2
     n_val  = size(Xval_s, 3)
     n_test = size(Xte_s, 3)
 
     predictions_val  = Matrix{Float64}(undef, n_forecasters, n_val)
     predictions_test = Matrix{Float64}(undef, n_forecasters, n_test)
 
-    @info "Generating expert predictions" n_forecasters n_val n_test
+    @info "Generating expert predictions" n_model_forecasters n_forecasters n_val n_test
     for (i, m) in enumerate(experts)
         model    = build_model(m.model_type, m.config)
         yhat_val = inverse_targets(scaler, predict_unscaled(model, m.parameters, m.states, Xval_s))
@@ -156,18 +157,39 @@ function generate_expert_predictions(::Univariate, experts, scaler, Xval_s, Xte_
         @info "Expert ready" index=i model_type=m.model_type
     end
 
+    x_last_val_scaled = Float64.(vec(Xval_s[col_idx, end, :]))
+    q10_scaled = quantile(x_last_val_scaled, 0.1)
+    q90_scaled = quantile(x_last_val_scaled, 0.9)
+
+    q10_probe = zeros(Float64, size(Xval_s, 1), 1)
+    q90_probe = zeros(Float64, size(Xval_s, 1), 1)
+    q10_probe[col_idx, 1] = q10_scaled
+    q90_probe[col_idx, 1] = q90_scaled
+    q10 = Float64(inverse_targets(scaler, q10_probe)[col_idx, 1])
+    q90 = Float64(inverse_targets(scaler, q90_probe)[col_idx, 1])
+
+    idx_q10 = n_model_forecasters + 1
+    idx_q90 = n_model_forecasters + 2
+    predictions_val[idx_q10, :] .= q10
+    predictions_val[idx_q90, :] .= q90
+    predictions_test[idx_q10, :] .= q10
+    predictions_test[idx_q90, :] .= q90
+    @info "Added constant experts" q10_idx=idx_q10 q90_idx=idx_q90 q10 q90
+
     return predictions_val, predictions_test
 end
 
 function generate_expert_predictions(::Multivariate, experts, scaler, Xval_s, Xte_s)
-    n_forecasters = length(experts)
+    n_model_forecasters = length(experts)
+    n_forecasters = n_model_forecasters + 2
     n_val  = size(Xval_s, 3)
     n_test = size(Xte_s, 3)
+    d = size(Xval_s, 1)
 
     predictions_val  = Matrix{Vector{Float64}}(undef, n_forecasters, n_val)
     predictions_test = Matrix{Vector{Float64}}(undef, n_forecasters, n_test)
 
-    @info "Generating expert predictions (multivariate)" n_forecasters n_val n_test
+    @info "Generating expert predictions (multivariate)" n_model_forecasters n_forecasters n_val n_test
     for (i, m) in enumerate(experts)
         model    = build_model(m.model_type, m.config)
         yhat_val = inverse_targets(scaler, predict_unscaled(model, m.parameters, m.states, Xval_s))
@@ -180,6 +202,24 @@ function generate_expert_predictions(::Multivariate, experts, scaler, Xval_s, Xt
         end
         @info "Expert ready" index=i model_type=m.model_type
     end
+
+    x_last_val_scaled = Float64.(Xval_s[:, end, :])
+    q10_scaled = [quantile(Float64.(view(x_last_val_scaled, k, :)), 0.1) for k in 1:d]
+    q90_scaled = [quantile(Float64.(view(x_last_val_scaled, k, :)), 0.9) for k in 1:d]
+    q10 = vec(Float64.(inverse_targets(scaler, reshape(q10_scaled, :, 1))[:, 1]))
+    q90 = vec(Float64.(inverse_targets(scaler, reshape(q90_scaled, :, 1))[:, 1]))
+
+    idx_q10 = n_model_forecasters + 1
+    idx_q90 = n_model_forecasters + 2
+    for j in 1:n_val
+        predictions_val[idx_q10, j] = copy(q10)
+        predictions_val[idx_q90, j] = copy(q90)
+    end
+    for j in 1:n_test
+        predictions_test[idx_q10, j] = copy(q10)
+        predictions_test[idx_q90, j] = copy(q90)
+    end
+    @info "Added constant experts (multivariate)" q10_idx=idx_q10 q90_idx=idx_q90
 
     return predictions_val, predictions_test
 end
@@ -218,7 +258,7 @@ function run_static_univariate(spec::ExperimentSpecifier{Univariate,Static})
         spec.prediction_type, experts, scaler, Xval_s, Xte_s, col_idx
     )
 
-    n_forecasters = length(experts)
+    n_forecasters = size(predictions_val, 1)
     n_test = length(y_test)
 
     # 4. Fit static ensemble on validation data
@@ -354,7 +394,7 @@ function run_static_multivariate(spec::ExperimentSpecifier{Multivariate,Static})
         spec.prediction_type, experts, scaler, Xval_s, Xte_s
     )
 
-    n_forecasters = length(experts)
+    n_forecasters = size(predictions_val, 1)
 
     # 4. Fit static ensemble on validation data
     @info "Fitting static multivariate ensemble on validation data" d n_forecasters
@@ -479,7 +519,7 @@ function run_dynamic_univariate(spec::ExperimentSpecifier{Univariate,Dynamic})
         spec.prediction_type, experts, scaler, Xval_s, Xte_s, col_idx
     )
 
-    n_forecasters = length(experts)
+    n_forecasters = size(predictions_val, 1)
     n_val  = length(y_val)
     n_test = length(y_test)
 
@@ -648,7 +688,7 @@ function run_dynamic_multivariate(spec::ExperimentSpecifier{Multivariate,Dynamic
         spec.prediction_type, experts, scaler, Xval_s, Xte_s
     )
 
-    n_forecasters = length(experts)
+    n_forecasters = size(predictions_val, 1)
 
     # 4. Construct features from scaled inputs
     features_val  = make_features(Xval_s)
@@ -808,7 +848,7 @@ function run_hierarchical_univariate(spec::ExperimentSpecifier{Univariate,Hierar
         spec.prediction_type, experts, scaler, Xval_s, Xte_s, col_idx
     )
 
-    n_forecasters = length(experts)
+    n_forecasters = size(predictions_val, 1)
     n_val  = length(y_val)
     n_test = length(y_test)
 
@@ -982,7 +1022,7 @@ function run_hierarchical_multivariate(spec::ExperimentSpecifier{Multivariate,Hi
         spec.prediction_type, experts, scaler, Xval_s, Xte_s
     )
 
-    n_forecasters = length(experts)
+    n_forecasters = size(predictions_val, 1)
 
     # 4. Construct features from scaled inputs
     features_val  = make_features(Xval_s)
