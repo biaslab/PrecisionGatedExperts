@@ -8,7 +8,10 @@ params:
   inference_iterations: 500
   prediction_iterations: 1
   experts:
+    - "models/ETTh1_h96_s96_CNN_enzyme.jld2"
     - "models/ETTh1_h96_s96_MLP_enzyme.jld2"
+    - "models/ETTh1_h96_s96_LSTM_enzyme.jld2"
+    - "models/ETTh1_h96_s96_DLinear_enzyme.jld2"
     - "models/ETTh1_h96_s96_NConv_enzyme.jld2"
   priors:
     β:
