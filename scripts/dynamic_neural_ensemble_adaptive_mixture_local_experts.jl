@@ -135,8 +135,17 @@ function parse_bool_flag(v::AbstractString, flag::AbstractString)
     error("Flag $(flag) expects true|false, got: $(v)")
 end
 
+function parse_int_flag(v::AbstractString, flag::AbstractString)
+    try
+        return parse(Int, v)
+    catch
+        error("Flag $(flag) expects an integer, got: $(v)")
+    end
+end
+
 function parse_cli_args(args::Vector{String})
     train_set = true
+    layers = 1
     model_paths = String[]
     i = 1
     while i <= length(args)
@@ -145,6 +154,11 @@ function parse_cli_args(args::Vector{String})
             i == length(args) && error("Missing value for --train_set (expected true|false)")
             train_set = parse_bool_flag(args[i + 1], "--train_set")
             i += 2
+        elseif arg == "--layers"
+            i == length(args) && error("Missing value for --layers (expected integer >= 1)")
+            layers = parse_int_flag(args[i + 1], "--layers")
+            layers < 1 && error("Flag --layers expects integer >= 1, got: $(layers)")
+            i += 2
         elseif startswith(arg, "--")
             error("Unknown flag: $(arg)")
         else
@@ -152,7 +166,7 @@ function parse_cli_args(args::Vector{String})
             i += 1
         end
     end
-    return (; train_set, model_paths)
+    return (; train_set, layers, model_paths)
 end
 
 reactant_device() = (
@@ -208,9 +222,10 @@ function main()
     parsed = parse_cli_args(ARGS)
     model_paths = parsed.model_paths
     train_set = parsed.train_set
+    layers = parsed.layers
 
     if length(model_paths) < 2
-        println("Usage: julia scripts/adaptive_mixture_local_experts.jl [--train_set true|false] <model1.jld2> <model2.jld2> [more...]")
+        println("Usage: julia scripts/adaptive_mixture_local_experts.jl [--train_set true|false] [--layers N] <model1.jld2> <model2.jld2> [more...]")
         return
     end
 
@@ -275,6 +290,8 @@ function main()
     y_val = to_vecs(Float64.(Yval_sc))
     y_test = to_vecs(Float64.(Yte_sc))
 
+    use_ot_target_training = occursin("ETTh", String(base_meta.dataset))
+
     y_q10 = [quantile(Float64.(view(Ytr_sc, i, :)), 0.1) for i in 1:d]
     y_q90 = [quantile(Float64.(view(Ytr_sc, i, :)), 0.9) for i in 1:d]
     idx_min = n_forecasters + 1
@@ -308,27 +325,56 @@ function main()
         end
     end
 
+    predictions_train_vec_moe = predictions_train_vec
+    predictions_val_vec_moe = predictions_val_vec
+    y_train_moe = y_train
+    y_val_moe = y_val
+    if use_ot_target_training
+        predictions_train_vec_moe = Array{Vector{Float64}}(undef, n_total, n_train)
+        predictions_val_vec_moe = Array{Vector{Float64}}(undef, n_total, n_val)
+        for i in 1:n_total
+            for j in 1:n_train
+                predictions_train_vec_moe[i, j] = [predictions_train[i, ot_idx, j]]
+            end
+            for j in 1:n_val
+                predictions_val_vec_moe[i, j] = [predictions_val[i, ot_idx, j]]
+            end
+        end
+        y_train_moe = [Vector{Float64}([Ytr_sc[ot_idx, j]]) for j in 1:n_train]
+        y_val_moe = [Vector{Float64}([Yval_sc[ot_idx, j]]) for j in 1:n_val]
+    end
+
     features_train = make_features(Xtr_s)
     features_val = make_features(Xval_s)
     features_test = make_features(Xte_s)
     n_features = length(features_train[1])
 
-    gating = Chain(Dense(n_features => n_total))
+    hidden_state = 64
+    gating = if layers == 1
+        Chain(Dense(n_features => n_total))
+    else
+        gating_layers = Any[Dense(n_features => hidden_state)]
+        for _ in 2:(layers - 1)
+            push!(gating_layers, Dense(hidden_state => hidden_state))
+        end
+        push!(gating_layers, Dense(hidden_state => n_total))
+        Chain(gating_layers...)
+    end
 
-    @info "Step 1: Training adaptive mixture of local experts (MLE)" n_features = n_features
+    @info "Step 1: Training adaptive mixture of local experts (MLE)" n_features = n_features layers = layers hidden_state = hidden_state target_scope = (use_ot_target_training ? "OT-only" : "all-columns")
 
     opt = Optimisers.Adam(1f-3)
     gating_state = if train_set
         train_moe!(
-            predictions_train_vec, features_train, y_train,
-            predictions_val_vec, features_val, y_val,
+            predictions_train_vec_moe, features_train, y_train_moe,
+            predictions_val_vec_moe, features_val, y_val_moe,
             gating, opt;
             n_epochs=100, patience=50, min_delta=1f-6, monitor_label="val"
         )
     else
         train_moe!(
-            predictions_val_vec, features_val, y_val,
-            predictions_train_vec, features_train, y_train,
+            predictions_val_vec_moe, features_val, y_val_moe,
+            predictions_train_vec_moe, features_train, y_train_moe,
             gating, opt;
             n_epochs=100, patience=1, min_delta=1f-3, monitor_label="train"
         )

@@ -9,7 +9,7 @@ Usage:
     julia scripts/run_dynamic_neural_ensemble_adaptive_mixture_batch.jl
 """
 
-const DATASETS = ["ETTh2", "exchange_rate", "ETTh1"]
+const DATASETS = ["ETTh2", "exchange_rate", "ETTh1", "traffic", "electricity"]
 const HORIZONS = [720, 96, 192, 336 ]
 
 function discover_model_files(models_dir::AbstractString, dataset::AbstractString, horizon::Int)
