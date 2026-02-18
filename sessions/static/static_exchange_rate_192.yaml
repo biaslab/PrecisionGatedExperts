@@ -1,0 +1,19 @@
+params:
+  prediction_type: "multivariate"
+  model_type: "static"
+  dataset: "exchange_rate"
+  dataset_path: "data/exchange_rate.csv"
+  horizon: 192
+  inference_iterations: 500
+  prediction_iterations: 1
+  experts:
+    - "models/exchange_rate_h192_s96_CNN_enzyme.jld2"
+    - "models/exchange_rate_h192_s96_MLP_enzyme.jld2"
+    - "models/exchange_rate_h192_s96_LSTM_enzyme.jld2"
+    - "models/exchange_rate_h192_s96_DLinear_enzyme.jld2"
+    - "models/exchange_rate_h192_s96_NConv_enzyme.jld2"
+  priors:
+    γ:
+      type: "GammaShapeRate"
+      shape: 1.0
+      rate: 1.0e-12

@@ -1,0 +1,19 @@
+params:
+  prediction_type: "multivariate"
+  model_type: "hierarchical"
+  dataset: "traffic"
+  dataset_path: "data/traffic.csv"
+  horizon: 720
+  inference_iterations: 500
+  prediction_iterations: 1
+  experts:
+    - "models/traffic_h720_s96_CNN_enzyme.jld2"
+    - "models/traffic_h720_s96_MLP_enzyme.jld2"
+    - "models/traffic_h720_s96_LSTM_enzyme.jld2"
+    - "models/traffic_h720_s96_DLinear_enzyme.jld2"
+    - "models/traffic_h720_s96_NConv_enzyme.jld2"
+  priors:
+    γ:
+      type: "GammaShapeRate"
+      shape: 1.0
+      rate: 1.0e-12
