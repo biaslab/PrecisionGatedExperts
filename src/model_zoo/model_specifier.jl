@@ -125,6 +125,10 @@ function run_experiment(spec::ExperimentSpecifier{Multivariate,Hierarchical})
     return run_hierarchical_multivariate(spec)
 end
 
+function run_experiment(spec::ExperimentSpecifier{Univariate,Deep})
+    return run_deep_univariate(spec)
+end
+
 function run_experiment(spec::ExperimentSpecifier{Multivariate,Deep})
     return run_deep_multivariate(spec)
 end
@@ -1299,6 +1303,165 @@ function run_deep_multivariate(spec::ExperimentSpecifier{Multivariate,Deep})
             prediction_type = string(typeof(spec.prediction_type)),
             model_type = string(typeof(spec.model_type)),
             column = nothing,
+            horizon = spec.horizon,
+            dataset = typeof(spec.dataset).parameters[1],
+            dataset_path = spec.dataset_path,
+            experts = spec.experts,
+        ),
+    )
+
+    return results
+end
+
+# ---------------------------------------------------------------------------
+# Deep Univariate pipeline
+# ---------------------------------------------------------------------------
+
+function run_deep_univariate(spec::ExperimentSpecifier{Univariate,Deep})
+    # 1. Load expert models
+    @info "Loading expert models" n = length(spec.experts)
+    experts = map(load_jld2_model, spec.experts)
+    base_meta = experts[1].meta
+
+    # 2. Load raw data & split
+    Xmat, feat_cols = load_dataset(spec.dataset, spec.dataset_path)
+
+    col_idx = find_column_index(feat_cols, spec.column)
+
+    seq_len = Int(base_meta.seq_len)
+    horizon = Int(base_meta.horizon)
+    X3, Y2 = make_sequences(Xmat; seq_len = seq_len, horizon = horizon)
+
+    split = base_meta.split
+    _, _, Xval, Yval, Xte, Yte =
+        train_val_test_split(X3, Y2; ratios = (split.train, split.val, split.test))
+
+    scaler = base_meta.scaler
+    Xval_s = scale_inputs(scaler, Xval)
+    Xte_s = scale_inputs(scaler, Xte)
+    Yval_s = scale_targets(scaler, Yval)
+    Yte_s = scale_targets(scaler, Yte)
+
+    y_val = Float64.(Yval_s[col_idx, :])
+    y_test = Float64.(Yte_s[col_idx, :])
+
+    # 3. Generate expert predictions
+    predictions_val, predictions_test = generate_expert_predictions(
+        spec.prediction_type,
+        experts,
+        scaler,
+        Xval_s,
+        Xte_s,
+        col_idx,
+    )
+
+    n_forecasters = size(predictions_val, 1)
+    n_val = length(y_val)
+    n_test = length(y_test)
+
+    # 4. Construct features from scaled inputs
+    features_val = make_features(Xval_s)
+    features_test = make_features(Xte_s)
+
+    # 5. Fit deep ensemble on validation data
+    @info "Fitting deep ensemble on validation data" n_forecasters n_val
+    result = infer(
+        model = deep_model(
+            n_forecasters = n_forecasters,
+            n_obs = n_val,
+            priors = spec.priors,
+        ),
+        data = (y = y_val, features = features_val, predictions = predictions_val),
+        constraints = deep_constraints(),
+        initialization = deep_init(spec.priors),
+        iterations = spec.inference_iterations,
+        free_energy = true,
+        showprogress = true,
+    )
+
+    free_energy = result.free_energy
+    w_posteriors = result.posteriors[:w][end]
+    v_posteriors = result.posteriors[:v][end]
+    τ_posteriors = result.posteriors[:τ][end]
+    ρ_posteriors = result.posteriors[:ρ][end]
+    γ_posteriors = result.posteriors[:γ][end]
+
+    γ_means_val = mean.(γ_posteriors)
+
+    @info "Learned deep weights on validation"
+    for i = 1:n_forecasters
+        mse_i = mse(predictions_val[i, :], y_val)
+        avg_γ = mean(γ_means_val[i, :])
+        @info "Expert $i" avg_E_γ = round(avg_γ; digits = 4) val_MSE =
+            round(mse_i; digits = 6)
+    end
+
+    # 6. Ensemble predictions on test
+    @info "Generating deep ensemble predictions on test"
+    posterior_priors = Dict{Symbol,Any}(
+        :w => w_posteriors,
+        :v => v_posteriors,
+        :τ => τ_posteriors,
+        :ρ => ρ_posteriors,
+        :α => spec.priors[:α],
+    )
+    prediction_array = [missing for _ = 1:n_test]
+
+    infer_test = infer(
+        model = deep_model(
+            n_forecasters = n_forecasters,
+            n_obs = n_test,
+            priors = posterior_priors,
+        ),
+        data = (
+            y = prediction_array,
+            features = features_test,
+            predictions = predictions_test,
+        ),
+        constraints = deep_constraints(),
+        initialization = deep_init(posterior_priors),
+        iterations = spec.prediction_iterations,
+        free_energy = false,
+        showprogress = true,
+    )
+
+    ensemble_preds = infer_test.predictions[:y][end]
+    ensemble_mean = map(mean, ensemble_preds)
+    ensemble_std = map(std, ensemble_preds)
+
+    # Extract precision weights on test
+    γ_test_posteriors = infer_test.posteriors[:γ][end]
+    γ_means_test = mean.(γ_test_posteriors)
+
+    # 7. Metrics
+    ensemble_metrics = (
+        mse = mse(ensemble_mean, y_test),
+        mae = mae(ensemble_mean, y_test),
+        rmse = rmse(ensemble_mean, y_test),
+        r2 = r2(ensemble_mean, y_test),
+        mape = mape(ensemble_mean, y_test),
+        smape = smape(ensemble_mean, y_test),
+    )
+
+    @info "Ensemble test metrics" ensemble_metrics...
+
+    # 8. Save results
+    results = (
+        w_posteriors = w_posteriors,
+        v_posteriors = v_posteriors,
+        τ_posteriors = τ_posteriors,
+        ρ_posteriors = ρ_posteriors,
+        γ_test = γ_means_test,
+        free_energy = free_energy,
+        ensemble_mean = ensemble_mean,
+        ensemble_std = ensemble_std,
+        ensemble_metrics = ensemble_metrics,
+        predictions_test = predictions_test,
+        y_test = y_test,
+        spec = (
+            prediction_type = string(typeof(spec.prediction_type)),
+            model_type = string(typeof(spec.model_type)),
+            column = spec.column,
             horizon = spec.horizon,
             dataset = typeof(spec.dataset).parameters[1],
             dataset_path = spec.dataset_path,
