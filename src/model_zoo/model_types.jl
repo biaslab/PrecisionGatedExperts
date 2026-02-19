@@ -74,3 +74,39 @@ function parse_priors(::Hierarchical, cfg::Dict, n_forecasters::Int)
 
     return priors
 end
+
+struct Deep end
+
+function parse_priors(::Deep, cfg::Dict, n_forecasters::Int)
+    priors = Dict{Symbol,Any}()
+
+    τ_cfg = cfg["τ"]
+    priors[:τ] = [GammaShapeRate(τ_cfg["shape"], τ_cfg["rate"]) for _ = 1:n_forecasters]
+
+    ρ_cfg = cfg["ρ"]
+    priors[:ρ] = [GammaShapeRate(ρ_cfg["shape"], ρ_cfg["rate"]) for _ = 1:n_forecasters]
+
+    priors[:α] = cfg["α"]["value"]
+
+    w_cfg = cfg["w"]
+    n_features = w_cfg["n_features"]
+    w_type = w_cfg["type"]
+    if w_type == "MvNormalMeanScalePrecision"
+        priors[:w] =
+            [MvNormalMeanScalePrecision(zeros(n_features), w_cfg["scale"]) for _ = 1:n_forecasters]
+    else
+        error("Unknown w prior type: $w_type. Supported: MvNormalMeanScalePrecision")
+    end
+
+    v_cfg = cfg["v"]
+    n_features_v = v_cfg["n_features"]
+    v_type = v_cfg["type"]
+    if v_type == "MvNormalMeanScalePrecision"
+        priors[:v] =
+            [MvNormalMeanScalePrecision(zeros(n_features_v), v_cfg["scale"]) for _ = 1:n_forecasters]
+    else
+        error("Unknown v prior type: $v_type. Supported: MvNormalMeanScalePrecision")
+    end
+
+    return priors
+end
