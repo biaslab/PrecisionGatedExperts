@@ -37,19 +37,25 @@ end
 # This is called when computing the marginal of `in` (γ) given messages from both sides
 # q(γ) ∝ m_in(γ) × m_out(log(γ))  =>  log q(γ) = log m_in(γ) + log m_out(log(γ))
 # We want to project this onto a Gamma distribution for `in` (γ).
-@marginalrule Log(:in) (m_out::UnivariateGaussianDistributionsFamily, m_in::GammaDistributionsFamily) = begin
+@marginalrule Log(:in) (
+    m_out::UnivariateGaussianDistributionsFamily,
+    m_in::GammaDistributionsFamily,
+) = begin
     σ = max(std(m_out), sqrt(eps(Float64)))
     log_normal = LogNormal(mean(m_out), σ)
-    prj = ProjectedTo(Gamma; parameters = ProjectionParameters(
-        strategy = ClosedFormStrategy(),
-        niterations = 50,
-        tolerance = 1e-6,
-        stepsize = ExponentialFamilyProjection.Manopt.ArmijoLinesearch(
-            initial_stepsize = 1e-2,
-            stop_increasing_at_step = 0
+    prj = ProjectedTo(
+        Gamma;
+        parameters = ProjectionParameters(
+            strategy = ClosedFormStrategy(),
+            niterations = 50,
+            tolerance = 1e-6,
+            stepsize = ExponentialFamilyProjection.Manopt.ArmijoLinesearch(
+                initial_stepsize = 1e-2,
+                stop_increasing_at_step = 0,
+            ),
+            direction = ExponentialFamilyProjection.BoundedNormUpdateRule(0.5),
         ),
-        direction = ExponentialFamilyProjection.BoundedNormUpdateRule(0.5)
-    ))
+    )
 
     supplementary = convert(Gamma, m_in)
     α = max(shape(supplementary), sqrt(eps(Float64)))

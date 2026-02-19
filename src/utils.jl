@@ -3,7 +3,8 @@ using Statistics, Random
 using Lux
 using JLD2
 
-export StandardScaler, fit_scaler, scale_inputs, inverse_transform_target, scale_targets, inverse_targets
+export StandardScaler,
+    fit_scaler, scale_inputs, inverse_transform_target, scale_targets, inverse_targets
 export find_dataset_csv, load_ett
 export make_sequences
 export train_val_test_split
@@ -20,8 +21,8 @@ end
 function fit_scaler(X::AbstractArray{<:Real,3})
     f, t, n = size(X)
     X2 = reshape(X, f, t * n)
-    μ = vec(mean(X2; dims=2))
-    σ = vec(std(X2; dims=2, corrected=true)) .+ 1.0f-6
+    μ = vec(mean(X2; dims = 2))
+    σ = vec(std(X2; dims = 2, corrected = true)) .+ 1.0f-6
     return StandardScaler(Float32.(μ), Float32.(σ))
 end
 
@@ -49,7 +50,7 @@ function find_dataset_csv(path::AbstractString)
     if endswith(lowercase(path), ".csv") && isfile(path)
         return path
     elseif isdir(path)
-        csvs = filter(p -> endswith(lowercase(p), ".csv"), readdir(path; join=true))
+        csvs = filter(p -> endswith(lowercase(p), ".csv"), readdir(path; join = true))
         isempty(csvs) && error("No CSV in $(path)")
         return first(csvs)
     else
@@ -62,11 +63,11 @@ function load_jld2_model(path::AbstractString)
     @assert isfile(path) "Model file not found: $(path)"
     return JLD2.jldopen(path, "r") do f
         (
-            model_type=read(f, "model_type"),
-            parameters=read(f, "parameters"),
-            states=read(f, "states"),
-            config=read(f, "config"),
-            meta=read(f, "meta"),
+            model_type = read(f, "model_type"),
+            parameters = read(f, "parameters"),
+            states = read(f, "states"),
+            config = read(f, "config"),
+            meta = read(f, "meta"),
         )
     end
 end
@@ -81,14 +82,15 @@ function load_ett(path::AbstractString)
     return X, feat_cols
 end
 
-function make_sequences(X::AbstractMatrix{<:Real}; seq_len::Int=96, horizon::Int=1)
+function make_sequences(X::AbstractMatrix{<:Real}; seq_len::Int = 96, horizon::Int = 1)
     f, T = size(X)
     last_start = T - seq_len - horizon + 1
-    last_start < 1 && error("Time series too short for seq_len=$(seq_len), horizon=$(horizon)")
+    last_start < 1 &&
+        error("Time series too short for seq_len=$(seq_len), horizon=$(horizon)")
     N = last_start
     X3 = Array{Float32}(undef, f, seq_len, N)
     Y2 = Array{Float32}(undef, f, N)
-    @inbounds for i in 1:N
+    @inbounds for i = 1:N
         s = i
         e = s + seq_len - 1
         @views X3[:, :, i] = Float32.(X[:, s:e])
@@ -97,7 +99,7 @@ function make_sequences(X::AbstractMatrix{<:Real}; seq_len::Int=96, horizon::Int
     return X3, Y2
 end
 
-function train_val_test_split(X, Y; ratios=(0.6, 0.2, 0.2))
+function train_val_test_split(X, Y; ratios = (0.6, 0.2, 0.2))
     N = size(X, 3)
     r1, r2, r3 = ratios
     @assert abs(r1 + r2 + r3 - 1.0) < 1e-6 "Ratios must sum to 1.0"
@@ -110,16 +112,19 @@ function train_val_test_split(X, Y; ratios=(0.6, 0.2, 0.2))
     @assert n_tr + n_va + n_te <= N
     Xtr = X[:, :, 1:n_tr]
     Ytr = Y[:, 1:n_tr]
-    Xva = X[:, :, n_tr+1:n_tr+n_va]
-    Yva = Y[:, n_tr+1:n_tr+n_va]
-    Xte = X[:, :, n_tr+n_va+1:n_tr+n_va+n_te]
-    Yte = Y[:, n_tr+n_va+1:n_tr+n_va+n_te]
+    Xva = X[:, :, (n_tr+1):(n_tr+n_va)]
+    Yva = Y[:, (n_tr+1):(n_tr+n_va)]
+    Xte = X[:, :, (n_tr+n_va+1):(n_tr+n_va+n_te)]
+    Yte = Y[:, (n_tr+n_va+1):(n_tr+n_va+n_te)]
     return Xtr, Ytr, Xva, Yva, Xte, Yte
 end
 
 batches(X, Y, batchsize) = begin
     N = size(X, 3)
-    [(X[:, :, i:min(i + batchsize - 1, N)], Y[:, i:min(i + batchsize - 1, N)]) for i in 1:batchsize:N]
+    [
+        (X[:, :, i:min(i+batchsize-1, N)], Y[:, i:min(i+batchsize-1, N)]) for
+        i = 1:batchsize:N
+    ]
 end
 
 mse(ŷ, y) = mean((ŷ .- y) .^ 2)
@@ -130,17 +135,17 @@ function r2(ŷ, y)
     sst = sum((y .- mean(y)) .^ 2) + eps()
     return 1 .- sse ./ sst
 end
-mape(ŷ, y; ϵ=1.0f-6) = mean(abs.((ŷ .- y) ./ (abs.(y) .+ ϵ))) * 100
-smape(ŷ, y; ϵ=1.0f-6) = mean((2 .* abs.(ŷ .- y)) ./ (abs.(ŷ) .+ abs.(y) .+ ϵ)) * 100
+mape(ŷ, y; ϵ = 1.0f-6) = mean(abs.((ŷ .- y) ./ (abs.(y) .+ ϵ))) * 100
+smape(ŷ, y; ϵ = 1.0f-6) = mean((2 .* abs.(ŷ .- y)) ./ (abs.(ŷ) .+ abs.(y) .+ ϵ)) * 100
 
 function mse_mv(ŷ::AbstractMatrix, y::AbstractMatrix)
     d = size(y, 1)
-    return mean(sum((ŷ .- y) .^ 2; dims=1)) / d
+    return mean(sum((ŷ .- y) .^ 2; dims = 1)) / d
 end
 
 function mae_mv(ŷ::AbstractMatrix, y::AbstractMatrix)
     d = size(y, 1)
-    return mean(sum(abs.(ŷ .- y); dims=1)) / d
+    return mean(sum(abs.(ŷ .- y); dims = 1)) / d
 end
 
 function rmse_mv(ŷ::AbstractMatrix, y::AbstractMatrix)
@@ -150,7 +155,7 @@ end
 function r2_mv(ŷ::AbstractMatrix, y::AbstractMatrix)
     d = size(y, 1)
     r2s = Float64[]
-    for i in 1:d
+    for i = 1:d
         push!(r2s, r2(ŷ[i, :], y[i, :]))
     end
     return mean(r2s)
@@ -159,7 +164,7 @@ end
 function mape_mv(ŷ::AbstractMatrix, y::AbstractMatrix)
     d = size(y, 1)
     m = Float64[]
-    for i in 1:d
+    for i = 1:d
         push!(m, mape(ŷ[i, :], y[i, :]))
     end
     return mean(m)
@@ -168,7 +173,7 @@ end
 function smape_mv(ŷ::AbstractMatrix, y::AbstractMatrix)
     d = size(y, 1)
     m = Float64[]
-    for i in 1:d
+    for i = 1:d
         push!(m, smape(ŷ[i, :], y[i, :]))
     end
     return mean(m)
@@ -181,11 +186,11 @@ function compute_metrics(model, ps, st, X_scaled, Y_scaled, scaler::StandardScal
     ŷ = inverse_targets(scaler, Array(ŷ_scaled))
     y = inverse_targets(scaler, Array(Yd))
     return (
-        mse=mse(ŷ, y),
-        mae=mae(ŷ, y),
-        rmse=rmse(ŷ, y),
-        r2=r2(ŷ, y),
-        mape=mape(ŷ, y),
-        smape=smape(ŷ, y),
+        mse = mse(ŷ, y),
+        mae = mae(ŷ, y),
+        rmse = rmse(ŷ, y),
+        r2 = r2(ŷ, y),
+        mape = mape(ŷ, y),
+        smape = smape(ŷ, y),
     )
 end

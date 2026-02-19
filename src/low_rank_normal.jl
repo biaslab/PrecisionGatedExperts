@@ -23,7 +23,7 @@ Produced by softdot rules. During message product with a prior or accumulator,
 the rank-1 precision is applied via in-place BLAS.syr! rank-1 updates onto
 a dense MvNormalWeightedMeanPrecision.
 """
-struct LowRankNormalWeightedMeanPrecision{T <: Real, V <: AbstractVector{T}}
+struct LowRankNormalWeightedMeanPrecision{T<:Real,V<:AbstractVector{T}}
     xi::V
     u::V
     scale::T
@@ -52,9 +52,14 @@ Base.precision(d::LR) = invcov(d)
 # and all subsequent LR messages update it in-place.
 
 # --- MvNormalWeightedMeanPrecision × LR → in-place syr! ---
-BayesBase.default_prod_rule(::Type{<:MvNormalWeightedMeanPrecision}, ::Type{<:LR}) = PreserveTypeProd(Distribution)
+BayesBase.default_prod_rule(::Type{<:MvNormalWeightedMeanPrecision}, ::Type{<:LR}) =
+    PreserveTypeProd(Distribution)
 
-function BayesBase.prod(::PreserveTypeProd{Distribution}, left::MvNormalWeightedMeanPrecision{T, V, M}, right::LR) where {T, V, M <: Matrix}
+function BayesBase.prod(
+    ::PreserveTypeProd{Distribution},
+    left::MvNormalWeightedMeanPrecision{T,V,M},
+    right::LR,
+) where {T,V,M<:Matrix}
     weightedmean(left) .+= right.xi
     Λ = invcov(left)
     BLAS.syr!('U', right.scale, right.u, Λ)
@@ -62,21 +67,31 @@ function BayesBase.prod(::PreserveTypeProd{Distribution}, left::MvNormalWeighted
     return left
 end
 
-BayesBase.default_prod_rule(::Type{<:LR}, ::Type{<:MvNormalWeightedMeanPrecision}) = PreserveTypeProd(Distribution)
+BayesBase.default_prod_rule(::Type{<:LR}, ::Type{<:MvNormalWeightedMeanPrecision}) =
+    PreserveTypeProd(Distribution)
 
-function BayesBase.prod(::PreserveTypeProd{Distribution}, left::LR, right::MvNormalWeightedMeanPrecision)
+function BayesBase.prod(
+    ::PreserveTypeProd{Distribution},
+    left::LR,
+    right::MvNormalWeightedMeanPrecision,
+)
     return prod(PreserveTypeProd(Distribution), right, left)
 end
 
 # --- MvNormalMeanScalePrecision × LR → allocate dense MvNormalWeightedMeanPrecision ---
-BayesBase.default_prod_rule(::Type{<:MvNormalMeanScalePrecision}, ::Type{<:LR}) = PreserveTypeProd(Distribution)
+BayesBase.default_prod_rule(::Type{<:MvNormalMeanScalePrecision}, ::Type{<:LR}) =
+    PreserveTypeProd(Distribution)
 
-function BayesBase.prod(::PreserveTypeProd{Distribution}, left::MvNormalMeanScalePrecision, right::LR)
+function BayesBase.prod(
+    ::PreserveTypeProd{Distribution},
+    left::MvNormalMeanScalePrecision,
+    right::LR,
+)
     n = length(right.xi)
     T = promote_type(eltype(mean(left)), eltype(right))
     γ = T(BayesBase.scale(left))
     Λ = zeros(T, n, n)
-    @inbounds for i in 1:n
+    @inbounds for i = 1:n
         Λ[i, i] = γ
     end
     BLAS.syr!('U', right.scale, right.u, Λ)
@@ -86,8 +101,13 @@ function BayesBase.prod(::PreserveTypeProd{Distribution}, left::MvNormalMeanScal
     return MvNormalWeightedMeanPrecision(xi, Λ)
 end
 
-BayesBase.default_prod_rule(::Type{<:LR}, ::Type{<:MvNormalMeanScalePrecision}) = PreserveTypeProd(Distribution)
+BayesBase.default_prod_rule(::Type{<:LR}, ::Type{<:MvNormalMeanScalePrecision}) =
+    PreserveTypeProd(Distribution)
 
-function BayesBase.prod(::PreserveTypeProd{Distribution}, left::LR, right::MvNormalMeanScalePrecision)
+function BayesBase.prod(
+    ::PreserveTypeProd{Distribution},
+    left::LR,
+    right::MvNormalMeanScalePrecision,
+)
     return prod(PreserveTypeProd(Distribution), right, left)
 end
