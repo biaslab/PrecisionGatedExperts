@@ -72,7 +72,28 @@ function run_experiment(path_to_yaml::String)
         prediction_iterations,
         save_predictions,
     )
-    return run_experiment(spec)
+    
+    results = run_experiment(spec)
+
+    results_dir = "final_results"
+    mkpath(results_dir)
+    ds_name = typeof(spec.dataset).parameters[1]
+    model_name = lowercase(string(typeof(spec.model_type)))
+    if spec.prediction_type isa Univariate
+        fname = "$(ds_name)_h$(spec.horizon)_$(spec.column)_$(model_name).jld2"
+    else
+        fname = "$(ds_name)_h$(spec.horizon)_multivariate_$(model_name).jld2"
+    end
+    results_path = joinpath(results_dir, fname)
+    save_data = if spec.save_predictions
+        pairs(results)
+    else
+        (k => v for (k, v) in pairs(results) if k !== :predictions_test)
+    end
+    JLD2.jldsave(results_path; save_data...)
+    @info "Results saved" path=results_path save_predictions=spec.save_predictions
+
+    return results
 end
 
 # ---------------------------------------------------------------------------
@@ -367,25 +388,6 @@ function run_static_univariate(spec::ExperimentSpecifier{Univariate,Static})
         ),
     )
 
-    results_dir = "final_results"
-    mkpath(results_dir)
-    ds_name = typeof(spec.dataset).parameters[1]
-    fname = "$(ds_name)_h$(spec.horizon)_$(spec.column)_static.jld2"
-    results_path = joinpath(results_dir, fname)
-    JLD2.jldsave(
-        results_path;
-        γ_posteriors = γ_posteriors,
-        weights = weights,
-        free_energy = free_energy,
-        ensemble_mean = ensemble_mean,
-        ensemble_std = ensemble_std,
-        ensemble_metrics = ensemble_metrics,
-        predictions_test = predictions_test,
-        y_test = y_test,
-        spec = results.spec,
-    )
-    @info "Results saved" path=results_path
-
     return results
 end
 
@@ -516,25 +518,6 @@ function run_static_multivariate(spec::ExperimentSpecifier{Multivariate,Static})
             experts = spec.experts,
         ),
     )
-
-    results_dir = "final_results"
-    mkpath(results_dir)
-    ds_name = typeof(spec.dataset).parameters[1]
-    fname = "$(ds_name)_h$(spec.horizon)_multivariate_static.jld2"
-    results_path = joinpath(results_dir, fname)
-    JLD2.jldsave(
-        results_path;
-        γ_posteriors = γ_posteriors,
-        weights = weights,
-        free_energy = free_energy,
-        ensemble_mean = ensemble_mean,
-        ensemble_std = ensemble_std,
-        ensemble_metrics = ensemble_metrics,
-        predictions_test = predictions_test,
-        y_test = Yte_mat,
-        spec = results.spec,
-    )
-    @info "Results saved" path=results_path
 
     return results
 end
@@ -680,27 +663,6 @@ function run_dynamic_univariate(spec::ExperimentSpecifier{Univariate,Dynamic})
             experts = spec.experts,
         ),
     )
-
-    results_dir = "final_results"
-    mkpath(results_dir)
-    ds_name = typeof(spec.dataset).parameters[1]
-    fname = "$(ds_name)_h$(spec.horizon)_$(spec.column)_dynamic.jld2"
-    results_path = joinpath(results_dir, fname)
-    JLD2.jldsave(
-        results_path;
-        w_posteriors = w_posteriors,
-        τ_posteriors = τ_posteriors,
-        β_posteriors = β_posteriors,
-        γ_test = γ_means_test,
-        free_energy = free_energy,
-        ensemble_mean = ensemble_mean,
-        ensemble_std = ensemble_std,
-        ensemble_metrics = ensemble_metrics,
-        predictions_test = predictions_test,
-        y_test = y_test,
-        spec = results.spec,
-    )
-    @info "Results saved" path=results_path
 
     return results
 end
@@ -858,27 +820,6 @@ function run_dynamic_multivariate(spec::ExperimentSpecifier{Multivariate,Dynamic
         ),
     )
 
-    results_dir = "final_results"
-    mkpath(results_dir)
-    ds_name = typeof(spec.dataset).parameters[1]
-    fname = "$(ds_name)_h$(spec.horizon)_multivariate_dynamic.jld2"
-    results_path = joinpath(results_dir, fname)
-    JLD2.jldsave(
-        results_path;
-        w_posteriors = w_posteriors,
-        τ_posteriors = τ_posteriors,
-        β_posteriors = β_posteriors,
-        γ_test = γ_means_test,
-        free_energy = free_energy,
-        ensemble_mean = ensemble_mean,
-        ensemble_std = ensemble_std,
-        ensemble_metrics = ensemble_metrics,
-        predictions_test = predictions_test,
-        y_test = Yte_mat,
-        spec = results.spec,
-    )
-    @info "Results saved" path=results_path
-
     return results
 end
 
@@ -1031,27 +972,6 @@ function run_hierarchical_univariate(spec::ExperimentSpecifier{Univariate,Hierar
             experts = spec.experts,
         ),
     )
-
-    results_dir = "final_results"
-    mkpath(results_dir)
-    ds_name = typeof(spec.dataset).parameters[1]
-    fname = "$(ds_name)_h$(spec.horizon)_$(spec.column)_hierarchical.jld2"
-    results_path = joinpath(results_dir, fname)
-    JLD2.jldsave(
-        results_path;
-        w_posteriors = w_posteriors,
-        τ_posteriors = τ_posteriors,
-        ρ_posteriors = ρ_posteriors,
-        γ_test = γ_means_test,
-        free_energy = free_energy,
-        ensemble_mean = ensemble_mean,
-        ensemble_std = ensemble_std,
-        ensemble_metrics = ensemble_metrics,
-        predictions_test = predictions_test,
-        y_test = y_test,
-        spec = results.spec,
-    )
-    @info "Results saved" path=results_path
 
     return results
 end
@@ -1212,27 +1132,6 @@ function run_hierarchical_multivariate(spec::ExperimentSpecifier{Multivariate,Hi
             experts = spec.experts,
         ),
     )
-
-    results_dir = "final_results"
-    mkpath(results_dir)
-    ds_name = typeof(spec.dataset).parameters[1]
-    fname = "$(ds_name)_h$(spec.horizon)_multivariate_hierarchical.jld2"
-    results_path = joinpath(results_dir, fname)
-    JLD2.jldsave(
-        results_path;
-        w_posteriors = w_posteriors,
-        τ_posteriors = τ_posteriors,
-        ρ_posteriors = ρ_posteriors,
-        γ_test = γ_means_test,
-        free_energy = free_energy,
-        ensemble_mean = ensemble_mean,
-        ensemble_std = ensemble_std,
-        ensemble_metrics = ensemble_metrics,
-        predictions_test = predictions_test,
-        y_test = Yte_mat,
-        spec = results.spec,
-    )
-    @info "Results saved" path=results_path
 
     return results
 end
