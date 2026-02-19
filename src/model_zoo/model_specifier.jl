@@ -132,7 +132,7 @@ reactant_device() =
     try
         Reactant.default_device()
     catch
-        ; Lux.cpu_device()
+        Lux.cpu_device()
     end
 cpu_dev() = Lux.cpu_device()
 
@@ -191,13 +191,11 @@ function generate_expert_predictions(::Univariate, experts, scaler, Xval_s, Xte_
     @info "Generating expert predictions" n_model_forecasters n_forecasters n_val n_test
     for (i, m) in enumerate(experts)
         model = build_model(m.model_type, m.config)
-        yhat_val =
-            inverse_targets(scaler, predict_unscaled(model, m.parameters, m.states, Xval_s))
-        yhat_te =
-            inverse_targets(scaler, predict_unscaled(model, m.parameters, m.states, Xte_s))
+        yhat_val = predict_unscaled(model, m.parameters, m.states, Xval_s)
+        yhat_te = predict_unscaled(model, m.parameters, m.states, Xte_s)
         predictions_val[i, :] = Float64.(yhat_val[col_idx, :])
         predictions_test[i, :] = Float64.(yhat_te[col_idx, :])
-        @info "Expert ready" index=i model_type=m.model_type
+        @info "Expert ready" index = i model_type = m.model_type
     end
 
     x_last_val_scaled = Float64.(vec(Xval_s[col_idx, end, :]))
@@ -208,8 +206,8 @@ function generate_expert_predictions(::Univariate, experts, scaler, Xval_s, Xte_
     q90_probe = zeros(Float64, size(Xval_s, 1), 1)
     q10_probe[col_idx, 1] = q10_scaled
     q90_probe[col_idx, 1] = q90_scaled
-    q10 = Float64(inverse_targets(scaler, q10_probe)[col_idx, 1])
-    q90 = Float64(inverse_targets(scaler, q90_probe)[col_idx, 1])
+    q10 = Float64(q10_probe[col_idx, 1])
+    q90 = Float64(q90_probe[col_idx, 1])
 
     idx_q10 = n_model_forecasters + 1
     idx_q90 = n_model_forecasters + 2
@@ -217,7 +215,7 @@ function generate_expert_predictions(::Univariate, experts, scaler, Xval_s, Xte_
     predictions_val[idx_q90, :] .= q90
     predictions_test[idx_q10, :] .= q10
     predictions_test[idx_q90, :] .= q90
-    @info "Added constant experts" q10_idx=idx_q10 q90_idx=idx_q90 q10 q90
+    @info "Added constant experts" q10_idx = idx_q10 q90_idx = idx_q90 q10 q90
 
     return predictions_val, predictions_test
 end
@@ -235,24 +233,23 @@ function generate_expert_predictions(::Multivariate, experts, scaler, Xval_s, Xt
     @info "Generating expert predictions (multivariate)" n_model_forecasters n_forecasters n_val n_test
     for (i, m) in enumerate(experts)
         model = build_model(m.model_type, m.config)
-        yhat_val =
-            inverse_targets(scaler, predict_unscaled(model, m.parameters, m.states, Xval_s))
-        yhat_te =
-            inverse_targets(scaler, predict_unscaled(model, m.parameters, m.states, Xte_s))
+        yhat_val = predict_unscaled(model, m.parameters, m.states, Xval_s)
+        yhat_te = predict_unscaled(model, m.parameters, m.states, Xte_s)
         for j = 1:n_val
             predictions_val[i, j] = Float64.(yhat_val[:, j])
         end
         for j = 1:n_test
             predictions_test[i, j] = Float64.(yhat_te[:, j])
         end
-        @info "Expert ready" index=i model_type=m.model_type
+        @info "Expert ready" index = i model_type = m.model_type
     end
 
     x_last_val_scaled = Float64.(Xval_s[:, end, :])
     q10_scaled = [quantile(Float64.(view(x_last_val_scaled, k, :)), 0.1) for k = 1:d]
     q90_scaled = [quantile(Float64.(view(x_last_val_scaled, k, :)), 0.9) for k = 1:d]
-    q10 = vec(Float64.(inverse_targets(scaler, reshape(q10_scaled, :, 1))[:, 1]))
-    q90 = vec(Float64.(inverse_targets(scaler, reshape(q90_scaled, :, 1))[:, 1]))
+    q10 = vec(Float64.(reshape(q10_scaled, :, 1)[:, 1]))
+    q90 = vec(Float64.(reshape(q90_scaled, :, 1)[:, 1]))
+
 
     idx_q10 = n_model_forecasters + 1
     idx_q90 = n_model_forecasters + 2
@@ -264,7 +261,7 @@ function generate_expert_predictions(::Multivariate, experts, scaler, Xval_s, Xt
         predictions_test[idx_q10, j] = copy(q10)
         predictions_test[idx_q90, j] = copy(q90)
     end
-    @info "Added constant experts (multivariate)" q10_idx=idx_q10 q90_idx=idx_q90
+    @info "Added constant experts (multivariate)" q10_idx = idx_q10 q90_idx = idx_q90
 
     return predictions_val, predictions_test
 end
@@ -275,7 +272,7 @@ end
 
 function run_static_univariate(spec::ExperimentSpecifier{Univariate,Static})
     # 1. Load expert models
-    @info "Loading expert models" n=length(spec.experts)
+    @info "Loading expert models" n = length(spec.experts)
     experts = map(load_jld2_model, spec.experts)
     base_meta = experts[1].meta
 
@@ -295,9 +292,11 @@ function run_static_univariate(spec::ExperimentSpecifier{Univariate,Static})
     scaler = base_meta.scaler
     Xval_s = scale_inputs(scaler, Xval)
     Xte_s = scale_inputs(scaler, Xte)
+    Yval_s = scale_targets(scaler, Yval)
+    Yte_s = scale_targets(scaler, Yte)
 
-    y_val = Float64.(Yval[col_idx, :])
-    y_test = Float64.(Yte[col_idx, :])
+    y_val = Float64.(Yval_s[col_idx, :])
+    y_test = Float64.(Yte_s[col_idx, :])
 
     # 3. Generate expert predictions
     predictions_val, predictions_test = generate_expert_predictions(
@@ -332,10 +331,8 @@ function run_static_univariate(spec::ExperimentSpecifier{Univariate,Static})
     @info "Learned precision weights"
     for i = 1:n_forecasters
         mse_i = mse(predictions_val[i, :], y_val)
-        @info "Expert $i" E_γ=round(γ_means[i]; digits = 4) val_MSE=round(mse_i; digits = 6) weight=round(
-            weights[i];
-            digits = 4,
-        )
+        @info "Expert $i" E_γ = round(γ_means[i]; digits = 4) val_MSE =
+            round(mse_i; digits = 6) weight = round(weights[i]; digits = 4)
     end
 
     # 5. Ensemble predictions on test
@@ -397,7 +394,7 @@ end
 
 function run_static_multivariate(spec::ExperimentSpecifier{Multivariate,Static})
     # 1. Load expert models
-    @info "Loading expert models" n=length(spec.experts)
+    @info "Loading expert models" n = length(spec.experts)
     experts = map(load_jld2_model, spec.experts)
     base_meta = experts[1].meta
 
@@ -424,13 +421,15 @@ function run_static_multivariate(spec::ExperimentSpecifier{Multivariate,Static})
     )
     Xval_s = scale_inputs(scaler, Xval)
     Xte_s = scale_inputs(scaler, Xte)
+    Yval_s = scale_targets(scaler, Yval)
+    Yte_s = scale_targets(scaler, Yte)
 
     n_val = size(Xval, 3)
     n_test = size(Xte, 3)
 
     # Ground truth as vectors of vectors (for RxInfer)
-    y_val = [Float64.(Yval[:, j]) for j = 1:n_val]
-    y_test = [Float64.(Yte[:, j]) for j = 1:n_test]
+    y_val = [Float64.(Yval_s[:, j]) for j = 1:n_val]
+    y_test = [Float64.(Yte_s[:, j]) for j = 1:n_test]
 
     # 3. Generate expert predictions
     predictions_val, predictions_test =
@@ -457,15 +456,13 @@ function run_static_multivariate(spec::ExperimentSpecifier{Multivariate,Static})
     weights = γ_means ./ sum(γ_means)
 
     # Per-expert validation MSE (multivariate)
-    Yval_mat = Float64.(Yval)
+    Yval_mat = Float64.(Yval_s)
     @info "Learned precision weights"
     for i = 1:n_forecasters
         pred_mat_i = reduce(hcat, predictions_val[i, :])  # (d, n_val)
         mse_i = mse_mv(pred_mat_i, Yval_mat)
-        @info "Expert $i" E_γ=round(γ_means[i]; digits = 4) val_MSE=round(mse_i; digits = 6) weight=round(
-            weights[i];
-            digits = 4,
-        )
+        @info "Expert $i" E_γ = round(γ_means[i]; digits = 4) val_MSE =
+            round(mse_i; digits = 6) weight = round(weights[i]; digits = 4)
     end
 
     # 5. Ensemble predictions on test
@@ -486,7 +483,7 @@ function run_static_multivariate(spec::ExperimentSpecifier{Multivariate,Static})
     ensemble_std = reduce(hcat, map(std, ensemble_preds))   # (d, n_test)
 
     # 6. Metrics (multivariate)
-    Yte_mat = Float64.(Yte)
+    Yte_mat = Float64.(Yte_s)
     ensemble_metrics = (
         mse = mse_mv(ensemble_mean, Yte_mat),
         mae = mae_mv(ensemble_mean, Yte_mat),
@@ -524,7 +521,7 @@ end
 
 function run_dynamic_univariate(spec::ExperimentSpecifier{Univariate,Dynamic})
     # 1. Load expert models
-    @info "Loading expert models" n=length(spec.experts)
+    @info "Loading expert models" n = length(spec.experts)
     experts = map(load_jld2_model, spec.experts)
     base_meta = experts[1].meta
 
@@ -544,9 +541,11 @@ function run_dynamic_univariate(spec::ExperimentSpecifier{Univariate,Dynamic})
     scaler = base_meta.scaler
     Xval_s = scale_inputs(scaler, Xval)
     Xte_s = scale_inputs(scaler, Xte)
+    Yval_s = scale_targets(scaler, Yval)
+    Yte_s = scale_targets(scaler, Yte)
 
-    y_val = Float64.(Yval[col_idx, :])
-    y_test = Float64.(Yte[col_idx, :])
+    y_val = Float64.(Yval_s[col_idx, :])
+    y_test = Float64.(Yte_s[col_idx, :])
 
     # 3. Generate expert predictions
     predictions_val, predictions_test = generate_expert_predictions(
@@ -594,7 +593,8 @@ function run_dynamic_univariate(spec::ExperimentSpecifier{Univariate,Dynamic})
     for i = 1:n_forecasters
         mse_i = mse(predictions_val[i, :], y_val)
         avg_γ = mean(γ_means_val[i, :])
-        @info "Expert $i" avg_E_γ=round(avg_γ; digits = 4) val_MSE=round(mse_i; digits = 6)
+        @info "Expert $i" avg_E_γ = round(avg_γ; digits = 4) val_MSE =
+            round(mse_i; digits = 6)
     end
 
     # 6. Ensemble predictions on test
@@ -673,7 +673,7 @@ end
 
 function run_dynamic_multivariate(spec::ExperimentSpecifier{Multivariate,Dynamic})
     # 1. Load expert models
-    @info "Loading expert models" n=length(spec.experts)
+    @info "Loading expert models" n = length(spec.experts)
     experts = map(load_jld2_model, spec.experts)
     base_meta = experts[1].meta
 
@@ -700,13 +700,15 @@ function run_dynamic_multivariate(spec::ExperimentSpecifier{Multivariate,Dynamic
     )
     Xval_s = scale_inputs(scaler, Xval)
     Xte_s = scale_inputs(scaler, Xte)
+    Yval_s = scale_targets(scaler, Yval)
+    Yte_s = scale_targets(scaler, Yte)
 
     n_val = size(Xval, 3)
     n_test = size(Xte, 3)
 
     # Ground truth as vectors of vectors (for RxInfer)
-    y_val = [Float64.(Yval[:, j]) for j = 1:n_val]
-    y_test = [Float64.(Yte[:, j]) for j = 1:n_test]
+    y_val = [Float64.(Yval_s[:, j]) for j = 1:n_val]
+    y_test = [Float64.(Yte_s[:, j]) for j = 1:n_test]
 
     # 3. Generate expert predictions
     predictions_val, predictions_test =
@@ -743,13 +745,14 @@ function run_dynamic_multivariate(spec::ExperimentSpecifier{Multivariate,Dynamic
     γ_means_val = mean.(γ_posteriors)
 
     # Per-expert validation MSE (multivariate)
-    Yval_mat = Float64.(Yval)
+    Yval_mat = Float64.(Yval_s)
     @info "Learned dynamic weights on validation"
     for i = 1:n_forecasters
         pred_mat_i = reduce(hcat, predictions_val[i, :])  # (d, n_val)
         mse_i = mse_mv(pred_mat_i, Yval_mat)
         avg_γ = mean(γ_means_val[i, :])
-        @info "Expert $i" avg_E_γ=round(avg_γ; digits = 4) val_MSE=round(mse_i; digits = 6)
+        @info "Expert $i" avg_E_γ = round(avg_γ; digits = 4) val_MSE =
+            round(mse_i; digits = 6)
     end
 
     # 6. Ensemble predictions on test
@@ -785,7 +788,7 @@ function run_dynamic_multivariate(spec::ExperimentSpecifier{Multivariate,Dynamic
     γ_means_test = mean.(γ_test_posteriors)
 
     # 7. Metrics (multivariate)
-    Yte_mat = Float64.(Yte)
+    Yte_mat = Float64.(Yte_s)
     ensemble_metrics = (
         mse = mse_mv(ensemble_mean, Yte_mat),
         mae = mae_mv(ensemble_mean, Yte_mat),
@@ -829,7 +832,7 @@ end
 
 function run_hierarchical_univariate(spec::ExperimentSpecifier{Univariate,Hierarchical})
     # 1. Load expert models
-    @info "Loading expert models" n=length(spec.experts)
+    @info "Loading expert models" n = length(spec.experts)
     experts = map(load_jld2_model, spec.experts)
     base_meta = experts[1].meta
 
@@ -849,9 +852,11 @@ function run_hierarchical_univariate(spec::ExperimentSpecifier{Univariate,Hierar
     scaler = base_meta.scaler
     Xval_s = scale_inputs(scaler, Xval)
     Xte_s = scale_inputs(scaler, Xte)
+    Yval_s = scale_targets(scaler, Yval)
+    Yte_s = scale_targets(scaler, Yte)
 
-    y_val = Float64.(Yval[col_idx, :])
-    y_test = Float64.(Yte[col_idx, :])
+    y_val = Float64.(Yval_s[col_idx, :])
+    y_test = Float64.(Yte_s[col_idx, :])
 
     # 3. Generate expert predictions
     predictions_val, predictions_test = generate_expert_predictions(
@@ -899,7 +904,8 @@ function run_hierarchical_univariate(spec::ExperimentSpecifier{Univariate,Hierar
     for i = 1:n_forecasters
         mse_i = mse(predictions_val[i, :], y_val)
         avg_γ = mean(γ_means_val[i, :])
-        @info "Expert $i" avg_E_γ=round(avg_γ; digits = 4) val_MSE=round(mse_i; digits = 6)
+        @info "Expert $i" avg_E_γ = round(avg_γ; digits = 4) val_MSE =
+            round(mse_i; digits = 6)
     end
 
     # 6. Ensemble predictions on test
@@ -982,7 +988,7 @@ end
 
 function run_hierarchical_multivariate(spec::ExperimentSpecifier{Multivariate,Hierarchical})
     # 1. Load expert models
-    @info "Loading expert models" n=length(spec.experts)
+    @info "Loading expert models" n = length(spec.experts)
     experts = map(load_jld2_model, spec.experts)
     base_meta = experts[1].meta
 
@@ -1009,13 +1015,15 @@ function run_hierarchical_multivariate(spec::ExperimentSpecifier{Multivariate,Hi
     )
     Xval_s = scale_inputs(scaler, Xval)
     Xte_s = scale_inputs(scaler, Xte)
+    Yval_s = scale_targets(scaler, Yval)
+    Yte_s = scale_targets(scaler, Yte)
 
     n_val = size(Xval, 3)
     n_test = size(Xte, 3)
 
     # Ground truth as vectors of vectors (for RxInfer)
-    y_val = [Float64.(Yval[:, j]) for j = 1:n_val]
-    y_test = [Float64.(Yte[:, j]) for j = 1:n_test]
+    y_val = [Float64.(Yval_s[:, j]) for j = 1:n_val]
+    y_test = [Float64.(Yte_s[:, j]) for j = 1:n_test]
 
     # 3. Generate expert predictions
     predictions_val, predictions_test =
@@ -1052,13 +1060,14 @@ function run_hierarchical_multivariate(spec::ExperimentSpecifier{Multivariate,Hi
     γ_means_val = mean.(γ_posteriors)
 
     # Per-expert validation MSE (multivariate)
-    Yval_mat = Float64.(Yval)
+    Yval_mat = Float64.(Yval_s)
     @info "Learned hierarchical weights on validation"
     for i = 1:n_forecasters
         pred_mat_i = reduce(hcat, predictions_val[i, :])
         mse_i = mse_mv(pred_mat_i, Yval_mat)
         avg_γ = mean(γ_means_val[i, :])
-        @info "Expert $i" avg_E_γ=round(avg_γ; digits = 4) val_MSE=round(mse_i; digits = 6)
+        @info "Expert $i" avg_E_γ = round(avg_γ; digits = 4) val_MSE =
+            round(mse_i; digits = 6)
     end
 
     # 6. Ensemble predictions on test
@@ -1098,7 +1107,7 @@ function run_hierarchical_multivariate(spec::ExperimentSpecifier{Multivariate,Hi
     γ_means_test = mean.(γ_test_posteriors)
 
     # 7. Metrics (multivariate)
-    Yte_mat = Float64.(Yte)
+    Yte_mat = Float64.(Yte_s)
     ensemble_metrics = (
         mse = mse_mv(ensemble_mean, Yte_mat),
         mae = mae_mv(ensemble_mean, Yte_mat),
