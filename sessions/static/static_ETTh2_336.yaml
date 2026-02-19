@@ -5,7 +5,7 @@ params:
   dataset: "ETTh2"
   dataset_path: "data/ETTh2.csv"
   horizon: 336
-  inference_iterations: 500
+  inference_iterations: 10
   prediction_iterations: 1
   experts:
     - "models/ETTh2_h336_s96_CNN_enzyme.jld2"
