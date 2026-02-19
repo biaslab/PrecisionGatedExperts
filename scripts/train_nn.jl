@@ -1,727 +1,803 @@
+#!/usr/bin/env julia
+
+# Train LSTM with Lux.jl + Enzyme/Reactant on ETTh1/ETTh2 and save models.
+
+using ADTypes
 using Lux
+using JLD2
+using MLUtils
+using Optimisers
+using Printf
+using Reactant
+using Random
+using Statistics
+using ProbabilisticEnsembling
 
-export TimeSeriesLSTM,
-    TimeSeriesLSTMOneStep,
-    TimeSeriesCNN,
-    TimeSeriesMLP,
-    TimeSeriesNLinear,
-    TimeSeriesNConv,
-    TimeSeriesDLinear,
-    TimeSeriesPatchTST,
-    TimeSeriesTimeMixerPP,
-    build_model
+# -----------------------------------------------------------------------------
+# Loss Function
+# -----------------------------------------------------------------------------
 
-struct TimeSeriesLSTM{L,H} <: Lux.AbstractLuxContainerLayer{(:lstm_cell, :head)}
-    lstm_cell::L
-    head::H
+const lossfn = MSELoss()
+
+function compute_loss(model, ps, st, (x, y))
+    ŷ, st_ = model(x, ps, st)
+    loss = lossfn(ŷ, y)
+    return loss, st_, (; y_pred=ŷ)
 end
 
-function TimeSeriesLSTM(in_dims::Int, hidden_dims::Int, out_dims::Int)
-    return TimeSeriesLSTM(
-        LSTMCell(in_dims => hidden_dims),
-        Chain(Dense(hidden_dims => hidden_dims, relu), Dense(hidden_dims => out_dims)),
-    )
-end
+# -----------------------------------------------------------------------------
+# Training
+# -----------------------------------------------------------------------------
 
-function (m::TimeSeriesLSTM)(
-    x::AbstractArray{T,3},
-    ps::NamedTuple,
-    st::NamedTuple,
-) where {T}
-    x_init, x_rest = Iterators.peel(LuxOps.eachslice(x, Val(2)))
-    (y, carry), st_lstm = m.lstm_cell(x_init, ps.lstm_cell, st.lstm_cell)
-    for x_t in x_rest
-        (y, carry), st_lstm = m.lstm_cell((x_t, carry), ps.lstm_cell, st_lstm)
-    end
-    y, st_head = m.head(y, ps.head, st.head)
-    st = merge(st, (lstm_cell = st_lstm, head = st_head))
-    return y, st
-end
-
-struct TimeSeriesLSTMOneStep{L,H} <: Lux.AbstractLuxContainerLayer{(:lstm_cell, :head)}
-    lstm_cell::L
-    head::H
-    chunk_len::Int
-    n_steps::Int
-end
-
-function TimeSeriesLSTMOneStep(
-    in_dims::Int,
-    seq_len::Int,
-    hidden_dims::Int,
-    out_dims::Int;
-    n_steps::Int = 1,
+function train_lstm(
+    model, train_loader, val_loader;
+    epochs::Int=25,
+    lr::Float32=0.001f0,
+    patience::Int=5,
+    dev=reactant_device()
 )
-    n_steps >= 1 || error("n_steps must be >= 1")
-    (seq_len % n_steps == 0) ||
-        error("seq_len=$(seq_len) must be divisible by n_steps=$(n_steps)")
-    chunk_len = div(seq_len, n_steps)
+    cdev = cpu_device()
 
-    return TimeSeriesLSTMOneStep(
-        LSTMCell((in_dims * chunk_len) => hidden_dims),
-        Chain(Dense(hidden_dims => hidden_dims, relu), Dense(hidden_dims => out_dims)),
-        chunk_len,
-        n_steps,
-    )
-end
+    ps, st = Lux.setup(Random.default_rng(), model) |> dev
+    train_state = Lux.Training.TrainState(model, ps, st, AdamW(lr))
 
-function (m::TimeSeriesLSTMOneStep)(
-    x::AbstractArray{T,3},
-    ps::NamedTuple,
-    st::NamedTuple,
-) where {T}
-    bsz = size(x, 3)
-    if m.n_steps == 1
-        x2 = reshape(x, :, bsz)
-        (y, _), st_lstm = m.lstm_cell(x2, ps.lstm_cell, st.lstm_cell)
+    # Compile model for inference
+    model_compiled = if dev isa ReactantDevice
+        sample_x = first(train_loader)[1]
+        @compile model(sample_x, ps, Lux.testmode(st))
     else
-        x4 = reshape(x, size(x, 1), m.chunk_len, m.n_steps, bsz)
-        x1 = reshape(@view(x4[:, :, 1, :]), :, bsz)
-        (y, carry), st_lstm = m.lstm_cell(x1, ps.lstm_cell, st.lstm_cell)
-        for s = 2:m.n_steps
-            xs = reshape(@view(x4[:, :, s, :]), :, bsz)
-            (y, carry), st_lstm = m.lstm_cell((xs, carry), ps.lstm_cell, st_lstm)
+        model
+    end
+
+    ad = dev isa ReactantDevice ? AutoEnzyme() : AutoZygote()
+
+    best_val_loss = Inf32
+    best_epoch = 0
+    best_ps = cdev(ps)
+    best_st = cdev(st)
+    patience_counter = 0
+
+    for epoch in 1:epochs
+        GC.gc()
+        # Training
+        total_loss = 0.0f0
+        total_samples = 0
+
+        for (x, y) in train_loader
+            GC.gc()
+            (_, loss, _, train_state) = Lux.Training.single_train_step!(
+                ad, lossfn, (x, y), train_state
+            )
+            batch_size = size(y, 2)
+            total_loss += loss * batch_size
+            total_samples += batch_size
+        end
+
+        train_loss = total_loss / total_samples
+
+        # Validation
+        val_loss = 0.0f0
+        val_samples = 0
+        st_ = Lux.testmode(train_state.states)
+
+        for (x, y) in val_loader
+            ŷ, st_ = model_compiled(x, train_state.parameters, st_)
+            batch_size = size(y, 2)
+            val_loss += lossfn(ŷ, y) * batch_size
+            val_samples += batch_size
+        end
+
+        val_loss = val_loss / val_samples
+
+        @printf("Epoch [%3d]: Train Loss %.6f | Val Loss %.6f\n", epoch, train_loss, val_loss)
+
+        # Early stopping check
+        if val_loss < best_val_loss
+            best_val_loss = val_loss
+            best_epoch = epoch
+            best_ps = cdev(train_state.parameters)
+            best_st = cdev(train_state.states)
+            patience_counter = 0
+        else
+            patience_counter += 1
+            if patience_counter >= patience
+                @printf("Early stopping at epoch %d. Best epoch: %d\n", epoch, best_epoch)
+                break
+            end
         end
     end
-    y, st_head = m.head(y, ps.head, st.head)
-    st = merge(st, (lstm_cell = st_lstm, head = st_head))
-    return y, st
-end
 
-struct TimeSeriesCNN{C1,C2,H} <: Lux.AbstractLuxContainerLayer{(:conv1, :conv2, :head)}
-    conv1::C1
-    conv2::C2
-    head::H
-end
-
-function TimeSeriesCNN(
-    in_dims::Int,
-    out_dims::Int;
-    channels::Int = 64,
-    k::Int = 7,
-    stride::Int = 2,
-)
-    return TimeSeriesCNN(
-        Conv((k,), in_dims => channels, relu; pad = (1,), stride = (stride,)),
-        Conv((k,), channels => channels, relu; pad = (1,), stride = (stride,)),
-        Chain(Dense(channels => channels, relu), Dense(channels => out_dims)),
+    return (
+        parameters=best_ps,
+        states=best_st,
+        best_epoch=best_epoch,
+        best_val_mse=best_val_loss
     )
 end
 
-function (m::TimeSeriesCNN)(x::AbstractArray{T,3}, ps::NamedTuple, st::NamedTuple) where {T}
-    x = permutedims(x, (2, 1, 3))
-    x, st1 = m.conv1(x, ps.conv1, st.conv1)
-    x, st2 = m.conv2(x, ps.conv2, st.conv2)
-    x = mean(x; dims = 1)
-    x = reshape(x, size(x, 2), size(x, 3))
-    y, st_head = m.head(x, ps.head, st.head)
-    st = merge(st, (conv1 = st1, conv2 = st2, head = st_head))
-    return y, st
+# -----------------------------------------------------------------------------
+# Data Loading
+# -----------------------------------------------------------------------------
+
+struct LazyWindowDataset
+    X::Matrix{Float32}
+    starts::Vector{Int}
+    scaler::StandardScaler
+    seq_len::Int
+    horizon::Int
 end
 
-struct TimeSeriesMLP{H} <: Lux.AbstractLuxContainerLayer{(:head,)}
-    head::H
+MLUtils.numobs(ds::LazyWindowDataset) = length(ds.starts)
+
+function MLUtils.getobs(ds::LazyWindowDataset, i::Int)
+    s = ds.starts[i]
+    e = s + ds.seq_len - 1
+    t = e + ds.horizon
+
+    μx = reshape(ds.scaler.μ, :, 1)
+    σx = reshape(ds.scaler.σ, :, 1)
+
+    x = @views (ds.X[:, s:e] .- μx) ./ σx
+    y = @views (ds.X[:, t] .- ds.scaler.μ) ./ ds.scaler.σ
+    return Float32.(x), Float32.(y)
 end
 
-function TimeSeriesMLP(
-    in_dims::Int,
+function MLUtils.getobs(ds::LazyWindowDataset, idxs::AbstractVector{<:Integer})
+    f = size(ds.X, 1)
+    b = length(idxs)
+    Xb = Array{Float32}(undef, f, ds.seq_len, b)
+    Yb = Array{Float32}(undef, f, b)
+
+    μ = ds.scaler.μ
+    σ = ds.scaler.σ
+
+    @inbounds for j in 1:b
+        s = ds.starts[idxs[j]]
+        e = s + ds.seq_len - 1
+        t = e + ds.horizon
+        @views Xb[:, :, j] = (ds.X[:, s:e] .- reshape(μ, :, 1)) ./ reshape(σ, :, 1)
+        @views Yb[:, j] = (ds.X[:, t] .- μ) ./ σ
+    end
+    return Xb, Yb
+end
+
+function split_window_starts(T::Int, seq_len::Int, horizon::Int; ratios=(0.6, 0.2, 0.2))
+    N = T - seq_len - horizon + 1
+    N >= 3 || error("Time series too short for seq_len=$(seq_len), horizon=$(horizon).")
+
+    r1, r2, r3 = ratios
+    @assert abs(r1 + r2 + r3 - 1.0) < 1e-6 "Ratios must sum to 1.0"
+
+    # Keep exactly the same counting logic as train_val_test_split in src/utils.jl
+    n_tr = round(Int, N * r1)
+    n_va = round(Int, N * r2)
+    n_te = N - n_tr - n_va
+    n_tr = max(n_tr, 1)
+    n_va = max(n_va, 1)
+    n_te = max(n_te, 1)
+    @assert n_tr + n_va + n_te <= N "Invalid split sizes for N=$(N), ratios=$(ratios)"
+
+    train_starts = collect(1:n_tr)
+    val_starts = collect(n_tr+1:n_tr+n_va)
+    test_starts = collect(n_tr+n_va+1:N)
+    return train_starts, val_starts, test_starts
+end
+
+function compare_old_vs_current_split_counts(
+    T::Int,
     seq_len::Int,
-    out_dims::Int;
-    hidden_dims::Int = 64,
-    depth::Int = 2,
+    horizon::Int,
+    train_starts::Vector{Int},
+    val_starts::Vector{Int},
+    test_starts::Vector{Int};
+    ratios=(0.6, 0.2, 0.2)
 )
-    depth >= 1 || error("depth must be >= 1")
-    layers = Any[Dense(in_dims * seq_len => hidden_dims, relu)]
-    for _ = 2:depth
-        push!(layers, Dense(hidden_dims => hidden_dims, relu))
-    end
-    push!(layers, Dense(hidden_dims => out_dims))
-    return TimeSeriesMLP(Chain(layers...))
-end
+    # Old path count logic:
+    # N = size(make_sequences(X), 3) == T - seq_len - horizon + 1
+    # then train_val_test_split uses round/max as below.
+    N = T - seq_len - horizon + 1
+    r1, r2, r3 = ratios
+    @assert abs(r1 + r2 + r3 - 1.0) < 1e-6 "Ratios must sum to 1.0"
+    old_train = max(round(Int, N * r1), 1)
+    old_val = max(round(Int, N * r2), 1)
+    old_test = max(N - old_train - old_val, 1)
+    @assert old_train + old_val + old_test <= N "Old split logic is invalid for this configuration."
 
-function (m::TimeSeriesMLP)(x::AbstractArray{T,3}, ps::NamedTuple, st::NamedTuple) where {T}
-    x2 = reshape(x, :, size(x, 3))
-    y, st_head = m.head(x2, ps.head, st.head)
-    st = merge(st, (head = st_head,))
-    return y, st
-end
+    new_train = length(train_starts)
+    new_val = length(val_starts)
+    new_test = length(test_starts)
 
-struct TimeSeriesNLinear{H} <: Lux.AbstractLuxContainerLayer{(:head,)}
-    head::H
-    in_dims::Int
-    seq_len::Int
-    out_dims::Int
-end
-
-function TimeSeriesNLinear(in_dims::Int, seq_len::Int, out_dims::Int; bias::Bool = true)
-    in_dims == out_dims || error(
-        "TimeSeriesNLinear is channel-independent and requires out_dims == in_dims. Got in_dims=$(in_dims), out_dims=$(out_dims).",
-    )
-    return TimeSeriesNLinear(
-        Dense(seq_len => 1; use_bias = bias),
-        in_dims,
-        seq_len,
-        out_dims,
+    same = (old_train == new_train) && (old_val == new_val) && (old_test == new_test)
+    return (
+        same=same,
+        old=(train=old_train, val=old_val, test=old_test),
+        new=(train=new_train, val=new_val, test=new_test),
+        total_windows=N
     )
 end
 
-function (m::TimeSeriesNLinear)(
-    x::AbstractArray{T,3},
-    ps::NamedTuple,
-    st::NamedTuple,
-) where {T}
-    size(x, 1) == m.in_dims || error("Expected in_dims=$(m.in_dims), got $(size(x, 1)).")
-    size(x, 2) == m.seq_len || error("Expected seq_len=$(m.seq_len), got $(size(x, 2)).")
+function fit_scaler_from_starts(X::Matrix{Float32}, starts::Vector{Int}, seq_len::Int)
+    f = size(X, 1)
+    total = length(starts) * seq_len
+    μ = zeros(Float32, f)
 
-    f = size(x, 1)
-    bsz = size(x, 3)
-    x_last = @view x[:, m.seq_len, :]                # (F, B)
-    x_norm = x .- reshape(x_last, f, 1, bsz)         # (F, T, B)
-
-    # Apply shared Dense(seq_len=>1) independently per channel.
-    x2 = reshape(permutedims(x_norm, (2, 1, 3)), m.seq_len, :)
-    y2, st_head = m.head(x2, ps.head, st.head)       # (1, F*B)
-    y = reshape(y2, 1, f, bsz)
-    y = reshape(permutedims(y, (2, 1, 3)), f, bsz)   # (F, B)
-    y .+= x_last
-
-    st = merge(st, (head = st_head,))
-    return y, st
-end
-
-struct TimeSeriesNConv{C} <: Lux.AbstractLuxContainerLayer{(:conv,)}
-    conv::C
-    in_dims::Int
-    seq_len::Int
-    out_dims::Int
-    kernel_size::Int
-end
-
-function TimeSeriesNConv(in_dims::Int, seq_len::Int, out_dims::Int; kernel_size::Int = 25)
-    in_dims == out_dims || error(
-        "TimeSeriesNConv is channel-independent and requires out_dims == in_dims. Got in_dims=$(in_dims), out_dims=$(out_dims).",
-    )
-    kernel_size >= 1 || error("kernel_size must be >= 1")
-    isodd(kernel_size) || error("kernel_size must be odd, got $(kernel_size)")
-    pad = (kernel_size ÷ 2,)
-    # Depthwise temporal convolution: one independent kernel per channel (no channel mixing).
-    return TimeSeriesNConv(
-        Conv((kernel_size,), in_dims => out_dims; pad = pad, groups = in_dims),
-        in_dims,
-        seq_len,
-        out_dims,
-        kernel_size,
-    )
-end
-
-function (m::TimeSeriesNConv)(
-    x::AbstractArray{T,3},
-    ps::NamedTuple,
-    st::NamedTuple,
-) where {T}
-    size(x, 1) == m.in_dims || error("Expected in_dims=$(m.in_dims), got $(size(x, 1)).")
-    size(x, 2) == m.seq_len || error("Expected seq_len=$(m.seq_len), got $(size(x, 2)).")
-
-    f = size(x, 1)
-    bsz = size(x, 3)
-    x_last = @view x[:, m.seq_len, :]                      # (F, B)
-    x_norm = x .- reshape(x_last, f, 1, bsz)               # (F, T, B)
-
-    # Channel-independent (depthwise) temporal conv over (T, F, B).
-    x2 = permutedims(x_norm, (2, 1, 3))                      # (T, F, B)
-    y2, st_conv = m.conv(x2, ps.conv, st.conv)               # (T, F, B)
-    y = @view(y2[m.seq_len, :, :])                            # (F, B)
-    y .+= x_last
-
-    st = merge(st, (conv = st_conv,))
-    return y, st
-end
-
-struct TimeSeriesDLinear{HT,HS} <:
-       Lux.AbstractLuxContainerLayer{(:trend_head, :seasonal_head)}
-    trend_head::HT
-    seasonal_head::HS
-    in_dims::Int
-    seq_len::Int
-    out_dims::Int
-    kernel_size::Int
-end
-
-function TimeSeriesDLinear(
-    in_dims::Int,
-    seq_len::Int,
-    out_dims::Int;
-    kernel_size::Int = 25,
-    bias::Bool = true,
-)
-    in_dims == out_dims || error(
-        "TimeSeriesDLinear is channel-independent and requires out_dims == in_dims. Got in_dims=$(in_dims), out_dims=$(out_dims).",
-    )
-    kernel_size >= 1 || error("kernel_size must be >= 1")
-    isodd(kernel_size) || error("kernel_size must be odd, got $(kernel_size)")
-    return TimeSeriesDLinear(
-        Dense(seq_len => 1; use_bias = bias),
-        Dense(seq_len => 1; use_bias = bias),
-        in_dims,
-        seq_len,
-        out_dims,
-        kernel_size,
-    )
-end
-
-function moving_average_3d(x::AbstractArray{T,3}, kernel_size::Int) where {T}
-    f, tlen, bsz = size(x)
-    h = (kernel_size - 1) ÷ 2
-    trend = similar(x)
-
-    @inbounds for t = 1:tlen
-        trend[:, t, :] .= zero(T)
-        for o = (-h):h
-            src_t = clamp(t + o, 1, tlen)
-            trend[:, t, :] .+= x[:, src_t, :]
-        end
-        trend[:, t, :] ./= T(kernel_size)
-    end
-
-    return trend
-end
-
-function feature_layer_norm(x::AbstractArray{T,3}; eps::T = T(1.0f-5)) where {T<:Real}
-    μ = mean(x; dims = 1)
-    xc = x .- μ
-    σ2 = mean(xc .* xc; dims = 1)
-    return xc ./ sqrt.(σ2 .+ eps)
-end
-
-function downsample_mean(x::AbstractArray{T,3}, factor::Int) where {T}
-    factor >= 1 || error("downsample factor must be >= 1")
-    factor == 1 && return x
-
-    f, tlen, bsz = size(x)
-    tnew = max(1, fld(tlen, factor))
-    y = Array{T}(undef, f, tnew, bsz)
-
-    @inbounds for i = 1:tnew
-        s = (i - 1) * factor + 1
-        e = min(i * factor, tlen)
-        yi = dropdims(mean(@view(x[:, s:e, :]); dims = 2); dims = 2)
-        y[:, i, :] .= yi
-    end
-
-    return y
-end
-
-function upsample_repeat_to(x::AbstractArray{T,3}, target_len::Int, factor::Int) where {T}
-    factor >= 1 || error("upsample factor must be >= 1")
-    x_rep = factor == 1 ? x : repeat(x; inner = (1, factor, 1))
-    tcur = size(x_rep, 2)
-    if tcur == target_len
-        return x_rep
-    elseif tcur > target_len
-        return @view x_rep[:, 1:target_len, :]
-    else
-        pad = target_len - tcur
-        last = @view x_rep[:, tcur:tcur, :]
-        return cat(x_rep, repeat(last; inner = (1, pad, 1)); dims = 2)
-    end
-end
-
-function sinusoidal_positional_encoding(d_model::Int, n_tokens::Int, ::Type{T}) where {T<:Real}
-    pe = Array{T}(undef, d_model, n_tokens, 1)
-    @inbounds for p = 1:n_tokens
-        pos = T(p - 1)
-        for i = 1:d_model
-            k = div(i - 1, 2)
-            denom = T(10000.0)^(T(2 * k) / T(d_model))
-            angle = pos / denom
-            pe[i, p, 1] = isodd(i) ? sin(angle) : cos(angle)
+    # Accumulate in the same column-wise traversal order as reshape(Xtr, f, :).
+    for s in starts
+        for off in 0:seq_len-1
+            t = s + off
+            @inbounds @views μ .+= X[:, t]
         end
     end
-    return pe
+    μ ./= Float32(total)
+
+    # Unbiased variance (corrected=true), then add epsilon exactly like old scaler.
+    ss = zeros(Float32, f)
+    for s in starts
+        for off in 0:seq_len-1
+            t = s + off
+            @inbounds @views begin
+                d = X[:, t] .- μ
+                ss .+= d .* d
+            end
+        end
+    end
+    σ = sqrt.(ss ./ Float32(max(total - 1, 1))) .+ 1.0f-6
+
+    return StandardScaler(μ, σ)
 end
 
-function (m::TimeSeriesDLinear)(
-    x::AbstractArray{T,3},
-    ps::NamedTuple,
-    st::NamedTuple,
-) where {T}
-    size(x, 1) == m.in_dims || error("Expected in_dims=$(m.in_dims), got $(size(x, 1)).")
-    size(x, 2) == m.seq_len || error("Expected seq_len=$(m.seq_len), got $(size(x, 2)).")
-
-    f = size(x, 1)
-    bsz = size(x, 3)
-    trend = moving_average_3d(x, m.kernel_size)
-    seasonal = x .- trend
-
-    trend2 = reshape(permutedims(trend, (2, 1, 3)), m.seq_len, :)
-    seasonal2 = reshape(permutedims(seasonal, (2, 1, 3)), m.seq_len, :)
-
-    y_trend2, st_trend = m.trend_head(trend2, ps.trend_head, st.trend_head)
-    y_seasonal2, st_seasonal =
-        m.seasonal_head(seasonal2, ps.seasonal_head, st.seasonal_head)
-
-    y_trend = reshape(permutedims(reshape(y_trend2, 1, f, bsz), (2, 1, 3)), f, bsz)
-    y_seasonal = reshape(permutedims(reshape(y_seasonal2, 1, f, bsz), (2, 1, 3)), f, bsz)
-    y = y_trend .+ y_seasonal
-
-    st = merge(st, (trend_head = st_trend, seasonal_head = st_seasonal))
-    return y, st
-end
-
-struct PatchTSTEncoderBlock{A,F1,F2} <:
-       Lux.AbstractLuxContainerLayer{(:self_attn, :ffn1, :ffn2)}
-    self_attn::A
-    ffn1::F1
-    ffn2::F2
-end
-
-function PatchTSTEncoderBlock(d_model::Int; n_heads::Int = 4, ff_dim::Int = 128)
-    d_model >= 1 || error("d_model must be >= 1")
-    n_heads >= 1 || error("n_heads must be >= 1")
-    ff_dim >= 1 || error("ff_dim must be >= 1")
-    return PatchTSTEncoderBlock(
-        MultiHeadAttention(
-            d_model;
-            nheads = n_heads,
-            attention_dropout_probability = 0.0f0,
-        ),
-        Dense(d_model => ff_dim, relu),
-        Dense(ff_dim => d_model),
-    )
-end
-
-function (m::PatchTSTEncoderBlock)(
-    x::AbstractArray{T,3},
-    ps::NamedTuple,
-    st::NamedTuple,
-) where {T<:Real}
-    x_ln1 = feature_layer_norm(x)
-    attn_out, st_attn = m.self_attn((x_ln1, x_ln1, x_ln1), ps.self_attn, st.self_attn)
-    x_res1 = x .+ attn_out[1]
-
-    x_ln2 = feature_layer_norm(x_res1)
-    ff1, st_ff1 = m.ffn1(x_ln2, ps.ffn1, st.ffn1)
-    ff2, st_ff2 = m.ffn2(ff1, ps.ffn2, st.ffn2)
-    y = x_res1 .+ ff2
-
-    st = merge(st, (self_attn = st_attn, ffn1 = st_ff1, ffn2 = st_ff2))
-    return y, st
-end
-
-struct TimeSeriesPatchTST{E,B,H} <:
-       Lux.AbstractLuxContainerLayer{(:patch_embed, :encoder, :head)}
-    patch_embed::E
-    encoder::B
-    head::H
-    in_dims::Int
-    seq_len::Int
-    out_dims::Int
-    patch_len::Int
-    stride::Int
-    d_model::Int
-    n_patches::Int
-    n_layers::Int
-end
-
-function TimeSeriesPatchTST(
-    in_dims::Int,
+function materialize_scaled_windows(
+    X::Matrix{Float32},
+    starts::Vector{Int},
+    scaler::StandardScaler;
     seq_len::Int,
-    out_dims::Int;
-    patch_len::Int = 16,
-    stride::Int = 8,
-    d_model::Int = 64,
-    n_heads::Int = 4,
-    n_layers::Int = 2,
-    ff_dim::Int = 128,
+    horizon::Int
 )
-    in_dims == out_dims || error(
-        "TimeSeriesPatchTST uses channel-independent heads and requires out_dims == in_dims. Got in_dims=$(in_dims), out_dims=$(out_dims).",
-    )
-    patch_len >= 1 || error("patch_len must be >= 1")
-    stride >= 1 || error("stride must be >= 1")
-    n_heads >= 1 || error("n_heads must be >= 1")
-    n_layers >= 1 || error("n_layers must be >= 1")
-    (d_model % n_heads == 0) ||
-        error("d_model=$(d_model) must be divisible by n_heads=$(n_heads)")
-    patch_len <= seq_len || error("patch_len=$(patch_len) must be <= seq_len=$(seq_len)")
+    f = size(X, 1)
+    n = length(starts)
+    X3 = Array{Float32}(undef, f, seq_len, n)
+    Y2 = Array{Float32}(undef, f, n)
+    μ = scaler.μ
+    σ = scaler.σ
 
-    n_patches = Int(fld(seq_len - patch_len, stride)) + 1
-    n_patches >= 1 || error("No patches generated. Check patch_len and stride.")
-
-    blocks = ntuple(
-        _ -> PatchTSTEncoderBlock(d_model; n_heads = n_heads, ff_dim = ff_dim),
-        n_layers,
-    )
-
-    return TimeSeriesPatchTST(
-        Dense(patch_len => d_model),
-        Chain(blocks...),
-        Chain(Dense(d_model * n_patches => ff_dim, relu), Dense(ff_dim => 1)),
-        in_dims,
-        seq_len,
-        out_dims,
-        patch_len,
-        stride,
-        d_model,
-        n_patches,
-        n_layers,
-    )
-end
-
-function (m::TimeSeriesPatchTST)(
-    x::AbstractArray{T,3},
-    ps::NamedTuple,
-    st::NamedTuple,
-) where {T}
-    size(x, 1) == m.in_dims || error("Expected in_dims=$(m.in_dims), got $(size(x, 1)).")
-    size(x, 2) == m.seq_len || error("Expected seq_len=$(m.seq_len), got $(size(x, 2)).")
-
-    f = size(x, 1)
-    bsz = size(x, 3)
-
-    patches = Array{T}(undef, m.patch_len, m.n_patches, f * bsz)
-    @inbounds for p = 1:m.n_patches
-        s = 1 + (p - 1) * m.stride
-        e = s + m.patch_len - 1
-        xt = permutedims(@view(x[:, s:e, :]), (2, 1, 3))
-        patches[:, p, :] .= reshape(xt, m.patch_len, :)
+    @inbounds for i in 1:n
+        s = starts[i]
+        e = s + seq_len - 1
+        t = e + horizon
+        @views X3[:, :, i] = (X[:, s:e] .- reshape(μ, :, 1)) ./ reshape(σ, :, 1)
+        @views Y2[:, i] = (X[:, t] .- μ) ./ σ
     end
 
-    patch2 = reshape(patches, m.patch_len, :)
-    emb2, st_patch = m.patch_embed(patch2, ps.patch_embed, st.patch_embed)
-    tokens = reshape(emb2, m.d_model, m.n_patches, :)
-    pos = sinusoidal_positional_encoding(m.d_model, m.n_patches, T)
-    tokens = tokens .+ pos
-    enc, st_enc = m.encoder(tokens, ps.encoder, st.encoder)
-
-    # Channel-independent forecasting head from patch tokens.
-    flat = reshape(enc, m.d_model * m.n_patches, :)
-    y_ch, st_head = m.head(flat, ps.head, st.head)
-    y = reshape(y_ch, f, bsz)
-
-    st = merge(st, (patch_embed = st_patch, encoder = st_enc, head = st_head))
-    return y, st
+    return X3, Y2
 end
 
-struct TimeSeriesTimeMixerPP{S1,S2,S3,T1,T2,T3,C,H} <: Lux.AbstractLuxContainerLayer{(
-    :seasonal_mixer_1,
-    :seasonal_mixer_2,
-    :seasonal_mixer_3,
-    :trend_mixer_1,
-    :trend_mixer_2,
-    :trend_mixer_3,
-    :channel_mixer,
-    :head,
-)}
-    seasonal_mixer_1::S1
-    seasonal_mixer_2::S2
-    seasonal_mixer_3::S3
-    trend_mixer_1::T1
-    trend_mixer_2::T2
-    trend_mixer_3::T3
-    channel_mixer::C
-    head::H
-    in_dims::Int
-    seq_len::Int
-    out_dims::Int
-    hidden_dims::Int
-    kernel_sizes::NTuple{3,Int}
-end
-
-function TimeSeriesTimeMixerPP(
-    in_dims::Int,
+function create_dataloaders(
+    X::Matrix{Float32},
+    train_starts::Vector{Int},
+    val_starts::Vector{Int},
+    scaler::StandardScaler;
     seq_len::Int,
-    out_dims::Int;
-    hidden_dims::Int = 128,
-    kernel_sizes::NTuple{3,Int} = (5, 13, 25),
+    horizon::Int,
+    batchsize::Int=128,
+    dev=reactant_device()
 )
-    for k in kernel_sizes
-        k >= 1 || error("kernel_size must be >= 1, got $(k)")
-        isodd(k) || error("kernel_size must be odd, got $(k)")
-    end
-    t1 = seq_len
-    t2 = max(1, fld(seq_len, 2))
-    t3 = max(1, fld(seq_len, 4))
-    channel_hidden = max(8, hidden_dims ÷ 2)
+    train_ds = LazyWindowDataset(X, train_starts, scaler, seq_len, horizon)
+    val_ds = LazyWindowDataset(X, val_starts, scaler, seq_len, horizon)
 
-    return TimeSeriesTimeMixerPP(
-        Chain(Dense(t1 => hidden_dims, relu), Dense(hidden_dims => t1)),
-        Chain(Dense(t2 => hidden_dims, relu), Dense(hidden_dims => t2)),
-        Chain(Dense(t3 => hidden_dims, relu), Dense(hidden_dims => t3)),
-        Chain(Dense(t1 => hidden_dims, relu), Dense(hidden_dims => t1)),
-        Chain(Dense(t2 => hidden_dims, relu), Dense(hidden_dims => t2)),
-        Chain(Dense(t3 => hidden_dims, relu), Dense(hidden_dims => t3)),
-        Chain(Dense(in_dims => channel_hidden, relu), Dense(channel_hidden => in_dims)),
-        Chain(
-            Dense(in_dims * seq_len => hidden_dims, relu),
-            Dense(hidden_dims => out_dims),
-        ),
-        in_dims,
-        seq_len,
-        out_dims,
-        hidden_dims,
-        kernel_sizes,
-    )
+    train_loader = DataLoader(train_ds; batchsize=batchsize, shuffle=true, partial=false) |> dev
+    val_loader = DataLoader(val_ds; batchsize=batchsize, shuffle=false, partial=false) |> dev
+    return train_loader, val_loader
 end
 
-function (m::TimeSeriesTimeMixerPP)(
-    x::AbstractArray{T,3},
-    ps::NamedTuple,
-    st::NamedTuple,
-) where {T}
-    size(x, 1) == m.in_dims || error("Expected in_dims=$(m.in_dims), got $(size(x, 1)).")
-    size(x, 2) == m.seq_len || error("Expected seq_len=$(m.seq_len), got $(size(x, 2)).")
+# -----------------------------------------------------------------------------
+# Metrics
+# -----------------------------------------------------------------------------
 
-    f = size(x, 1)
-    bsz = size(x, 3)
+function compute_test_metrics(model, ps, st, Xte, Yte, scaler; dev=reactant_device())
+    cdev = cpu_device()
 
-    x1 = x
-    x2 = downsample_mean(x, 2)
-    x3 = downsample_mean(x, 4)
+    Xte_d = dev(Float32.(Xte))
+    st_test = Lux.testmode(st) |> dev
+    ps_d = dev(ps)
 
-    k1, k2, k3 = m.kernel_sizes
-    tr1 = moving_average_3d(x1, min(k1, isodd(size(x1, 2)) ? size(x1, 2) : size(x1, 2) - 1))
-    tr2 = moving_average_3d(x2, min(k2, isodd(size(x2, 2)) ? size(x2, 2) : size(x2, 2) - 1))
-    tr3 = moving_average_3d(x3, min(k3, isodd(size(x3, 2)) ? size(x3, 2) : size(x3, 2) - 1))
-    se1 = x1 .- tr1
-    se2 = x2 .- tr2
-    se3 = x3 .- tr3
-
-    se1_2d = reshape(permutedims(se1, (2, 1, 3)), size(se1, 2), :)
-    se2_2d = reshape(permutedims(se2, (2, 1, 3)), size(se2, 2), :)
-    se3_2d = reshape(permutedims(se3, (2, 1, 3)), size(se3, 2), :)
-    tr1_2d = reshape(permutedims(tr1, (2, 1, 3)), size(tr1, 2), :)
-    tr2_2d = reshape(permutedims(tr2, (2, 1, 3)), size(tr2, 2), :)
-    tr3_2d = reshape(permutedims(tr3, (2, 1, 3)), size(tr3, 2), :)
-
-    se1_m_2d, st_se1 = m.seasonal_mixer_1(se1_2d, ps.seasonal_mixer_1, st.seasonal_mixer_1)
-    se2_m_2d, st_se2 = m.seasonal_mixer_2(se2_2d, ps.seasonal_mixer_2, st.seasonal_mixer_2)
-    se3_m_2d, st_se3 = m.seasonal_mixer_3(se3_2d, ps.seasonal_mixer_3, st.seasonal_mixer_3)
-    tr1_m_2d, st_tr1 = m.trend_mixer_1(tr1_2d, ps.trend_mixer_1, st.trend_mixer_1)
-    tr2_m_2d, st_tr2 = m.trend_mixer_2(tr2_2d, ps.trend_mixer_2, st.trend_mixer_2)
-    tr3_m_2d, st_tr3 = m.trend_mixer_3(tr3_2d, ps.trend_mixer_3, st.trend_mixer_3)
-
-    se1_m = permutedims(reshape(se1_m_2d, size(se1, 2), f, bsz), (2, 1, 3))
-    se2_m = permutedims(reshape(se2_m_2d, size(se2, 2), f, bsz), (2, 1, 3))
-    se3_m = permutedims(reshape(se3_m_2d, size(se3, 2), f, bsz), (2, 1, 3))
-    tr1_m = permutedims(reshape(tr1_m_2d, size(tr1, 2), f, bsz), (2, 1, 3))
-    tr2_m = permutedims(reshape(tr2_m_2d, size(tr2, 2), f, bsz), (2, 1, 3))
-    tr3_m = permutedims(reshape(tr3_m_2d, size(tr3, 2), f, bsz), (2, 1, 3))
-
-    se_fused =
-        se1_m .+ upsample_repeat_to(se2_m, m.seq_len, 2) .+
-        upsample_repeat_to(se3_m, m.seq_len, 4)
-    tr_fused =
-        tr1_m .+ upsample_repeat_to(tr2_m, m.seq_len, 2) .+
-        upsample_repeat_to(tr3_m, m.seq_len, 4)
-    x_fused = se_fused .+ tr_fused
-
-    ch_in = reshape(x_fused, f, :)
-    ch_out, st_ch = m.channel_mixer(ch_in, ps.channel_mixer, st.channel_mixer)
-    x_mixed = reshape(ch_out, f, m.seq_len, bsz) .+ x_fused
-
-    flat = reshape(x_mixed, f * m.seq_len, bsz)
-    y, st_head = m.head(flat, ps.head, st.head)
-
-    st = merge(
-        st,
-        (
-            seasonal_mixer_1 = st_se1,
-            seasonal_mixer_2 = st_se2,
-            seasonal_mixer_3 = st_se3,
-            trend_mixer_1 = st_tr1,
-            trend_mixer_2 = st_tr2,
-            trend_mixer_3 = st_tr3,
-            channel_mixer = st_ch,
-            head = st_head,
-        ),
-    )
-    return y, st
-end
-
-function build_model(model_type::Symbol, config)
-    if model_type == :TimeSeriesLSTM
-        return TimeSeriesLSTM(config.input_dim, config.hidden_dim, config.out_dim)
-    elseif model_type == :TimeSeriesLSTMOneStep
-        n_steps = get(config, :n_steps, 1)
-        return TimeSeriesLSTMOneStep(
-            config.input_dim,
-            config.seq_len,
-            config.hidden_dim,
-            config.out_dim;
-            n_steps = n_steps,
-        )
-    elseif model_type == :TimeSeriesCNN
-        channels = get(config, :channels, 64)
-        return TimeSeriesCNN(config.input_dim, config.out_dim; channels = channels)
-    elseif model_type == :TimeSeriesMLP
-        hidden_dims = get(config, :hidden_dim, 64)
-        depth = get(config, :depth, 2)
-        return TimeSeriesMLP(
-            config.input_dim,
-            config.seq_len,
-            config.out_dim;
-            hidden_dims = hidden_dims,
-            depth = depth,
-        )
-    elseif model_type == :TimeSeriesNLinear
-        bias = get(config, :bias, true)
-        return TimeSeriesNLinear(
-            config.input_dim,
-            config.seq_len,
-            config.out_dim;
-            bias = bias,
-        )
-    elseif model_type == :TimeSeriesNConv
-        kernel_size = get(config, :kernel_size, 25)
-        return TimeSeriesNConv(
-            config.input_dim,
-            config.seq_len,
-            config.out_dim;
-            kernel_size = kernel_size,
-        )
-    elseif model_type == :TimeSeriesDLinear
-        kernel_size = get(config, :kernel_size, 25)
-        bias = get(config, :bias, true)
-        return TimeSeriesDLinear(
-            config.input_dim,
-            config.seq_len,
-            config.out_dim;
-            kernel_size = kernel_size,
-            bias = bias,
-        )
-    elseif model_type == :TimeSeriesPatchTST
-        patch_len = get(config, :patch_len, 16)
-        stride = get(config, :stride, 8)
-        d_model = get(config, :d_model, 64)
-        n_heads = get(config, :n_heads, 4)
-        n_layers = get(config, :n_layers, 2)
-        ff_dim = get(config, :ff_dim, 128)
-        return TimeSeriesPatchTST(
-            config.input_dim,
-            config.seq_len,
-            config.out_dim;
-            patch_len = patch_len,
-            stride = stride,
-            d_model = d_model,
-            n_heads = n_heads,
-            n_layers = n_layers,
-            ff_dim = ff_dim,
-        )
-    elseif model_type == :TimeSeriesTimeMixerPP
-        hidden_dims = get(config, :hidden_dim, 128)
-        kernel_sizes = Tuple(get(config, :kernel_sizes, (5, 13, 25)))
-        length(kernel_sizes) == 3 || error(
-            "TimeSeriesTimeMixerPP expects exactly 3 kernel_sizes, got $(kernel_sizes)",
-        )
-        return TimeSeriesTimeMixerPP(
-            config.input_dim,
-            config.seq_len,
-            config.out_dim;
-            hidden_dims = hidden_dims,
-            kernel_sizes = kernel_sizes,
-        )
+    # Compile for test inference
+    model_compiled = if dev isa ReactantDevice
+        @compile model(Xte_d, ps_d, st_test)
     else
-        error("Unknown model_type=$(model_type)")
+        model
     end
+
+    ŷ_sc, _ = model_compiled(Xte_d, ps_d, st_test)
+    ŷ_sc = cdev(ŷ_sc)
+
+    # Inverse transform to original scale
+    ŷ = inverse_targets(scaler, Array(ŷ_sc))
+    y = inverse_targets(scaler, Array(Yte))
+
+    return (
+        mse=mse(ŷ, y),
+        mae=mae(ŷ, y),
+        rmse=rmse(ŷ, y),
+        r2=r2(ŷ, y),
+        mape=mape(ŷ, y)
+    )
+end
+
+# -----------------------------------------------------------------------------
+# Main
+# -----------------------------------------------------------------------------
+
+function main()
+    # Settings
+    data_dir = joinpath("..", "data")
+    models_dir = joinpath("..", "models")
+    mkpath(models_dir)
+
+    datasets = ["ETTh2","ETTh1","exchange_rate"]
+    seq_len = parse(Int, get(ENV, "SEQ_LEN", "96"))
+    horizons = let hs = get(ENV, "HORIZONS", "")
+        h = get(ENV, "HORIZON", "")
+        if !isempty(hs)
+            parse.(Int, split(hs, [',', ';', ' ']; keepempty=false))
+        elseif !isempty(h)
+            [parse(Int, h)]
+        else
+            [96, 192, 336, 720]
+        end
+    end
+
+    epochs = parse(Int, get(ENV, "EPOCHS", "50"))
+    batchsize = parse(Int, get(ENV, "BATCHSIZE", "128"))
+    lr = parse(Float32, get(ENV, "LR", "0.001"))
+    hidden_dim = parse(Int, get(ENV, "HIDDEN", "64"))
+    mlp_hidden = parse(Int, get(ENV, "MLP_HIDDEN", string(hidden_dim)))
+    mlp_depth = parse(Int, get(ENV, "MLP_DEPTH", "2"))
+    cnn_channels = parse(Int, get(ENV, "CNN_CHANNELS", "64"))
+    cnn_kernel = parse(Int, get(ENV, "CNN_KERNEL", "7"))
+    cnn_stride = parse(Int, get(ENV, "CNN_STRIDE", "2"))
+    nconv_kernel = parse(Int, get(ENV, "NCONV_KERNEL", "25"))
+    dlinear_kernel = parse(Int, get(ENV, "DLINEAR_KERNEL", "25"))
+    patchtst_patch_len = parse(Int, get(ENV, "PATCHTST_PATCH_LEN", "16"))
+    patchtst_stride = parse(Int, get(ENV, "PATCHTST_STRIDE", "8"))
+    patchtst_d_model = parse(Int, get(ENV, "PATCHTST_D_MODEL", "64"))
+    patchtst_n_heads = parse(Int, get(ENV, "PATCHTST_N_HEADS", "4"))
+    patchtst_n_layers = parse(Int, get(ENV, "PATCHTST_N_LAYERS", "2"))
+    patchtst_ff_dim = parse(Int, get(ENV, "PATCHTST_FF_DIM", "128"))
+    timemixer_hidden = parse(Int, get(ENV, "TIMEMIXER_HIDDEN", "128"))
+    timemixer_k1 = parse(Int, get(ENV, "TIMEMIXER_K1", "5"))
+    timemixer_k2 = parse(Int, get(ENV, "TIMEMIXER_K2", "13"))
+    timemixer_k3 = parse(Int, get(ENV, "TIMEMIXER_K3", "25"))
+    patience = parse(Int, get(ENV, "PATIENCE", "50"))
+
+    dev = reactant_device()
+    cdev = cpu_device()
+    @info "Using device: $(typeof(dev))"
+
+    for ds in datasets
+        ds_path = joinpath(data_dir, ds)
+        @info "Loading dataset" dataset = ds_path
+
+        if occursin("ETTh", ds)
+            ratio_ds = (0.6, 0.2, 0.2)
+        else
+            ratio_ds = (0.7, 0.1, 0.2)
+        end
+
+        Xmat, feat_cols = load_ett(ds_path)
+        Xmat = Float32.(Xmat)
+        @info "Loaded dataset" n_timesteps = size(Xmat, 2) n_features = length(feat_cols)
+
+        for H in horizons
+            @info "Training models" dataset = ds horizon = H seq_len = seq_len ratio = ratio_ds
+
+            train_starts, val_starts, test_starts = split_window_starts(
+                size(Xmat, 2), seq_len, H; ratios=ratio_ds
+            )
+            split_check = compare_old_vs_current_split_counts(
+                size(Xmat, 2), seq_len, H, train_starts, val_starts, test_starts; ratios=ratio_ds
+            )
+            @info "Split count check" dataset = ds horizon = H total_windows = split_check.total_windows old = split_check.old new = split_check.new same = split_check.same
+            split_check.same || error("Split mismatch detected for $(ds), horizon=$(H). old=$(split_check.old), new=$(split_check.new)")
+
+            scaler = fit_scaler_from_starts(Xmat, train_starts, seq_len)
+            Xte, Yte_sc = materialize_scaled_windows(
+                Xmat, test_starts, scaler; seq_len=seq_len, horizon=H
+            )
+
+            input_dim = size(Xmat, 1)
+            out_dim = input_dim
+
+            @info "Data shapes" input_dim = input_dim out_dim = out_dim train = length(train_starts) val = length(val_starts) test = length(test_starts)
+
+            # @info "Training LSTM" dataset = ds horizon = H seq_len = seq_len
+
+            # lstm_model = TimeSeriesLSTM(input_dim, hidden_dim, out_dim)
+            # lstm_train_loader, lstm_val_loader = create_dataloaders(
+            #     Xmat, train_starts, val_starts, scaler;
+            #     seq_len=seq_len, horizon=H, batchsize=batchsize, dev=dev
+            # )
+
+            # lstm_result = train_lstm(
+            #     lstm_model, lstm_train_loader, lstm_val_loader;
+            #     epochs=epochs,
+            #     lr=lr,
+            #     patience=patience,
+            #     dev=dev
+            # )
+
+            # lstm_test_metrics = compute_test_metrics(
+            #     lstm_model, lstm_result.parameters, lstm_result.states, Xte, Yte_sc, scaler; dev=dev
+            # )
+            # @info "LSTM test metrics" dataset = ds horizon = H lstm_test_metrics...
+
+            # lstm_model_path = joinpath(models_dir, "$(ds)_h$(H)_s$(seq_len)_LSTM_enzyme.jld2")
+            # jldsave(lstm_model_path;
+            #     model_type=:TimeSeriesLSTM,
+            #     parameters=lstm_result.parameters,
+            #     states=lstm_result.states,
+            #     config=(
+            #         input_dim=input_dim,
+            #         hidden_dim=hidden_dim,
+            #         out_dim=out_dim
+            #     ),
+            #     meta=(
+            #         dataset=ds,
+            #         model="LSTM",
+            #         seq_len=seq_len,
+            #         horizon=H,
+            #         features=feat_cols,
+            #         targets=feat_cols,
+            #         scaler=scaler,
+            #         split=(train=ratio_ds[1], val=ratio_ds[2], test=ratio_ds[3]),
+            #         sizes=(train=length(train_starts), val=length(val_starts), test=length(test_starts)),
+            #         val_best=(epoch=lstm_result.best_epoch, mse=lstm_result.best_val_mse),
+            #         test_metrics=lstm_test_metrics
+            #     )
+            # )
+            # @info "LSTM model saved" path = lstm_model_path
+
+            # GC.gc()
+
+            # @info "Training CNN" dataset = ds horizon = H seq_len = seq_len
+
+            # cnn_model = TimeSeriesCNN(input_dim, out_dim; channels=cnn_channels, k=cnn_kernel, stride=cnn_stride)
+            # cnn_train_loader, cnn_val_loader = create_dataloaders(
+            #     Xmat, train_starts, val_starts, scaler;
+            #     seq_len=seq_len, horizon=H, batchsize=batchsize, dev=dev
+            # )
+
+            # cnn_result = train_lstm(
+            #     cnn_model, cnn_train_loader, cnn_val_loader;
+            #     epochs=epochs,
+            #     lr=lr,
+            #     patience=patience,
+            #     dev=dev
+            # )
+
+            # cnn_test_metrics = compute_test_metrics(cnn_model, cnn_result.parameters, cnn_result.states, Xte, Yte_sc, scaler; dev=dev)
+            # @info "CNN test metrics" dataset = ds horizon = H cnn_test_metrics...
+
+            # cnn_model_path = joinpath(models_dir, "$(ds)_h$(H)_s$(seq_len)_CNN_enzyme.jld2")
+            # jldsave(cnn_model_path;
+            #     model_type=:TimeSeriesCNN,
+            #     parameters=cnn_result.parameters,
+            #     states=cnn_result.states,
+            #     config=(
+            #         input_dim=input_dim,
+            #         channels=cnn_channels,
+            #         kernel=cnn_kernel,
+            #         stride=cnn_stride,
+            #         out_dim=out_dim
+            #     ),
+            #     meta=(
+            #         dataset=ds,
+            #         model="CNN1D",
+            #         seq_len=seq_len,
+            #         horizon=H,
+            #         features=feat_cols,
+            #         targets=feat_cols,
+            #         scaler=scaler,
+            #         split=(train=ratio_ds[1], val=ratio_ds[2], test=ratio_ds[3]),
+            #         sizes=(train=length(train_starts), val=length(val_starts), test=length(test_starts)),
+            #         val_best=(epoch=cnn_result.best_epoch, mse=cnn_result.best_val_mse),
+            #         test_metrics=cnn_test_metrics
+            #     )
+            # )
+            # @info "CNN model saved" path = cnn_model_path
+
+            # GC.gc()
+
+            # @info "Training NLinear" dataset = ds horizon = H seq_len = seq_len
+
+            # nlinear_model = TimeSeriesNLinear(input_dim, seq_len, out_dim)
+            # nlinear_train_loader, nlinear_val_loader = create_dataloaders(
+            #     Xmat, train_starts, val_starts, scaler;
+            #     seq_len=seq_len, horizon=H, batchsize=batchsize, dev=dev
+            # )
+
+            # nlinear_result = train_lstm(
+            #     nlinear_model, nlinear_train_loader, nlinear_val_loader;
+            #     epochs=epochs,
+            #     lr=lr,
+            #     patience=patience,
+            #     dev=dev
+            # )
+
+            # nlinear_test_metrics = compute_test_metrics(
+            #     nlinear_model, nlinear_result.parameters, nlinear_result.states, Xte, Yte_sc, scaler; dev=dev
+            # )
+            # @info "NLinear test metrics" dataset = ds horizon = H nlinear_test_metrics...
+
+            # nlinear_model_path = joinpath(models_dir, "$(ds)_h$(H)_s$(seq_len)_MLP_enzyme.jld2")
+            # jldsave(nlinear_model_path;
+            #     model_type=:TimeSeriesNLinear,
+            #     parameters=nlinear_result.parameters,
+            #     states=nlinear_result.states,
+            #     config=(
+            #         input_dim=input_dim,
+            #         seq_len=seq_len,
+            #         bias=true,
+            #         out_dim=out_dim
+            #     ),
+            #     meta=(
+            #         dataset=ds,
+            #         model="NLinear",
+            #         seq_len=seq_len,
+            #         horizon=H,
+            #         features=feat_cols,
+            #         targets=feat_cols,
+            #         scaler=scaler,
+            #         split=(train=ratio_ds[1], val=ratio_ds[2], test=ratio_ds[3]),
+            #         sizes=(train=length(train_starts), val=length(val_starts), test=length(test_starts)),
+            #         val_best=(epoch=nlinear_result.best_epoch, mse=nlinear_result.best_val_mse),
+            #         test_metrics=nlinear_test_metrics
+            #     )
+            # )
+            # @info "NLinear model saved" path = nlinear_model_path
+
+            # GC.gc()
+
+            # @info "Training NConv" dataset = ds horizon = H seq_len = seq_len kernel = nconv_kernel
+
+            # nconv_model = TimeSeriesNConv(input_dim, seq_len, out_dim; kernel_size=nconv_kernel)
+            # nconv_train_loader, nconv_val_loader = create_dataloaders(
+            #     Xmat, train_starts, val_starts, scaler;
+            #     seq_len=seq_len, horizon=H, batchsize=batchsize, dev=dev
+            # )
+
+            # nconv_result = train_lstm(
+            #     nconv_model, nconv_train_loader, nconv_val_loader;
+            #     epochs=epochs,
+            #     lr=lr,
+            #     patience=patience,
+            #     dev=dev
+            # )
+
+            # nconv_test_metrics = compute_test_metrics(
+            #     nconv_model, nconv_result.parameters, nconv_result.states, Xte, Yte_sc, scaler; dev=dev
+            # )
+            # @info "NConv test metrics" dataset = ds horizon = H nconv_test_metrics...
+
+            # nconv_model_path = joinpath(models_dir, "$(ds)_h$(H)_s$(seq_len)_NConv_enzyme.jld2")
+            # jldsave(nconv_model_path;
+            #     model_type=:TimeSeriesNConv,
+            #     parameters=nconv_result.parameters,
+            #     states=nconv_result.states,
+            #     config=(
+            #         input_dim=input_dim,
+            #         seq_len=seq_len,
+            #         kernel_size=nconv_kernel,
+            #         out_dim=out_dim
+            #     ),
+            #     meta=(
+            #         dataset=ds,
+            #         model="NConv",
+            #         seq_len=seq_len,
+            #         horizon=H,
+            #         features=feat_cols,
+            #         targets=feat_cols,
+            #         scaler=scaler,
+            #         split=(train=ratio_ds[1], val=ratio_ds[2], test=ratio_ds[3]),
+            #         sizes=(train=length(train_starts), val=length(val_starts), test=length(test_starts)),
+            #         val_best=(epoch=nconv_result.best_epoch, mse=nconv_result.best_val_mse),
+            #         test_metrics=nconv_test_metrics
+            #     )
+            # )
+            # @info "NConv model saved" path = nconv_model_path
+
+            # GC.gc()
+
+            # @info "Training DLinear" dataset = ds horizon = H seq_len = seq_len kernel = dlinear_kernel
+
+            # dlinear_model = TimeSeriesDLinear(input_dim, seq_len, out_dim; kernel_size=dlinear_kernel)
+            # dlinear_train_loader, dlinear_val_loader = create_dataloaders(
+            #     Xmat, train_starts, val_starts, scaler;
+            #     seq_len=seq_len, horizon=H, batchsize=batchsize, dev=dev
+            # )
+
+            # dlinear_result = train_lstm(
+            #     dlinear_model, dlinear_train_loader, dlinear_val_loader;
+            #     epochs=epochs,
+            #     lr=lr,
+            #     patience=patience,
+            #     dev=dev
+            # )
+
+            # dlinear_test_metrics = compute_test_metrics(
+            #     dlinear_model, dlinear_result.parameters, dlinear_result.states, Xte, Yte_sc, scaler; dev=dev
+            # )
+            # @info "DLinear test metrics" dataset = ds horizon = H dlinear_test_metrics...
+
+            # dlinear_model_path = joinpath(models_dir, "$(ds)_h$(H)_s$(seq_len)_DLinear_enzyme.jld2")
+            # jldsave(dlinear_model_path;
+            #     model_type=:TimeSeriesDLinear,
+            #     parameters=dlinear_result.parameters,
+            #     states=dlinear_result.states,
+            #     config=(
+            #         input_dim=input_dim,
+            #         seq_len=seq_len,
+            #         kernel_size=dlinear_kernel,
+            #         bias=true,
+            #         out_dim=out_dim
+            #     ),
+            #     meta=(
+            #         dataset=ds,
+            #         model="DLinear",
+            #         seq_len=seq_len,
+            #         horizon=H,
+            #         features=feat_cols,
+            #         targets=feat_cols,
+            #         scaler=scaler,
+            #         split=(train=ratio_ds[1], val=ratio_ds[2], test=ratio_ds[3]),
+            #         sizes=(train=length(train_starts), val=length(val_starts), test=length(test_starts)),
+            #         val_best=(epoch=dlinear_result.best_epoch, mse=dlinear_result.best_val_mse),
+            #         test_metrics=dlinear_test_metrics
+            #     )
+            # )
+            # @info "DLinear model saved" path = dlinear_model_path
+
+            GC.gc()
+
+            @info "Training PatchTST" dataset = ds horizon = H seq_len = seq_len patch_len = patchtst_patch_len stride = patchtst_stride d_model = patchtst_d_model n_heads = patchtst_n_heads n_layers = patchtst_n_layers
+
+            patchtst_model = TimeSeriesPatchTST(
+                input_dim,
+                seq_len,
+                out_dim;
+                patch_len=patchtst_patch_len,
+                stride=patchtst_stride,
+                d_model=patchtst_d_model,
+                n_heads=patchtst_n_heads,
+                n_layers=patchtst_n_layers,
+                ff_dim=patchtst_ff_dim
+            )
+            patchtst_train_loader, patchtst_val_loader = create_dataloaders(
+                Xmat, train_starts, val_starts, scaler;
+                seq_len=seq_len, horizon=H, batchsize=batchsize, dev=dev
+            )
+
+            patchtst_result = train_lstm(
+                patchtst_model, patchtst_train_loader, patchtst_val_loader;
+                epochs=epochs,
+                lr=lr,
+                patience=patience,
+                dev=dev
+            )
+
+            patchtst_test_metrics = compute_test_metrics(
+                patchtst_model,
+                patchtst_result.parameters,
+                patchtst_result.states,
+                Xte,
+                Yte_sc,
+                scaler;
+                dev=dev
+            )
+            @info "PatchTST test metrics" dataset = ds horizon = H patchtst_test_metrics...
+
+            patchtst_model_path = joinpath(models_dir, "$(ds)_h$(H)_s$(seq_len)_PatchTST_enzyme.jld2")
+            jldsave(patchtst_model_path;
+                model_type=:TimeSeriesPatchTST,
+                parameters=patchtst_result.parameters,
+                states=patchtst_result.states,
+                config=(
+                    input_dim=input_dim,
+                    seq_len=seq_len,
+                    patch_len=patchtst_patch_len,
+                    stride=patchtst_stride,
+                    d_model=patchtst_d_model,
+                    n_heads=patchtst_n_heads,
+                    n_layers=patchtst_n_layers,
+                    ff_dim=patchtst_ff_dim,
+                    out_dim=out_dim
+                ),
+                meta=(
+                    dataset=ds,
+                    model="PatchTST",
+                    seq_len=seq_len,
+                    horizon=H,
+                    features=feat_cols,
+                    targets=feat_cols,
+                    scaler=scaler,
+                    split=(train=ratio_ds[1], val=ratio_ds[2], test=ratio_ds[3]),
+                    sizes=(train=length(train_starts), val=length(val_starts), test=length(test_starts)),
+                    val_best=(epoch=patchtst_result.best_epoch, mse=patchtst_result.best_val_mse),
+                    test_metrics=patchtst_test_metrics
+                )
+            )
+            @info "PatchTST model saved" path = patchtst_model_path
+
+            GC.gc()
+
+            timemixer_kernels = (timemixer_k1, timemixer_k2, timemixer_k3)
+            @info "Training TimeMixer++" dataset = ds horizon = H seq_len = seq_len hidden = timemixer_hidden kernel_sizes = timemixer_kernels
+
+            timemixer_model = TimeSeriesTimeMixerPP(
+                input_dim,
+                seq_len,
+                out_dim;
+                hidden_dims=timemixer_hidden,
+                kernel_sizes=timemixer_kernels
+            )
+            timemixer_train_loader, timemixer_val_loader = create_dataloaders(
+                Xmat, train_starts, val_starts, scaler;
+                seq_len=seq_len, horizon=H, batchsize=batchsize, dev=dev
+            )
+
+            timemixer_result = train_lstm(
+                timemixer_model, timemixer_train_loader, timemixer_val_loader;
+                epochs=epochs,
+                lr=lr,
+                patience=patience,
+                dev=dev
+            )
+
+            timemixer_test_metrics = compute_test_metrics(
+                timemixer_model,
+                timemixer_result.parameters,
+                timemixer_result.states,
+                Xte,
+                Yte_sc,
+                scaler;
+                dev=dev
+            )
+            @info "TimeMixer++ test metrics" dataset = ds horizon = H timemixer_test_metrics...
+
+            timemixer_model_path = joinpath(models_dir, "$(ds)_h$(H)_s$(seq_len)_TimeMixerPP_enzyme.jld2")
+            jldsave(timemixer_model_path;
+                model_type=:TimeSeriesTimeMixerPP,
+                parameters=timemixer_result.parameters,
+                states=timemixer_result.states,
+                config=(
+                    input_dim=input_dim,
+                    seq_len=seq_len,
+                    hidden_dim=timemixer_hidden,
+                    kernel_sizes=timemixer_kernels,
+                    out_dim=out_dim
+                ),
+                meta=(
+                    dataset=ds,
+                    model="TimeMixer++",
+                    seq_len=seq_len,
+                    horizon=H,
+                    features=feat_cols,
+                    targets=feat_cols,
+                    scaler=scaler,
+                    split=(train=ratio_ds[1], val=ratio_ds[2], test=ratio_ds[3]),
+                    sizes=(train=length(train_starts), val=length(val_starts), test=length(test_starts)),
+                    val_best=(epoch=timemixer_result.best_epoch, mse=timemixer_result.best_val_mse),
+                    test_metrics=timemixer_test_metrics
+                )
+            )
+            @info "TimeMixer++ model saved" path = timemixer_model_path
+
+            GC.gc()
+        end
+    end
+
+    @info "All models saved" directory = models_dir
+end
+
+if abspath(PROGRAM_FILE) == @__FILE__
+    main()
 end
