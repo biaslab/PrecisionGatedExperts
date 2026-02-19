@@ -40,6 +40,7 @@ function parse_model_type(s::String)
     s == "static" && return Static()
     s == "dynamic" && return Dynamic()
     s == "hierarchical" && return Hierarchical()
+    s == "deep" && return Deep()
     error("Unknown model_type: $s")
 end
 
@@ -122,6 +123,10 @@ end
 
 function run_experiment(spec::ExperimentSpecifier{Multivariate,Hierarchical})
     return run_hierarchical_multivariate(spec)
+end
+
+function run_experiment(spec::ExperimentSpecifier{Multivariate,Deep})
+    return run_deep_multivariate(spec)
 end
 
 # ---------------------------------------------------------------------------
@@ -1122,6 +1127,165 @@ function run_hierarchical_multivariate(spec::ExperimentSpecifier{Multivariate,Hi
     # 8. Save results
     results = (
         w_posteriors = w_posteriors,
+        τ_posteriors = τ_posteriors,
+        ρ_posteriors = ρ_posteriors,
+        γ_test = γ_means_test,
+        free_energy = free_energy,
+        ensemble_mean = ensemble_mean,
+        ensemble_std = ensemble_std,
+        ensemble_metrics = ensemble_metrics,
+        predictions_test = predictions_test,
+        y_test = Yte_mat,
+        spec = (
+            prediction_type = string(typeof(spec.prediction_type)),
+            model_type = string(typeof(spec.model_type)),
+            column = nothing,
+            horizon = spec.horizon,
+            dataset = typeof(spec.dataset).parameters[1],
+            dataset_path = spec.dataset_path,
+            experts = spec.experts,
+        ),
+    )
+
+    return results
+end
+
+function run_deep_multivariate(spec::ExperimentSpecifier{Multivariate,Deep})
+    # 1. Load expert models
+    @info "Loading expert models" n = length(spec.experts)
+    experts = map(load_jld2_model, spec.experts)
+    base_meta = experts[1].meta
+
+    # 2. Load raw data & split
+    Xmat, feat_cols = load_dataset(spec.dataset, spec.dataset_path)
+
+    d = length(feat_cols)
+    seq_len = Int(base_meta.seq_len)
+    horizon = Int(base_meta.horizon)
+    X3, Y2 = make_sequences(Xmat; seq_len = seq_len, horizon = horizon)
+
+    split = base_meta.split
+    _, _, Xval, Yval, Xte, Yte =
+        train_val_test_split(X3, Y2; ratios = (split.train, split.val, split.test))
+
+    scaler = base_meta.scaler
+    n_scaler = length(scaler.μ)
+    n_feat = size(Xval, 1)
+    n_scaler == n_feat || error(
+        "Scaler dimension ($n_scaler) from expert model does not match " *
+        "dataset features ($n_feat). The expert was likely trained on a " *
+        "different dataset. Check that `dataset_path` in the YAML matches " *
+        "the experts' training data.",
+    )
+    Xval_s = scale_inputs(scaler, Xval)
+    Xte_s = scale_inputs(scaler, Xte)
+    Yval_s = scale_targets(scaler, Yval)
+    Yte_s = scale_targets(scaler, Yte)
+
+    n_val = size(Xval, 3)
+    n_test = size(Xte, 3)
+
+    y_val = [Float64.(Yval_s[:, j]) for j = 1:n_val]
+    y_test = [Float64.(Yte_s[:, j]) for j = 1:n_test]
+
+    # 3. Generate expert predictions
+    predictions_val, predictions_test =
+        generate_expert_predictions(spec.prediction_type, experts, scaler, Xval_s, Xte_s)
+
+    n_forecasters = size(predictions_val, 1)
+
+    # 4. Construct features from scaled inputs
+    features_val = make_features(Xval_s)
+    features_test = make_features(Xte_s)
+
+    # 5. Fit deep ensemble on validation data
+    @info "Fitting deep multivariate ensemble on validation data" d n_forecasters n_val
+    result = infer(
+        model = multivariate_deep_model(
+            n_forecasters = n_forecasters,
+            n_obs = n_val,
+            priors = spec.priors,
+        ),
+        data = (y = y_val, features = features_val, predictions = predictions_val),
+        constraints = multivariate_deep_constraints(),
+        initialization = multivariate_deep_init(spec.priors),
+        iterations = spec.inference_iterations,
+        free_energy = true,
+        showprogress = true,
+    )
+
+    free_energy = result.free_energy
+    w_posteriors = result.posteriors[:w][end]
+    v_posteriors = result.posteriors[:v][end]
+    τ_posteriors = result.posteriors[:τ][end]
+    ρ_posteriors = result.posteriors[:ρ][end]
+    γ_posteriors = result.posteriors[:γ][end]
+
+    γ_means_val = mean.(γ_posteriors)
+
+    Yval_mat = Float64.(Yval_s)
+    @info "Learned deep weights on validation"
+    for i = 1:n_forecasters
+        pred_mat_i = reduce(hcat, predictions_val[i, :])
+        mse_i = mse_mv(pred_mat_i, Yval_mat)
+        avg_γ = mean(γ_means_val[i, :])
+        @info "Expert $i" avg_E_γ = round(avg_γ; digits = 4) val_MSE =
+            round(mse_i; digits = 6)
+    end
+
+    # 6. Ensemble predictions on test
+    @info "Generating deep ensemble predictions on test"
+    posterior_priors = Dict{Symbol,Any}(
+        :w => w_posteriors,
+        :v => v_posteriors,
+        :τ => τ_posteriors,
+        :ρ => ρ_posteriors,
+        :α => spec.priors[:α],
+    )
+    prediction_array = [missing for _ = 1:n_test]
+
+    infer_test = infer(
+        model = multivariate_deep_model(
+            n_forecasters = n_forecasters,
+            n_obs = n_test,
+            priors = posterior_priors,
+        ),
+        data = (
+            y = prediction_array,
+            features = features_test,
+            predictions = predictions_test,
+        ),
+        constraints = multivariate_deep_constraints(),
+        initialization = multivariate_deep_init(posterior_priors),
+        iterations = spec.prediction_iterations,
+        free_energy = false,
+        showprogress = true,
+    )
+
+    ensemble_preds = infer_test.predictions[:y][end]
+    ensemble_mean = reduce(hcat, map(mean, ensemble_preds))
+    ensemble_std = reduce(hcat, map(std, ensemble_preds))
+
+    γ_test_posteriors = infer_test.posteriors[:γ][end]
+    γ_means_test = mean.(γ_test_posteriors)
+
+    # 7. Metrics
+    Yte_mat = Float64.(Yte_s)
+    ensemble_metrics = (
+        mse = mse_mv(ensemble_mean, Yte_mat),
+        mae = mae_mv(ensemble_mean, Yte_mat),
+        rmse = rmse_mv(ensemble_mean, Yte_mat),
+        r2 = r2_mv(ensemble_mean, Yte_mat),
+        mape = mape_mv(ensemble_mean, Yte_mat),
+        smape = smape_mv(ensemble_mean, Yte_mat),
+    )
+
+    @info "Ensemble test metrics (multivariate)" ensemble_metrics...
+
+    # 8. Save results
+    results = (
+        w_posteriors = w_posteriors,
+        v_posteriors = v_posteriors,
         τ_posteriors = τ_posteriors,
         ρ_posteriors = ρ_posteriors,
         γ_test = γ_means_test,
