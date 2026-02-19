@@ -115,7 +115,7 @@ reactant_device() =
     end
 cpu_dev() = Lux.cpu_device()
 
-function predict_unscaled(model, ps, st, X_scaled; dev=reactant_device())
+function predict_unscaled(model, ps, st, X_scaled; dev = reactant_device())
     Xd = dev(Float32.(X_scaled))
     st_test = Lux.testmode(st) |> dev
     ps_d = dev(ps)
@@ -262,11 +262,11 @@ function run_static_univariate(spec::ExperimentSpecifier{Univariate,Static})
 
     seq_len = Int(base_meta.seq_len)
     horizon = Int(base_meta.horizon)
-    X3, Y2 = make_sequences(Xmat; seq_len=seq_len, horizon=horizon)
+    X3, Y2 = make_sequences(Xmat; seq_len = seq_len, horizon = horizon)
 
     split = base_meta.split
     _, _, Xval, Yval, Xte, Yte =
-        train_val_test_split(X3, Y2; ratios=(split.train, split.val, split.test))
+        train_val_test_split(X3, Y2; ratios = (split.train, split.val, split.test))
 
     scaler = base_meta.scaler
     Xval_s = scale_inputs(scaler, Xval)
@@ -293,13 +293,13 @@ function run_static_univariate(spec::ExperimentSpecifier{Univariate,Static})
     # 4. Fit static ensemble on validation data
     @info "Fitting static ensemble on validation data"
     result = infer(
-        model=univariate_ensemble_precision_model(
-            n_forecasters=n_forecasters,
-            priors=spec.priors,
+        model = univariate_ensemble_precision_model(
+            n_forecasters = n_forecasters,
+            priors = spec.priors,
         ),
-        data=(y=y_val, X=predictions_val),
-        iterations=spec.inference_iterations,
-        free_energy=true,
+        data = (y = y_val, X = predictions_val),
+        iterations = spec.inference_iterations,
+        free_energy = true,
     )
 
     free_energy = result.free_energy
@@ -310,10 +310,8 @@ function run_static_univariate(spec::ExperimentSpecifier{Univariate,Static})
     @info "Learned precision weights"
     for i = 1:n_forecasters
         mse_i = mse(predictions_val[i, :], y_val)
-        @info "Expert $i" E_γ = round(γ_means[i]; digits=4) val_MSE = round(mse_i; digits=6) weight = round(
-            weights[i];
-            digits=4,
-        )
+        @info "Expert $i" E_γ = round(γ_means[i]; digits = 4) val_MSE =
+            round(mse_i; digits = 6) weight = round(weights[i]; digits = 4)
     end
 
     # 5. Ensemble predictions on test
@@ -321,12 +319,12 @@ function run_static_univariate(spec::ExperimentSpecifier{Univariate,Static})
     posterior_priors = Dict{Symbol,Any}(:γ => γ_posteriors)
     prediction_array = [missing for _ = 1:n_test]
     infer_test = infer(
-        model=univariate_ensemble_precision_model(
-            n_forecasters=n_forecasters,
-            priors=posterior_priors,
+        model = univariate_ensemble_precision_model(
+            n_forecasters = n_forecasters,
+            priors = posterior_priors,
         ),
-        data=(y=prediction_array, X=predictions_test),
-        iterations=spec.prediction_iterations,
+        data = (y = prediction_array, X = predictions_test),
+        iterations = spec.prediction_iterations,
     )
 
     ensemble_preds = infer_test.predictions[:y][end]
@@ -335,34 +333,34 @@ function run_static_univariate(spec::ExperimentSpecifier{Univariate,Static})
 
     # 6. Metrics
     ensemble_metrics = (
-        mse=mse(ensemble_mean, y_test),
-        mae=mae(ensemble_mean, y_test),
-        rmse=rmse(ensemble_mean, y_test),
-        r2=r2(ensemble_mean, y_test),
-        mape=mape(ensemble_mean, y_test),
-        smape=smape(ensemble_mean, y_test),
+        mse = mse(ensemble_mean, y_test),
+        mae = mae(ensemble_mean, y_test),
+        rmse = rmse(ensemble_mean, y_test),
+        r2 = r2(ensemble_mean, y_test),
+        mape = mape(ensemble_mean, y_test),
+        smape = smape(ensemble_mean, y_test),
     )
 
     @info "Ensemble test metrics" ensemble_metrics...
 
     # 7. Save results
     results = (
-        γ_posteriors=γ_posteriors,
-        weights=weights,
-        free_energy=free_energy,
-        ensemble_mean=ensemble_mean,
-        ensemble_std=ensemble_std,
-        ensemble_metrics=ensemble_metrics,
-        predictions_test=predictions_test,
-        y_test=y_test,
-        spec=(
-            prediction_type=string(typeof(spec.prediction_type)),
-            model_type=string(typeof(spec.model_type)),
-            column=spec.column,
-            horizon=spec.horizon,
-            dataset=typeof(spec.dataset).parameters[1],
-            dataset_path=spec.dataset_path,
-            experts=spec.experts,
+        γ_posteriors = γ_posteriors,
+        weights = weights,
+        free_energy = free_energy,
+        ensemble_mean = ensemble_mean,
+        ensemble_std = ensemble_std,
+        ensemble_metrics = ensemble_metrics,
+        predictions_test = predictions_test,
+        y_test = y_test,
+        spec = (
+            prediction_type = string(typeof(spec.prediction_type)),
+            model_type = string(typeof(spec.model_type)),
+            column = spec.column,
+            horizon = spec.horizon,
+            dataset = typeof(spec.dataset).parameters[1],
+            dataset_path = spec.dataset_path,
+            experts = spec.experts,
         ),
     )
 
@@ -373,15 +371,15 @@ function run_static_univariate(spec::ExperimentSpecifier{Univariate,Static})
     results_path = joinpath(results_dir, fname)
     JLD2.jldsave(
         results_path;
-        γ_posteriors=γ_posteriors,
-        weights=weights,
-        free_energy=free_energy,
-        ensemble_mean=ensemble_mean,
-        ensemble_std=ensemble_std,
-        ensemble_metrics=ensemble_metrics,
-        predictions_test=predictions_test,
-        y_test=y_test,
-        spec=results.spec,
+        γ_posteriors = γ_posteriors,
+        weights = weights,
+        free_energy = free_energy,
+        ensemble_mean = ensemble_mean,
+        ensemble_std = ensemble_std,
+        ensemble_metrics = ensemble_metrics,
+        predictions_test = predictions_test,
+        y_test = y_test,
+        spec = results.spec,
     )
     @info "Results saved" path = results_path
 
@@ -404,11 +402,11 @@ function run_static_multivariate(spec::ExperimentSpecifier{Multivariate,Static})
     d = length(feat_cols)
     seq_len = Int(base_meta.seq_len)
     horizon = Int(base_meta.horizon)
-    X3, Y2 = make_sequences(Xmat; seq_len=seq_len, horizon=horizon)
+    X3, Y2 = make_sequences(Xmat; seq_len = seq_len, horizon = horizon)
 
     split = base_meta.split
     _, _, Xval, Yval, Xte, Yte =
-        train_val_test_split(X3, Y2; ratios=(split.train, split.val, split.test))
+        train_val_test_split(X3, Y2; ratios = (split.train, split.val, split.test))
 
     scaler = base_meta.scaler
     n_scaler = length(scaler.μ)
@@ -440,14 +438,14 @@ function run_static_multivariate(spec::ExperimentSpecifier{Multivariate,Static})
     # 4. Fit static ensemble on validation data
     @info "Fitting static multivariate ensemble on validation data" d n_forecasters
     result = infer(
-        model=multivariate_ensemble_precision_model(
-            n_forecasters=n_forecasters,
-            priors=spec.priors,
+        model = multivariate_ensemble_precision_model(
+            n_forecasters = n_forecasters,
+            priors = spec.priors,
         ),
-        data=(y=y_val, X=predictions_val),
-        iterations=spec.inference_iterations,
-        free_energy=true,
-        showprogress=true,
+        data = (y = y_val, X = predictions_val),
+        iterations = spec.inference_iterations,
+        free_energy = true,
+        showprogress = true,
     )
 
     free_energy = result.free_energy
@@ -461,10 +459,8 @@ function run_static_multivariate(spec::ExperimentSpecifier{Multivariate,Static})
     for i = 1:n_forecasters
         pred_mat_i = reduce(hcat, predictions_val[i, :])  # (d, n_val)
         mse_i = mse_mv(pred_mat_i, Yval_mat)
-        @info "Expert $i" E_γ = round(γ_means[i]; digits=4) val_MSE = round(mse_i; digits=6) weight = round(
-            weights[i];
-            digits=4,
-        )
+        @info "Expert $i" E_γ = round(γ_means[i]; digits = 4) val_MSE =
+            round(mse_i; digits = 6) weight = round(weights[i]; digits = 4)
     end
 
     # 5. Ensemble predictions on test
@@ -472,12 +468,12 @@ function run_static_multivariate(spec::ExperimentSpecifier{Multivariate,Static})
     posterior_priors = Dict{Symbol,Any}(:γ => γ_posteriors)
     prediction_array = [missing for _ = 1:n_test]
     infer_test = infer(
-        model=multivariate_ensemble_precision_model(
-            n_forecasters=n_forecasters,
-            priors=posterior_priors,
+        model = multivariate_ensemble_precision_model(
+            n_forecasters = n_forecasters,
+            priors = posterior_priors,
         ),
-        data=(y=prediction_array, X=predictions_test),
-        iterations=spec.prediction_iterations,
+        data = (y = prediction_array, X = predictions_test),
+        iterations = spec.prediction_iterations,
     )
 
     ensemble_preds = infer_test.predictions[:y][end]
@@ -487,34 +483,34 @@ function run_static_multivariate(spec::ExperimentSpecifier{Multivariate,Static})
     # 6. Metrics (multivariate)
     Yte_mat = Float64.(Yte_s)
     ensemble_metrics = (
-        mse=mse_mv(ensemble_mean, Yte_mat),
-        mae=mae_mv(ensemble_mean, Yte_mat),
-        rmse=rmse_mv(ensemble_mean, Yte_mat),
-        r2=r2_mv(ensemble_mean, Yte_mat),
-        mape=mape_mv(ensemble_mean, Yte_mat),
-        smape=smape_mv(ensemble_mean, Yte_mat),
+        mse = mse_mv(ensemble_mean, Yte_mat),
+        mae = mae_mv(ensemble_mean, Yte_mat),
+        rmse = rmse_mv(ensemble_mean, Yte_mat),
+        r2 = r2_mv(ensemble_mean, Yte_mat),
+        mape = mape_mv(ensemble_mean, Yte_mat),
+        smape = smape_mv(ensemble_mean, Yte_mat),
     )
 
     @info "Ensemble test metrics (multivariate)" ensemble_metrics...
 
     # 7. Save results
     results = (
-        γ_posteriors=γ_posteriors,
-        weights=weights,
-        free_energy=free_energy,
-        ensemble_mean=ensemble_mean,
-        ensemble_std=ensemble_std,
-        ensemble_metrics=ensemble_metrics,
-        predictions_test=predictions_test,
-        y_test=Yte_mat,
-        spec=(
-            prediction_type=string(typeof(spec.prediction_type)),
-            model_type=string(typeof(spec.model_type)),
-            column=nothing,
-            horizon=spec.horizon,
-            dataset=typeof(spec.dataset).parameters[1],
-            dataset_path=spec.dataset_path,
-            experts=spec.experts,
+        γ_posteriors = γ_posteriors,
+        weights = weights,
+        free_energy = free_energy,
+        ensemble_mean = ensemble_mean,
+        ensemble_std = ensemble_std,
+        ensemble_metrics = ensemble_metrics,
+        predictions_test = predictions_test,
+        y_test = Yte_mat,
+        spec = (
+            prediction_type = string(typeof(spec.prediction_type)),
+            model_type = string(typeof(spec.model_type)),
+            column = nothing,
+            horizon = spec.horizon,
+            dataset = typeof(spec.dataset).parameters[1],
+            dataset_path = spec.dataset_path,
+            experts = spec.experts,
         ),
     )
 
@@ -525,15 +521,15 @@ function run_static_multivariate(spec::ExperimentSpecifier{Multivariate,Static})
     results_path = joinpath(results_dir, fname)
     JLD2.jldsave(
         results_path;
-        γ_posteriors=γ_posteriors,
-        weights=weights,
-        free_energy=free_energy,
-        ensemble_mean=ensemble_mean,
-        ensemble_std=ensemble_std,
-        ensemble_metrics=ensemble_metrics,
-        predictions_test=predictions_test,
-        y_test=Yte_mat,
-        spec=results.spec,
+        γ_posteriors = γ_posteriors,
+        weights = weights,
+        free_energy = free_energy,
+        ensemble_mean = ensemble_mean,
+        ensemble_std = ensemble_std,
+        ensemble_metrics = ensemble_metrics,
+        predictions_test = predictions_test,
+        y_test = Yte_mat,
+        spec = results.spec,
     )
     @info "Results saved" path = results_path
 
@@ -553,11 +549,11 @@ function run_dynamic_univariate(spec::ExperimentSpecifier{Univariate,Dynamic})
 
     seq_len = Int(base_meta.seq_len)
     horizon = Int(base_meta.horizon)
-    X3, Y2 = make_sequences(Xmat; seq_len=seq_len, horizon=horizon)
+    X3, Y2 = make_sequences(Xmat; seq_len = seq_len, horizon = horizon)
 
     split = base_meta.split
     _, _, Xval, Yval, Xte, Yte =
-        train_val_test_split(X3, Y2; ratios=(split.train, split.val, split.test))
+        train_val_test_split(X3, Y2; ratios = (split.train, split.val, split.test))
 
     scaler = base_meta.scaler
     Xval_s = scale_inputs(scaler, Xval)
@@ -589,17 +585,17 @@ function run_dynamic_univariate(spec::ExperimentSpecifier{Univariate,Dynamic})
     # 5. Fit dynamic ensemble on validation data
     @info "Fitting dynamic ensemble on validation data" n_forecasters n_val
     result = infer(
-        model=univariate_dynamic_ensemble(
-            n_forecasters=n_forecasters,
-            n_obs=n_val,
-            priors=spec.priors,
+        model = univariate_dynamic_ensemble(
+            n_forecasters = n_forecasters,
+            n_obs = n_val,
+            priors = spec.priors,
         ),
-        data=(y=y_val, features=features_val, predictions=predictions_val),
-        constraints=univariate_dynamic_ensemble_constraints(),
-        initialization=univariate_dynamic_ensemble_init(spec.priors),
-        iterations=spec.inference_iterations,
-        free_energy=true,
-        showprogress=true,
+        data = (y = y_val, features = features_val, predictions = predictions_val),
+        constraints = univariate_dynamic_ensemble_constraints(),
+        initialization = univariate_dynamic_ensemble_init(spec.priors),
+        iterations = spec.inference_iterations,
+        free_energy = true,
+        showprogress = true,
     )
 
     free_energy = result.free_energy
@@ -614,7 +610,8 @@ function run_dynamic_univariate(spec::ExperimentSpecifier{Univariate,Dynamic})
     for i = 1:n_forecasters
         mse_i = mse(predictions_val[i, :], y_val)
         avg_γ = mean(γ_means_val[i, :])
-        @info "Expert $i" avg_E_γ = round(avg_γ; digits=4) val_MSE = round(mse_i; digits=6)
+        @info "Expert $i" avg_E_γ = round(avg_γ; digits = 4) val_MSE =
+            round(mse_i; digits = 6)
     end
 
     # 6. Ensemble predictions on test
@@ -624,21 +621,21 @@ function run_dynamic_univariate(spec::ExperimentSpecifier{Univariate,Dynamic})
     prediction_array = [missing for _ = 1:n_test]
 
     infer_test = infer(
-        model=univariate_dynamic_ensemble(
-            n_forecasters=n_forecasters,
-            n_obs=n_test,
-            priors=posterior_priors,
+        model = univariate_dynamic_ensemble(
+            n_forecasters = n_forecasters,
+            n_obs = n_test,
+            priors = posterior_priors,
         ),
-        data=(
-            y=prediction_array,
-            features=features_test,
-            predictions=predictions_test,
+        data = (
+            y = prediction_array,
+            features = features_test,
+            predictions = predictions_test,
         ),
-        constraints=univariate_dynamic_ensemble_constraints(),
-        initialization=univariate_dynamic_ensemble_init(posterior_priors),
-        iterations=spec.prediction_iterations,
-        free_energy=false,
-        showprogress=true,
+        constraints = univariate_dynamic_ensemble_constraints(),
+        initialization = univariate_dynamic_ensemble_init(posterior_priors),
+        iterations = spec.prediction_iterations,
+        free_energy = false,
+        showprogress = true,
     )
 
     ensemble_preds = infer_test.predictions[:y][end]
@@ -651,36 +648,36 @@ function run_dynamic_univariate(spec::ExperimentSpecifier{Univariate,Dynamic})
 
     # 7. Metrics
     ensemble_metrics = (
-        mse=mse(ensemble_mean, y_test),
-        mae=mae(ensemble_mean, y_test),
-        rmse=rmse(ensemble_mean, y_test),
-        r2=r2(ensemble_mean, y_test),
-        mape=mape(ensemble_mean, y_test),
-        smape=smape(ensemble_mean, y_test),
+        mse = mse(ensemble_mean, y_test),
+        mae = mae(ensemble_mean, y_test),
+        rmse = rmse(ensemble_mean, y_test),
+        r2 = r2(ensemble_mean, y_test),
+        mape = mape(ensemble_mean, y_test),
+        smape = smape(ensemble_mean, y_test),
     )
 
     @info "Ensemble test metrics" ensemble_metrics...
 
     # 8. Save results
     results = (
-        w_posteriors=w_posteriors,
-        τ_posteriors=τ_posteriors,
-        β_posteriors=β_posteriors,
-        γ_test=γ_means_test,
-        free_energy=free_energy,
-        ensemble_mean=ensemble_mean,
-        ensemble_std=ensemble_std,
-        ensemble_metrics=ensemble_metrics,
-        predictions_test=predictions_test,
-        y_test=y_test,
-        spec=(
-            prediction_type=string(typeof(spec.prediction_type)),
-            model_type=string(typeof(spec.model_type)),
-            column=spec.column,
-            horizon=spec.horizon,
-            dataset=typeof(spec.dataset).parameters[1],
-            dataset_path=spec.dataset_path,
-            experts=spec.experts,
+        w_posteriors = w_posteriors,
+        τ_posteriors = τ_posteriors,
+        β_posteriors = β_posteriors,
+        γ_test = γ_means_test,
+        free_energy = free_energy,
+        ensemble_mean = ensemble_mean,
+        ensemble_std = ensemble_std,
+        ensemble_metrics = ensemble_metrics,
+        predictions_test = predictions_test,
+        y_test = y_test,
+        spec = (
+            prediction_type = string(typeof(spec.prediction_type)),
+            model_type = string(typeof(spec.model_type)),
+            column = spec.column,
+            horizon = spec.horizon,
+            dataset = typeof(spec.dataset).parameters[1],
+            dataset_path = spec.dataset_path,
+            experts = spec.experts,
         ),
     )
 
@@ -691,17 +688,17 @@ function run_dynamic_univariate(spec::ExperimentSpecifier{Univariate,Dynamic})
     results_path = joinpath(results_dir, fname)
     JLD2.jldsave(
         results_path;
-        w_posteriors=w_posteriors,
-        τ_posteriors=τ_posteriors,
-        β_posteriors=β_posteriors,
-        γ_test=γ_means_test,
-        free_energy=free_energy,
-        ensemble_mean=ensemble_mean,
-        ensemble_std=ensemble_std,
-        ensemble_metrics=ensemble_metrics,
-        predictions_test=predictions_test,
-        y_test=y_test,
-        spec=results.spec,
+        w_posteriors = w_posteriors,
+        τ_posteriors = τ_posteriors,
+        β_posteriors = β_posteriors,
+        γ_test = γ_means_test,
+        free_energy = free_energy,
+        ensemble_mean = ensemble_mean,
+        ensemble_std = ensemble_std,
+        ensemble_metrics = ensemble_metrics,
+        predictions_test = predictions_test,
+        y_test = y_test,
+        spec = results.spec,
     )
     @info "Results saved" path = results_path
 
@@ -724,11 +721,11 @@ function run_dynamic_multivariate(spec::ExperimentSpecifier{Multivariate,Dynamic
     d = length(feat_cols)
     seq_len = Int(base_meta.seq_len)
     horizon = Int(base_meta.horizon)
-    X3, Y2 = make_sequences(Xmat; seq_len=seq_len, horizon=horizon)
+    X3, Y2 = make_sequences(Xmat; seq_len = seq_len, horizon = horizon)
 
     split = base_meta.split
     _, _, Xval, Yval, Xte, Yte =
-        train_val_test_split(X3, Y2; ratios=(split.train, split.val, split.test))
+        train_val_test_split(X3, Y2; ratios = (split.train, split.val, split.test))
 
     scaler = base_meta.scaler
     n_scaler = length(scaler.μ)
@@ -764,17 +761,17 @@ function run_dynamic_multivariate(spec::ExperimentSpecifier{Multivariate,Dynamic
     # 5. Fit dynamic ensemble on validation data
     @info "Fitting dynamic multivariate ensemble on validation data" d n_forecasters n_val
     result = infer(
-        model=multivariate_dynamic_ensemble(
-            n_forecasters=n_forecasters,
-            n_obs=n_val,
-            priors=spec.priors,
+        model = multivariate_dynamic_ensemble(
+            n_forecasters = n_forecasters,
+            n_obs = n_val,
+            priors = spec.priors,
         ),
-        data=(y=y_val, features=features_val, predictions=predictions_val),
-        constraints=multivariate_dynamic_ensemble_constraints(),
-        initialization=multivariate_dynamic_ensemble_init(spec.priors),
-        iterations=spec.inference_iterations,
-        free_energy=true,
-        showprogress=true,
+        data = (y = y_val, features = features_val, predictions = predictions_val),
+        constraints = multivariate_dynamic_ensemble_constraints(),
+        initialization = multivariate_dynamic_ensemble_init(spec.priors),
+        iterations = spec.inference_iterations,
+        free_energy = true,
+        showprogress = true,
     )
 
     free_energy = result.free_energy
@@ -792,7 +789,8 @@ function run_dynamic_multivariate(spec::ExperimentSpecifier{Multivariate,Dynamic
         pred_mat_i = reduce(hcat, predictions_val[i, :])  # (d, n_val)
         mse_i = mse_mv(pred_mat_i, Yval_mat)
         avg_γ = mean(γ_means_val[i, :])
-        @info "Expert $i" avg_E_γ = round(avg_γ; digits=4) val_MSE = round(mse_i; digits=6)
+        @info "Expert $i" avg_E_γ = round(avg_γ; digits = 4) val_MSE =
+            round(mse_i; digits = 6)
     end
 
     # 6. Ensemble predictions on test
@@ -802,21 +800,21 @@ function run_dynamic_multivariate(spec::ExperimentSpecifier{Multivariate,Dynamic
     prediction_array = [missing for _ = 1:n_test]
 
     infer_test = infer(
-        model=multivariate_dynamic_ensemble(
-            n_forecasters=n_forecasters,
-            n_obs=n_test,
-            priors=posterior_priors,
+        model = multivariate_dynamic_ensemble(
+            n_forecasters = n_forecasters,
+            n_obs = n_test,
+            priors = posterior_priors,
         ),
-        data=(
-            y=prediction_array,
-            features=features_test,
-            predictions=predictions_test,
+        data = (
+            y = prediction_array,
+            features = features_test,
+            predictions = predictions_test,
         ),
-        constraints=multivariate_dynamic_ensemble_constraints(),
-        initialization=multivariate_dynamic_ensemble_init(posterior_priors),
-        iterations=spec.prediction_iterations,
-        free_energy=false,
-        showprogress=true,
+        constraints = multivariate_dynamic_ensemble_constraints(),
+        initialization = multivariate_dynamic_ensemble_init(posterior_priors),
+        iterations = spec.prediction_iterations,
+        free_energy = false,
+        showprogress = true,
     )
 
     ensemble_preds = infer_test.predictions[:y][end]
@@ -830,36 +828,36 @@ function run_dynamic_multivariate(spec::ExperimentSpecifier{Multivariate,Dynamic
     # 7. Metrics (multivariate)
     Yte_mat = Float64.(Yte_s)
     ensemble_metrics = (
-        mse=mse_mv(ensemble_mean, Yte_mat),
-        mae=mae_mv(ensemble_mean, Yte_mat),
-        rmse=rmse_mv(ensemble_mean, Yte_mat),
-        r2=r2_mv(ensemble_mean, Yte_mat),
-        mape=mape_mv(ensemble_mean, Yte_mat),
-        smape=smape_mv(ensemble_mean, Yte_mat),
+        mse = mse_mv(ensemble_mean, Yte_mat),
+        mae = mae_mv(ensemble_mean, Yte_mat),
+        rmse = rmse_mv(ensemble_mean, Yte_mat),
+        r2 = r2_mv(ensemble_mean, Yte_mat),
+        mape = mape_mv(ensemble_mean, Yte_mat),
+        smape = smape_mv(ensemble_mean, Yte_mat),
     )
 
     @info "Ensemble test metrics (multivariate)" ensemble_metrics...
 
     # 8. Save results
     results = (
-        w_posteriors=w_posteriors,
-        τ_posteriors=τ_posteriors,
-        β_posteriors=β_posteriors,
-        γ_test=γ_means_test,
-        free_energy=free_energy,
-        ensemble_mean=ensemble_mean,
-        ensemble_std=ensemble_std,
-        ensemble_metrics=ensemble_metrics,
-        predictions_test=predictions_test,
-        y_test=Yte_mat,
-        spec=(
-            prediction_type=string(typeof(spec.prediction_type)),
-            model_type=string(typeof(spec.model_type)),
-            column=nothing,
-            horizon=spec.horizon,
-            dataset=typeof(spec.dataset).parameters[1],
-            dataset_path=spec.dataset_path,
-            experts=spec.experts,
+        w_posteriors = w_posteriors,
+        τ_posteriors = τ_posteriors,
+        β_posteriors = β_posteriors,
+        γ_test = γ_means_test,
+        free_energy = free_energy,
+        ensemble_mean = ensemble_mean,
+        ensemble_std = ensemble_std,
+        ensemble_metrics = ensemble_metrics,
+        predictions_test = predictions_test,
+        y_test = Yte_mat,
+        spec = (
+            prediction_type = string(typeof(spec.prediction_type)),
+            model_type = string(typeof(spec.model_type)),
+            column = nothing,
+            horizon = spec.horizon,
+            dataset = typeof(spec.dataset).parameters[1],
+            dataset_path = spec.dataset_path,
+            experts = spec.experts,
         ),
     )
 
@@ -870,17 +868,17 @@ function run_dynamic_multivariate(spec::ExperimentSpecifier{Multivariate,Dynamic
     results_path = joinpath(results_dir, fname)
     JLD2.jldsave(
         results_path;
-        w_posteriors=w_posteriors,
-        τ_posteriors=τ_posteriors,
-        β_posteriors=β_posteriors,
-        γ_test=γ_means_test,
-        free_energy=free_energy,
-        ensemble_mean=ensemble_mean,
-        ensemble_std=ensemble_std,
-        ensemble_metrics=ensemble_metrics,
-        predictions_test=predictions_test,
-        y_test=Yte_mat,
-        spec=results.spec,
+        w_posteriors = w_posteriors,
+        τ_posteriors = τ_posteriors,
+        β_posteriors = β_posteriors,
+        γ_test = γ_means_test,
+        free_energy = free_energy,
+        ensemble_mean = ensemble_mean,
+        ensemble_std = ensemble_std,
+        ensemble_metrics = ensemble_metrics,
+        predictions_test = predictions_test,
+        y_test = Yte_mat,
+        spec = results.spec,
     )
     @info "Results saved" path = results_path
 
@@ -904,11 +902,11 @@ function run_hierarchical_univariate(spec::ExperimentSpecifier{Univariate,Hierar
 
     seq_len = Int(base_meta.seq_len)
     horizon = Int(base_meta.horizon)
-    X3, Y2 = make_sequences(Xmat; seq_len=seq_len, horizon=horizon)
+    X3, Y2 = make_sequences(Xmat; seq_len = seq_len, horizon = horizon)
 
     split = base_meta.split
     _, _, Xval, Yval, Xte, Yte =
-        train_val_test_split(X3, Y2; ratios=(split.train, split.val, split.test))
+        train_val_test_split(X3, Y2; ratios = (split.train, split.val, split.test))
 
     scaler = base_meta.scaler
     Xval_s = scale_inputs(scaler, Xval)
@@ -940,17 +938,17 @@ function run_hierarchical_univariate(spec::ExperimentSpecifier{Univariate,Hierar
     # 5. Fit hierarchical ensemble on validation data
     @info "Fitting hierarchical ensemble on validation data" n_forecasters n_val
     result = infer(
-        model=hierarchical_model(
-            n_forecasters=n_forecasters,
-            n_obs=n_val,
-            priors=spec.priors,
+        model = hierarchical_model(
+            n_forecasters = n_forecasters,
+            n_obs = n_val,
+            priors = spec.priors,
         ),
-        data=(y=y_val, features=features_val, predictions=predictions_val),
-        constraints=hierarchical_constraints(),
-        initialization=hierarchical_init(spec.priors),
-        iterations=spec.inference_iterations,
-        free_energy=true,
-        showprogress=true,
+        data = (y = y_val, features = features_val, predictions = predictions_val),
+        constraints = hierarchical_constraints(),
+        initialization = hierarchical_init(spec.priors),
+        iterations = spec.inference_iterations,
+        free_energy = true,
+        showprogress = true,
     )
 
     free_energy = result.free_energy
@@ -965,7 +963,8 @@ function run_hierarchical_univariate(spec::ExperimentSpecifier{Univariate,Hierar
     for i = 1:n_forecasters
         mse_i = mse(predictions_val[i, :], y_val)
         avg_γ = mean(γ_means_val[i, :])
-        @info "Expert $i" avg_E_γ = round(avg_γ; digits=4) val_MSE = round(mse_i; digits=6)
+        @info "Expert $i" avg_E_γ = round(avg_γ; digits = 4) val_MSE =
+            round(mse_i; digits = 6)
     end
 
     # 6. Ensemble predictions on test
@@ -979,21 +978,21 @@ function run_hierarchical_univariate(spec::ExperimentSpecifier{Univariate,Hierar
     prediction_array = [missing for _ = 1:n_test]
 
     infer_test = infer(
-        model=hierarchical_model(
-            n_forecasters=n_forecasters,
-            n_obs=n_test,
-            priors=posterior_priors,
+        model = hierarchical_model(
+            n_forecasters = n_forecasters,
+            n_obs = n_test,
+            priors = posterior_priors,
         ),
-        data=(
-            y=prediction_array,
-            features=features_test,
-            predictions=predictions_test,
+        data = (
+            y = prediction_array,
+            features = features_test,
+            predictions = predictions_test,
         ),
-        constraints=hierarchical_constraints(),
-        initialization=hierarchical_init(posterior_priors),
-        iterations=spec.prediction_iterations,
-        free_energy=false,
-        showprogress=true,
+        constraints = hierarchical_constraints(),
+        initialization = hierarchical_init(posterior_priors),
+        iterations = spec.prediction_iterations,
+        free_energy = false,
+        showprogress = true,
     )
 
     ensemble_preds = infer_test.predictions[:y][end]
@@ -1006,36 +1005,36 @@ function run_hierarchical_univariate(spec::ExperimentSpecifier{Univariate,Hierar
 
     # 7. Metrics
     ensemble_metrics = (
-        mse=mse(ensemble_mean, y_test),
-        mae=mae(ensemble_mean, y_test),
-        rmse=rmse(ensemble_mean, y_test),
-        r2=r2(ensemble_mean, y_test),
-        mape=mape(ensemble_mean, y_test),
-        smape=smape(ensemble_mean, y_test),
+        mse = mse(ensemble_mean, y_test),
+        mae = mae(ensemble_mean, y_test),
+        rmse = rmse(ensemble_mean, y_test),
+        r2 = r2(ensemble_mean, y_test),
+        mape = mape(ensemble_mean, y_test),
+        smape = smape(ensemble_mean, y_test),
     )
 
     @info "Ensemble test metrics" ensemble_metrics...
 
     # 8. Save results
     results = (
-        w_posteriors=w_posteriors,
-        τ_posteriors=τ_posteriors,
-        ρ_posteriors=ρ_posteriors,
-        γ_test=γ_means_test,
-        free_energy=free_energy,
-        ensemble_mean=ensemble_mean,
-        ensemble_std=ensemble_std,
-        ensemble_metrics=ensemble_metrics,
-        predictions_test=predictions_test,
-        y_test=y_test,
-        spec=(
-            prediction_type=string(typeof(spec.prediction_type)),
-            model_type=string(typeof(spec.model_type)),
-            column=spec.column,
-            horizon=spec.horizon,
-            dataset=typeof(spec.dataset).parameters[1],
-            dataset_path=spec.dataset_path,
-            experts=spec.experts,
+        w_posteriors = w_posteriors,
+        τ_posteriors = τ_posteriors,
+        ρ_posteriors = ρ_posteriors,
+        γ_test = γ_means_test,
+        free_energy = free_energy,
+        ensemble_mean = ensemble_mean,
+        ensemble_std = ensemble_std,
+        ensemble_metrics = ensemble_metrics,
+        predictions_test = predictions_test,
+        y_test = y_test,
+        spec = (
+            prediction_type = string(typeof(spec.prediction_type)),
+            model_type = string(typeof(spec.model_type)),
+            column = spec.column,
+            horizon = spec.horizon,
+            dataset = typeof(spec.dataset).parameters[1],
+            dataset_path = spec.dataset_path,
+            experts = spec.experts,
         ),
     )
 
@@ -1046,17 +1045,17 @@ function run_hierarchical_univariate(spec::ExperimentSpecifier{Univariate,Hierar
     results_path = joinpath(results_dir, fname)
     JLD2.jldsave(
         results_path;
-        w_posteriors=w_posteriors,
-        τ_posteriors=τ_posteriors,
-        ρ_posteriors=ρ_posteriors,
-        γ_test=γ_means_test,
-        free_energy=free_energy,
-        ensemble_mean=ensemble_mean,
-        ensemble_std=ensemble_std,
-        ensemble_metrics=ensemble_metrics,
-        predictions_test=predictions_test,
-        y_test=y_test,
-        spec=results.spec,
+        w_posteriors = w_posteriors,
+        τ_posteriors = τ_posteriors,
+        ρ_posteriors = ρ_posteriors,
+        γ_test = γ_means_test,
+        free_energy = free_energy,
+        ensemble_mean = ensemble_mean,
+        ensemble_std = ensemble_std,
+        ensemble_metrics = ensemble_metrics,
+        predictions_test = predictions_test,
+        y_test = y_test,
+        spec = results.spec,
     )
     @info "Results saved" path = results_path
 
@@ -1079,11 +1078,11 @@ function run_hierarchical_multivariate(spec::ExperimentSpecifier{Multivariate,Hi
     d = length(feat_cols)
     seq_len = Int(base_meta.seq_len)
     horizon = Int(base_meta.horizon)
-    X3, Y2 = make_sequences(Xmat; seq_len=seq_len, horizon=horizon)
+    X3, Y2 = make_sequences(Xmat; seq_len = seq_len, horizon = horizon)
 
     split = base_meta.split
     _, _, Xval, Yval, Xte, Yte =
-        train_val_test_split(X3, Y2; ratios=(split.train, split.val, split.test))
+        train_val_test_split(X3, Y2; ratios = (split.train, split.val, split.test))
 
     scaler = base_meta.scaler
     n_scaler = length(scaler.μ)
@@ -1119,17 +1118,17 @@ function run_hierarchical_multivariate(spec::ExperimentSpecifier{Multivariate,Hi
     # 5. Fit hierarchical ensemble on validation data
     @info "Fitting hierarchical multivariate ensemble on validation data" d n_forecasters n_val
     result = infer(
-        model=multivariate_hierarchical_model(
-            n_forecasters=n_forecasters,
-            n_obs=n_val,
-            priors=spec.priors,
+        model = multivariate_hierarchical_model(
+            n_forecasters = n_forecasters,
+            n_obs = n_val,
+            priors = spec.priors,
         ),
-        data=(y=y_val, features=features_val, predictions=predictions_val),
-        constraints=multivariate_hierarchical_constraints(),
-        initialization=multivariate_hierarchical_init(spec.priors),
-        iterations=spec.inference_iterations,
-        free_energy=true,
-        showprogress=true,
+        data = (y = y_val, features = features_val, predictions = predictions_val),
+        constraints = multivariate_hierarchical_constraints(),
+        initialization = multivariate_hierarchical_init(spec.priors),
+        iterations = spec.inference_iterations,
+        free_energy = true,
+        showprogress = true,
     )
 
     free_energy = result.free_energy
@@ -1147,7 +1146,8 @@ function run_hierarchical_multivariate(spec::ExperimentSpecifier{Multivariate,Hi
         pred_mat_i = reduce(hcat, predictions_val[i, :])
         mse_i = mse_mv(pred_mat_i, Yval_mat)
         avg_γ = mean(γ_means_val[i, :])
-        @info "Expert $i" avg_E_γ = round(avg_γ; digits=4) val_MSE = round(mse_i; digits=6)
+        @info "Expert $i" avg_E_γ = round(avg_γ; digits = 4) val_MSE =
+            round(mse_i; digits = 6)
     end
 
     # 6. Ensemble predictions on test
@@ -1161,21 +1161,21 @@ function run_hierarchical_multivariate(spec::ExperimentSpecifier{Multivariate,Hi
     prediction_array = [missing for _ = 1:n_test]
 
     infer_test = infer(
-        model=multivariate_hierarchical_model(
-            n_forecasters=n_forecasters,
-            n_obs=n_test,
-            priors=posterior_priors,
+        model = multivariate_hierarchical_model(
+            n_forecasters = n_forecasters,
+            n_obs = n_test,
+            priors = posterior_priors,
         ),
-        data=(
-            y=prediction_array,
-            features=features_test,
-            predictions=predictions_test,
+        data = (
+            y = prediction_array,
+            features = features_test,
+            predictions = predictions_test,
         ),
-        constraints=multivariate_hierarchical_constraints(),
-        initialization=multivariate_hierarchical_init(posterior_priors),
-        iterations=spec.prediction_iterations,
-        free_energy=false,
-        showprogress=true,
+        constraints = multivariate_hierarchical_constraints(),
+        initialization = multivariate_hierarchical_init(posterior_priors),
+        iterations = spec.prediction_iterations,
+        free_energy = false,
+        showprogress = true,
     )
 
     ensemble_preds = infer_test.predictions[:y][end]
@@ -1189,36 +1189,36 @@ function run_hierarchical_multivariate(spec::ExperimentSpecifier{Multivariate,Hi
     # 7. Metrics (multivariate)
     Yte_mat = Float64.(Yte_s)
     ensemble_metrics = (
-        mse=mse_mv(ensemble_mean, Yte_mat),
-        mae=mae_mv(ensemble_mean, Yte_mat),
-        rmse=rmse_mv(ensemble_mean, Yte_mat),
-        r2=r2_mv(ensemble_mean, Yte_mat),
-        mape=mape_mv(ensemble_mean, Yte_mat),
-        smape=smape_mv(ensemble_mean, Yte_mat),
+        mse = mse_mv(ensemble_mean, Yte_mat),
+        mae = mae_mv(ensemble_mean, Yte_mat),
+        rmse = rmse_mv(ensemble_mean, Yte_mat),
+        r2 = r2_mv(ensemble_mean, Yte_mat),
+        mape = mape_mv(ensemble_mean, Yte_mat),
+        smape = smape_mv(ensemble_mean, Yte_mat),
     )
 
     @info "Ensemble test metrics (multivariate)" ensemble_metrics...
 
     # 8. Save results
     results = (
-        w_posteriors=w_posteriors,
-        τ_posteriors=τ_posteriors,
-        ρ_posteriors=ρ_posteriors,
-        γ_test=γ_means_test,
-        free_energy=free_energy,
-        ensemble_mean=ensemble_mean,
-        ensemble_std=ensemble_std,
-        ensemble_metrics=ensemble_metrics,
-        predictions_test=predictions_test,
-        y_test=Yte_mat,
-        spec=(
-            prediction_type=string(typeof(spec.prediction_type)),
-            model_type=string(typeof(spec.model_type)),
-            column=nothing,
-            horizon=spec.horizon,
-            dataset=typeof(spec.dataset).parameters[1],
-            dataset_path=spec.dataset_path,
-            experts=spec.experts,
+        w_posteriors = w_posteriors,
+        τ_posteriors = τ_posteriors,
+        ρ_posteriors = ρ_posteriors,
+        γ_test = γ_means_test,
+        free_energy = free_energy,
+        ensemble_mean = ensemble_mean,
+        ensemble_std = ensemble_std,
+        ensemble_metrics = ensemble_metrics,
+        predictions_test = predictions_test,
+        y_test = Yte_mat,
+        spec = (
+            prediction_type = string(typeof(spec.prediction_type)),
+            model_type = string(typeof(spec.model_type)),
+            column = nothing,
+            horizon = spec.horizon,
+            dataset = typeof(spec.dataset).parameters[1],
+            dataset_path = spec.dataset_path,
+            experts = spec.experts,
         ),
     )
 
@@ -1229,17 +1229,17 @@ function run_hierarchical_multivariate(spec::ExperimentSpecifier{Multivariate,Hi
     results_path = joinpath(results_dir, fname)
     JLD2.jldsave(
         results_path;
-        w_posteriors=w_posteriors,
-        τ_posteriors=τ_posteriors,
-        ρ_posteriors=ρ_posteriors,
-        γ_test=γ_means_test,
-        free_energy=free_energy,
-        ensemble_mean=ensemble_mean,
-        ensemble_std=ensemble_std,
-        ensemble_metrics=ensemble_metrics,
-        predictions_test=predictions_test,
-        y_test=Yte_mat,
-        spec=results.spec,
+        w_posteriors = w_posteriors,
+        τ_posteriors = τ_posteriors,
+        ρ_posteriors = ρ_posteriors,
+        γ_test = γ_means_test,
+        free_energy = free_energy,
+        ensemble_mean = ensemble_mean,
+        ensemble_std = ensemble_std,
+        ensemble_metrics = ensemble_metrics,
+        predictions_test = predictions_test,
+        y_test = Yte_mat,
+        spec = results.spec,
     )
     @info "Results saved" path = results_path
 
