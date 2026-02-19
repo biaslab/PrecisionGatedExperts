@@ -4,7 +4,7 @@ params:
   dataset: "exchange_rate"
   dataset_path: "data/exchange_rate.csv"
   horizon: 720
-  inference_iterations: 500
+  inference_iterations: 10
   prediction_iterations: 1
   experts:
     - "models/exchange_rate_h720_s96_CNN_enzyme.jld2"

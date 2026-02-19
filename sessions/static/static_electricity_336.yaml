@@ -4,7 +4,7 @@ params:
   dataset: "electricity"
   dataset_path: "data/electricity.csv"
   horizon: 336
-  inference_iterations: 500
+  inference_iterations: 10
   prediction_iterations: 1
   experts:
     - "models/electricity_h336_s96_CNN_enzyme.jld2"
