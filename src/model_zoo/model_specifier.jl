@@ -152,6 +152,7 @@ load_dataset(::Val{:ETTh1}, path::String) = load_ett(path)
 load_dataset(::Val{:ETTh2}, path::String) = load_ett(path)
 load_dataset(::Val{:electricity}, path::String) = load_ett(path)
 load_dataset(::Val{:exchange_rate}, path::String) = load_ett(path)
+load_dataset(::Val{:traffic}, path::String) = load_ett(path)
 
 # ---------------------------------------------------------------------------
 # Expert prediction generation
