@@ -17,8 +17,8 @@ A special structure that if passed as `data` inside of RxInfer will subsample
 the original dataset on every variational iteration. 
 
 To subsample the structure uses stable `rng`. The seed of the `rng` is instantiated 
-automatically with the last dimension of the `original_data`, this is useful 
-when you have different datasets passed to `data` that must be "synced" together. 
+automatically with `subsample_size`, this is useful when you have different datasets 
+passed to `data` that must be "synced" together. 
 
 If `original_data` is of type `Vector` the procedure simply samples the
 elements of that vector. If `original_data` is of type `Matrix` the procedure 
