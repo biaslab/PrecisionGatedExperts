@@ -39,6 +39,7 @@ end
         Gamma,
         parameters = ProjectionParameters(strategy = ClosedFormStrategy()),
     )
+    # q(w) :: SubsampleFormConstraint(100) # This will subsample messages inside the product
 end
 
 @initialization function multivariate_hierarchical_init(priors)
@@ -48,4 +49,36 @@ end
     q(γ) = GammaShapeScale(1.0, 1.0)
     q(τ) = priors[:τ]
     q(ρ) = priors[:ρ]
+end
+
+struct SubsampleFormConstraint <: AbstractFormConstraint 
+    subsample_size::Int
+end
+
+ReactiveMP.default_form_check_strategy(::SubsampleFormConstraint) = FormConstraintCheckLast()
+ReactiveMP.default_prod_constraint(::SubsampleFormConstraint) = GenericProd()
+
+function ReactiveMP.constrain_form(constraint::SubsampleFormConstraint, distribution::BayesBase.ProductOf)
+    prior = distribution.left
+    likelihood = distribution.right
+    @assert prior isa ExponentialFamily.MvNormalMeanScalePrecision
+    @assert likelihood isa BayesBase.LinearizedProductOf{<:LowRankNormalWeightedMeanPrecision}
+    subsample_size = constraint.subsample_size
+    random_subsample_from_messages = sample(likelihood.vector, subsample_size; replace = false)
+    result = prod(GenericProd(), prior, random_subsample_from_messages[1])
+    T = typeof(result)
+    for i in 2:subsample_size
+        result = prod(GenericProd(), result, random_subsample_from_messages[i])::T
+    end
+    return result
+end
+
+@meta function multivariate_hierarchical_meta()
+    # (bvdmidtri) This enables product from right to left
+    # Though I didn't implement the proper rules
+    # Instead it would result into a ProductOf structure 
+    # Which then being processed by the `constrain_form` above 
+    # I think it is better at the current stage since in this case we get access 
+    # to all messages at once and it also allows us to parallelize the product easier
+    # w -> (marginal_prod_strategy = ReactiveMP.FoldRightProdStrategy(), )
 end

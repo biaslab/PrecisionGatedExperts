@@ -1044,17 +1044,25 @@ function run_hierarchical_multivariate(spec::ExperimentSpecifier{Multivariate,Hi
     features_val = make_features(Xval_s)
     features_test = make_features(Xte_s)
 
+    # For the validation part we subsample data on each variational iteration
+    subsample_size = 25
+
     # 5. Fit hierarchical ensemble on validation data
-    @info "Fitting hierarchical multivariate ensemble on validation data" d n_forecasters n_val
+    @info "Fitting hierarchical multivariate ensemble on validation data" d n_forecasters n_val subsample_size
     result = infer(
         model = multivariate_hierarchical_model(
             n_forecasters = n_forecasters,
-            n_obs = n_val,
+            n_obs = subsample_size,
             priors = spec.priors,
         ),
-        data = (y = y_val, features = features_val, predictions = predictions_val),
+        data = (y = 
+            SubsampledData(y_val, subsample_size), 
+            features = SubsampledData(features_val, subsample_size), 
+            predictions = SubsampledData(predictions_val, subsample_size)
+        ),
         constraints = multivariate_hierarchical_constraints(),
         initialization = multivariate_hierarchical_init(spec.priors),
+        meta = multivariate_hierarchical_meta(),
         iterations = spec.inference_iterations,
         free_energy = true,
         showprogress = true,
@@ -1102,6 +1110,7 @@ function run_hierarchical_multivariate(spec::ExperimentSpecifier{Multivariate,Hi
         ),
         constraints = multivariate_hierarchical_constraints(),
         initialization = multivariate_hierarchical_init(posterior_priors),
+        meta = multivariate_hierarchical_meta(),
         iterations = spec.prediction_iterations,
         free_energy = false,
         showprogress = true,

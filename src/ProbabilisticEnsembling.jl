@@ -1,6 +1,7 @@
 module ProbabilisticEnsembling
 
 using RxInfer
+using StableRNGs
 
 include("utils.jl")
 include("log.jl")
