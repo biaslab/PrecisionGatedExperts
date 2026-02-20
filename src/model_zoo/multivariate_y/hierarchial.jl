@@ -39,6 +39,7 @@ end
         Gamma,
         parameters = ProjectionParameters(strategy = ClosedFormStrategy()),
     )
+    # q(w) :: SubsampleFormConstraint(100) # This will subsample messages inside the product
 end
 
 @initialization function multivariate_hierarchical_init(priors)

@@ -24,6 +24,7 @@ struct ExperimentSpecifier{P,M,D}
     inference_iterations::Int
     prediction_iterations::Int
     save_predictions::Bool
+    subsample_size::Union{Int,Nothing}
 end
 
 # ---------------------------------------------------------------------------
@@ -44,10 +45,8 @@ function parse_model_type(s::String)
     error("Unknown model_type: $s")
 end
 
-function run_experiment(path_to_yaml::String)
-    config = YAML.load_file(path_to_yaml)
+function _parse_spec(config)
     p = config["params"]
-
     prediction_type = parse_prediction_type(p["prediction_type"])
     model_type = parse_model_type(p["model_type"])
     column = get(p, "column", nothing)
@@ -59,8 +58,8 @@ function run_experiment(path_to_yaml::String)
     inference_iterations = p["inference_iterations"]
     prediction_iterations = p["prediction_iterations"]
     save_predictions = get(p, "save_predictions", false)
-
-    spec = ExperimentSpecifier(
+    subsample_size = get(p, "subsample_size", nothing)
+    return ExperimentSpecifier(
         prediction_type,
         model_type,
         column,
@@ -72,10 +71,14 @@ function run_experiment(path_to_yaml::String)
         inference_iterations,
         prediction_iterations,
         save_predictions,
+        subsample_size,
     )
-    
-    results = run_experiment(spec)
+end
 
+function run_experiment(path_to_yaml::String)
+    config = YAML.load_file(path_to_yaml)
+    spec = _parse_spec(config)
+    results = run_experiment(spec)
     results_dir = "final_results"
     mkpath(results_dir)
     ds_name = typeof(spec.dataset).parameters[1]
@@ -275,19 +278,12 @@ function generate_expert_predictions(::Multivariate, experts, scaler, Xval_s, Xt
     return predictions_val, predictions_test
 end
 
-# ---------------------------------------------------------------------------
-# Static Univariate pipeline
-# ---------------------------------------------------------------------------
-
-function run_static_univariate(spec::ExperimentSpecifier{Univariate,Static})
-    # 1. Load expert models
+function before_rxinfer(spec::ExperimentSpecifier{Univariate})
     @info "Loading expert models" n = length(spec.experts)
     experts = map(load_jld2_model, spec.experts)
     base_meta = experts[1].meta
 
-    # 2. Load raw data & split
     Xmat, feat_cols = load_dataset(spec.dataset, spec.dataset_path)
-
     col_idx = find_column_index(feat_cols, spec.column)
 
     seq_len = Int(base_meta.seq_len)
@@ -307,7 +303,6 @@ function run_static_univariate(spec::ExperimentSpecifier{Univariate,Static})
     y_val = Float64.(Yval_s[col_idx, :])
     y_test = Float64.(Yte_s[col_idx, :])
 
-    # 3. Generate expert predictions
     predictions_val, predictions_test = generate_expert_predictions(
         spec.prediction_type,
         experts,
@@ -317,97 +312,16 @@ function run_static_univariate(spec::ExperimentSpecifier{Univariate,Static})
         col_idx,
     )
 
-    n_forecasters = size(predictions_val, 1)
-    n_test = length(y_test)
-
-    # 4. Fit static ensemble on validation data
-    @info "Fitting static ensemble on validation data"
-    result = infer(
-        model = univariate_ensemble_precision_model(
-            n_forecasters = n_forecasters,
-            priors = spec.priors,
-        ),
-        data = (y = y_val, X = predictions_val),
-        iterations = spec.inference_iterations,
-        free_energy = true,
-    )
-
-    free_energy = result.free_energy
-    γ_posteriors = result.posteriors[:γ][end]
-    γ_means = map(mean, γ_posteriors)
-    weights = γ_means ./ sum(γ_means)
-
-    @info "Learned precision weights"
-    for i = 1:n_forecasters
-        mse_i = mse(predictions_val[i, :], y_val)
-        @info "Expert $i" E_γ = round(γ_means[i]; digits = 4) val_MSE =
-            round(mse_i; digits = 6) weight = round(weights[i]; digits = 4)
-    end
-
-    # 5. Ensemble predictions on test
-    @info "Generating ensemble predictions on test"
-    posterior_priors = Dict{Symbol,Any}(:γ => γ_posteriors)
-    prediction_array = [missing for _ = 1:n_test]
-    infer_test = infer(
-        model = univariate_ensemble_precision_model(
-            n_forecasters = n_forecasters,
-            priors = posterior_priors,
-        ),
-        data = (y = prediction_array, X = predictions_test),
-        iterations = spec.prediction_iterations,
-    )
-
-    ensemble_preds = infer_test.predictions[:y][end]
-    ensemble_mean = map(mean, ensemble_preds)
-    ensemble_std = map(std, ensemble_preds)
-
-    # 6. Metrics
-    ensemble_metrics = (
-        mse = mse(ensemble_mean, y_test),
-        mae = mae(ensemble_mean, y_test),
-        rmse = rmse(ensemble_mean, y_test),
-        r2 = r2(ensemble_mean, y_test),
-        mape = mape(ensemble_mean, y_test),
-        smape = smape(ensemble_mean, y_test),
-    )
-
-    @info "Ensemble test metrics" ensemble_metrics...
-
-    # 7. Save results
-    results = (
-        γ_posteriors = γ_posteriors,
-        weights = weights,
-        free_energy = free_energy,
-        ensemble_mean = ensemble_mean,
-        ensemble_std = ensemble_std,
-        ensemble_metrics = ensemble_metrics,
-        predictions_test = predictions_test,
-        y_test = y_test,
-        spec = (
-            prediction_type = string(typeof(spec.prediction_type)),
-            model_type = string(typeof(spec.model_type)),
-            column = spec.column,
-            horizon = spec.horizon,
-            dataset = typeof(spec.dataset).parameters[1],
-            dataset_path = spec.dataset_path,
-            experts = spec.experts,
-        ),
-    )
-
-    return results
+    features_val = make_features(Xval_s)
+    features_test = make_features(Xte_s)
+    return (y_val, y_test, predictions_val, predictions_test, features_val, features_test)
 end
 
-# ---------------------------------------------------------------------------
-# Static Multivariate pipeline
-# ---------------------------------------------------------------------------
-
-function run_static_multivariate(spec::ExperimentSpecifier{Multivariate,Static})
-    # 1. Load expert models
+function before_rxinfer(spec::ExperimentSpecifier{Multivariate})
     @info "Loading expert models" n = length(spec.experts)
     experts = map(load_jld2_model, spec.experts)
     base_meta = experts[1].meta
 
-    # 2. Load raw data & split
     Xmat, feat_cols = load_dataset(spec.dataset, spec.dataset_path)
 
     d = length(feat_cols)
@@ -436,28 +350,137 @@ function run_static_multivariate(spec::ExperimentSpecifier{Multivariate,Static})
     n_val = size(Xval, 3)
     n_test = size(Xte, 3)
 
-    # Ground truth as vectors of vectors (for RxInfer)
     y_val = [Float64.(Yval_s[:, j]) for j = 1:n_val]
     y_test = [Float64.(Yte_s[:, j]) for j = 1:n_test]
 
-    # 3. Generate expert predictions
     predictions_val, predictions_test =
         generate_expert_predictions(spec.prediction_type, experts, scaler, Xval_s, Xte_s)
 
-    n_forecasters = size(predictions_val, 1)
+    features_val = make_features(Xval_s)
+    features_test = make_features(Xte_s)
+    return (y_val, y_test, predictions_val, predictions_test, features_val, features_test)
+end
 
-    # 4. Fit static ensemble on validation data
-    @info "Fitting static multivariate ensemble on validation data" d n_forecasters
-    result = infer(
-        model = multivariate_ensemble_precision_model(
-            n_forecasters = n_forecasters,
-            priors = spec.priors,
-        ),
-        data = (y = y_val, X = predictions_val),
+function run_training_rxinfer(spec, subsampled_data::Int, model, data; kwargs...)
+    @show "Use subsampled data with sample size $(subsampled_data)"
+    subsampled = (; (k => SubsampledData(v, subsampled_data) for (k, v) in pairs(data))...)
+    return infer(;
+        model = model,
+        data = subsampled,
         iterations = spec.inference_iterations,
         free_energy = true,
-        showprogress = true,
+        kwargs...,
     )
+end
+
+function run_training_rxinfer(spec, ::Nothing, model, data; kwargs...)
+    @show "Run inference on the full dataset"
+    return infer(;
+        model = model,
+        data = data,
+        iterations = spec.inference_iterations,
+        free_energy = true,
+        kwargs...,
+    )
+end
+
+function run_training_rxinfer(spec, model, data; kwargs...)
+    return run_training_rxinfer(spec, spec.subsample_size, model, data; kwargs...)
+end
+# ---------------------------------------------------------------------------
+# Static Univariate pipeline
+# ---------------------------------------------------------------------------
+
+function run_static_univariate(spec::ExperimentSpecifier{Univariate,Static})
+    y_val, y_test, predictions_val, predictions_test, _, _ = before_rxinfer(spec)
+    n_forecasters = size(predictions_val, 1)
+
+    model = univariate_ensemble_precision_model(
+        n_forecasters = n_forecasters,
+        priors = spec.priors,
+    )
+    data = (y = y_val, X = predictions_val)
+
+    @info "Fitting static ensemble on validation data"
+    result = run_training_rxinfer(spec, model, data)
+
+    free_energy = result.free_energy
+    γ_posteriors = result.posteriors[:γ][end]
+    γ_means = map(mean, γ_posteriors)
+    weights = γ_means ./ sum(γ_means)
+
+    @info "Learned precision weights"
+    for i = 1:n_forecasters
+        mse_i = mse(predictions_val[i, :], y_val)
+        @info "Expert $i" E_γ = round(γ_means[i]; digits = 4) val_MSE =
+            round(mse_i; digits = 6) weight = round(weights[i]; digits = 4)
+    end
+
+    @info "Generating ensemble predictions on test"
+    posterior_priors = Dict{Symbol,Any}(:γ => γ_posteriors)
+    prediction_array = [missing for _ = 1:n_test]
+    infer_test = infer(
+        model = univariate_ensemble_precision_model(
+            n_forecasters = n_forecasters,
+            priors = posterior_priors,
+        ),
+        data = (y = prediction_array, X = predictions_test),
+        iterations = spec.prediction_iterations,
+    )
+
+    ensemble_preds = infer_test.predictions[:y][end]
+    ensemble_mean = map(mean, ensemble_preds)
+    ensemble_std = map(std, ensemble_preds)
+
+    ensemble_metrics = (
+        mse = mse(ensemble_mean, y_test),
+        mae = mae(ensemble_mean, y_test),
+        rmse = rmse(ensemble_mean, y_test),
+        r2 = r2(ensemble_mean, y_test),
+        mape = mape(ensemble_mean, y_test),
+        smape = smape(ensemble_mean, y_test),
+    )
+
+    results = (
+        γ_posteriors = γ_posteriors,
+        weights = weights,
+        free_energy = free_energy,
+        ensemble_mean = ensemble_mean,
+        ensemble_std = ensemble_std,
+        ensemble_metrics = ensemble_metrics,
+        predictions_test = predictions_test,
+        y_test = y_test,
+        spec = (
+            prediction_type = string(typeof(spec.prediction_type)),
+            model_type = string(typeof(spec.model_type)),
+            column = spec.column,
+            horizon = spec.horizon,
+            dataset = typeof(spec.dataset).parameters[1],
+            dataset_path = spec.dataset_path,
+            experts = spec.experts,
+        ),
+    )
+
+    return results
+end
+
+# ---------------------------------------------------------------------------
+# Static Multivariate pipeline
+# ---------------------------------------------------------------------------
+function run_static_multivariate(spec::ExperimentSpecifier{Multivariate,Static})
+    y_val, y_test, predictions_val, predictions_test, _, _ = before_rxinfer(spec)
+    n_forecasters = size(predictions_val, 1)
+    n_test = length(y_test)
+    d = length(y_val[1])
+
+    model = multivariate_ensemble_precision_model(
+        n_forecasters = n_forecasters,
+        priors = spec.priors,
+    )
+    data = (y = y_val, X = predictions_val)
+
+    @info "Fitting static multivariate ensemble on validation data" d n_forecasters
+    result = run_training_rxinfer(spec, model, data; showprogress = true)
 
     free_energy = result.free_energy
     γ_posteriors = result.posteriors[:γ][end]
@@ -465,7 +488,7 @@ function run_static_multivariate(spec::ExperimentSpecifier{Multivariate,Static})
     weights = γ_means ./ sum(γ_means)
 
     # Per-expert validation MSE (multivariate)
-    Yval_mat = Float64.(Yval_s)
+    Yval_mat = reduce(hcat, y_val)
     @info "Learned precision weights"
     for i = 1:n_forecasters
         pred_mat_i = reduce(hcat, predictions_val[i, :])  # (d, n_val)
@@ -492,7 +515,7 @@ function run_static_multivariate(spec::ExperimentSpecifier{Multivariate,Static})
     ensemble_std = reduce(hcat, map(std, ensemble_preds))   # (d, n_test)
 
     # 6. Metrics (multivariate)
-    Yte_mat = Float64.(Yte_s)
+    Yte_mat = reduce(hcat, y_test)
     ensemble_metrics = (
         mse = mse_mv(ensemble_mean, Yte_mat),
         mae = mae_mv(ensemble_mean, Yte_mat),
@@ -529,64 +552,29 @@ function run_static_multivariate(spec::ExperimentSpecifier{Multivariate,Static})
 end
 
 function run_dynamic_univariate(spec::ExperimentSpecifier{Univariate,Dynamic})
-    # 1. Load expert models
-    @info "Loading expert models" n = length(spec.experts)
-    experts = map(load_jld2_model, spec.experts)
-    base_meta = experts[1].meta
-
-    # 2. Load raw data & split
-    Xmat, feat_cols = load_dataset(spec.dataset, spec.dataset_path)
-
-    col_idx = find_column_index(feat_cols, spec.column)
-
-    seq_len = Int(base_meta.seq_len)
-    horizon = Int(base_meta.horizon)
-    X3, Y2 = make_sequences(Xmat; seq_len = seq_len, horizon = horizon)
-
-    split = base_meta.split
-    _, _, Xval, Yval, Xte, Yte =
-        train_val_test_split(X3, Y2; ratios = (split.train, split.val, split.test))
-
-    scaler = base_meta.scaler
-    Xval_s = scale_inputs(scaler, Xval)
-    Xte_s = scale_inputs(scaler, Xte)
-    Yval_s = scale_targets(scaler, Yval)
-    Yte_s = scale_targets(scaler, Yte)
-
-    y_val = Float64.(Yval_s[col_idx, :])
-    y_test = Float64.(Yte_s[col_idx, :])
-
-    # 3. Generate expert predictions
-    predictions_val, predictions_test = generate_expert_predictions(
-        spec.prediction_type,
-        experts,
-        scaler,
-        Xval_s,
-        Xte_s,
-        col_idx,
-    )
-
+    y_val, y_test, predictions_val, predictions_test, features_val, features_test =
+        before_rxinfer(spec)
     n_forecasters = size(predictions_val, 1)
     n_val = length(y_val)
     n_test = length(y_test)
 
-    # 4. Construct features from scaled inputs
-    features_val = make_features(Xval_s)
-    features_test = make_features(Xte_s)
+    n_obs = something(spec.subsample_size, n_val)
+    model = univariate_dynamic_ensemble(
+        n_forecasters = n_forecasters,
+        n_obs = n_obs,
+        priors = spec.priors,
+    )
+    constraints = univariate_dynamic_ensemble_constraints()
+    init = univariate_dynamic_ensemble_init(spec.priors)
+    data = (y = y_val, features = features_val, predictions = predictions_val)
 
-    # 5. Fit dynamic ensemble on validation data
     @info "Fitting dynamic ensemble on validation data" n_forecasters n_val
-    result = infer(
-        model = univariate_dynamic_ensemble(
-            n_forecasters = n_forecasters,
-            n_obs = n_val,
-            priors = spec.priors,
-        ),
-        data = (y = y_val, features = features_val, predictions = predictions_val),
-        constraints = univariate_dynamic_ensemble_constraints(),
-        initialization = univariate_dynamic_ensemble_init(spec.priors),
-        iterations = spec.inference_iterations,
-        free_energy = true,
+    result = run_training_rxinfer(
+        spec,
+        model,
+        data;
+        constraints = constraints,
+        initialization = init,
         showprogress = true,
     )
 
@@ -681,67 +669,30 @@ end
 # ---------------------------------------------------------------------------
 
 function run_dynamic_multivariate(spec::ExperimentSpecifier{Multivariate,Dynamic})
-    # 1. Load expert models
-    @info "Loading expert models" n = length(spec.experts)
-    experts = map(load_jld2_model, spec.experts)
-    base_meta = experts[1].meta
-
-    # 2. Load raw data & split
-    Xmat, feat_cols = load_dataset(spec.dataset, spec.dataset_path)
-
-    d = length(feat_cols)
-    seq_len = Int(base_meta.seq_len)
-    horizon = Int(base_meta.horizon)
-    X3, Y2 = make_sequences(Xmat; seq_len = seq_len, horizon = horizon)
-
-    split = base_meta.split
-    _, _, Xval, Yval, Xte, Yte =
-        train_val_test_split(X3, Y2; ratios = (split.train, split.val, split.test))
-
-    scaler = base_meta.scaler
-    n_scaler = length(scaler.μ)
-    n_feat = size(Xval, 1)
-    n_scaler == n_feat || error(
-        "Scaler dimension ($n_scaler) from expert model does not match " *
-        "dataset features ($n_feat). The expert was likely trained on a " *
-        "different dataset. Check that `dataset_path` in the YAML matches " *
-        "the experts' training data.",
-    )
-    Xval_s = scale_inputs(scaler, Xval)
-    Xte_s = scale_inputs(scaler, Xte)
-    Yval_s = scale_targets(scaler, Yval)
-    Yte_s = scale_targets(scaler, Yte)
-
-    n_val = size(Xval, 3)
-    n_test = size(Xte, 3)
-
-    # Ground truth as vectors of vectors (for RxInfer)
-    y_val = [Float64.(Yval_s[:, j]) for j = 1:n_val]
-    y_test = [Float64.(Yte_s[:, j]) for j = 1:n_test]
-
-    # 3. Generate expert predictions
-    predictions_val, predictions_test =
-        generate_expert_predictions(spec.prediction_type, experts, scaler, Xval_s, Xte_s)
-
+    y_val, y_test, predictions_val, predictions_test, features_val, features_test =
+        before_rxinfer(spec)
     n_forecasters = size(predictions_val, 1)
+    n_val = length(y_val)
+    n_test = length(y_test)
+    d = length(y_val[1])
 
-    # 4. Construct features from scaled inputs
-    features_val = make_features(Xval_s)
-    features_test = make_features(Xte_s)
+    n_obs = something(spec.subsample_size, n_val)
+    model = multivariate_dynamic_ensemble(
+        n_forecasters = n_forecasters,
+        n_obs = n_obs,
+        priors = spec.priors,
+    )
+    constraints = multivariate_dynamic_ensemble_constraints()
+    init = multivariate_dynamic_ensemble_init(spec.priors)
+    data = (y = y_val, features = features_val, predictions = predictions_val)
 
-    # 5. Fit dynamic ensemble on validation data
     @info "Fitting dynamic multivariate ensemble on validation data" d n_forecasters n_val
-    result = infer(
-        model = multivariate_dynamic_ensemble(
-            n_forecasters = n_forecasters,
-            n_obs = n_val,
-            priors = spec.priors,
-        ),
-        data = (y = y_val, features = features_val, predictions = predictions_val),
-        constraints = multivariate_dynamic_ensemble_constraints(),
-        initialization = multivariate_dynamic_ensemble_init(spec.priors),
-        iterations = spec.inference_iterations,
-        free_energy = true,
+    result = run_training_rxinfer(
+        spec,
+        model,
+        data;
+        constraints = constraints,
+        initialization = init,
         showprogress = true,
     )
 
@@ -754,7 +705,7 @@ function run_dynamic_multivariate(spec::ExperimentSpecifier{Multivariate,Dynamic
     γ_means_val = mean.(γ_posteriors)
 
     # Per-expert validation MSE (multivariate)
-    Yval_mat = Float64.(Yval_s)
+    Yval_mat = reduce(hcat, y_val)
     @info "Learned dynamic weights on validation"
     for i = 1:n_forecasters
         pred_mat_i = reduce(hcat, predictions_val[i, :])  # (d, n_val)
@@ -764,7 +715,7 @@ function run_dynamic_multivariate(spec::ExperimentSpecifier{Multivariate,Dynamic
             round(mse_i; digits = 6)
     end
 
-    # 6. Ensemble predictions on test
+    # Ensemble predictions on test
     @info "Generating dynamic ensemble predictions on test"
     posterior_priors =
         Dict{Symbol,Any}(:w => w_posteriors, :τ => τ_posteriors, :β => β_posteriors)
@@ -796,8 +747,8 @@ function run_dynamic_multivariate(spec::ExperimentSpecifier{Multivariate,Dynamic
     γ_test_posteriors = infer_test.posteriors[:γ][end]
     γ_means_test = mean.(γ_test_posteriors)
 
-    # 7. Metrics (multivariate)
-    Yte_mat = Float64.(Yte_s)
+    # Metrics (multivariate)
+    Yte_mat = reduce(hcat, y_test)
     ensemble_metrics = (
         mse = mse_mv(ensemble_mean, Yte_mat),
         mae = mae_mv(ensemble_mean, Yte_mat),
@@ -809,7 +760,7 @@ function run_dynamic_multivariate(spec::ExperimentSpecifier{Multivariate,Dynamic
 
     @info "Ensemble test metrics (multivariate)" ensemble_metrics...
 
-    # 8. Save results
+    # Save results
     results = (
         w_posteriors = w_posteriors,
         τ_posteriors = τ_posteriors,
@@ -840,64 +791,29 @@ end
 # ---------------------------------------------------------------------------
 
 function run_hierarchical_univariate(spec::ExperimentSpecifier{Univariate,Hierarchical})
-    # 1. Load expert models
-    @info "Loading expert models" n = length(spec.experts)
-    experts = map(load_jld2_model, spec.experts)
-    base_meta = experts[1].meta
-
-    # 2. Load raw data & split
-    Xmat, feat_cols = load_dataset(spec.dataset, spec.dataset_path)
-
-    col_idx = find_column_index(feat_cols, spec.column)
-
-    seq_len = Int(base_meta.seq_len)
-    horizon = Int(base_meta.horizon)
-    X3, Y2 = make_sequences(Xmat; seq_len = seq_len, horizon = horizon)
-
-    split = base_meta.split
-    _, _, Xval, Yval, Xte, Yte =
-        train_val_test_split(X3, Y2; ratios = (split.train, split.val, split.test))
-
-    scaler = base_meta.scaler
-    Xval_s = scale_inputs(scaler, Xval)
-    Xte_s = scale_inputs(scaler, Xte)
-    Yval_s = scale_targets(scaler, Yval)
-    Yte_s = scale_targets(scaler, Yte)
-
-    y_val = Float64.(Yval_s[col_idx, :])
-    y_test = Float64.(Yte_s[col_idx, :])
-
-    # 3. Generate expert predictions
-    predictions_val, predictions_test = generate_expert_predictions(
-        spec.prediction_type,
-        experts,
-        scaler,
-        Xval_s,
-        Xte_s,
-        col_idx,
-    )
-
+    y_val, y_test, predictions_val, predictions_test, features_val, features_test =
+        before_rxinfer(spec)
     n_forecasters = size(predictions_val, 1)
     n_val = length(y_val)
     n_test = length(y_test)
 
-    # 4. Construct features from scaled inputs
-    features_val = make_features(Xval_s)
-    features_test = make_features(Xte_s)
+    n_obs = something(spec.subsample_size, n_val)
+    model = hierarchical_model(
+        n_forecasters = n_forecasters,
+        n_obs = n_obs,
+        priors = spec.priors,
+    )
+    constraints = hierarchical_constraints()
+    init = hierarchical_init(spec.priors)
+    data = (y = y_val, features = features_val, predictions = predictions_val)
 
-    # 5. Fit hierarchical ensemble on validation data
     @info "Fitting hierarchical ensemble on validation data" n_forecasters n_val
-    result = infer(
-        model = hierarchical_model(
-            n_forecasters = n_forecasters,
-            n_obs = n_val,
-            priors = spec.priors,
-        ),
-        data = (y = y_val, features = features_val, predictions = predictions_val),
-        constraints = hierarchical_constraints(),
-        initialization = hierarchical_init(spec.priors),
-        iterations = spec.inference_iterations,
-        free_energy = true,
+    result = run_training_rxinfer(
+        spec,
+        model,
+        data;
+        constraints = constraints,
+        initialization = init,
         showprogress = true,
     )
 
@@ -996,67 +912,30 @@ end
 # ---------------------------------------------------------------------------
 
 function run_hierarchical_multivariate(spec::ExperimentSpecifier{Multivariate,Hierarchical})
-    # 1. Load expert models
-    @info "Loading expert models" n = length(spec.experts)
-    experts = map(load_jld2_model, spec.experts)
-    base_meta = experts[1].meta
-
-    # 2. Load raw data & split
-    Xmat, feat_cols = load_dataset(spec.dataset, spec.dataset_path)
-
-    d = length(feat_cols)
-    seq_len = Int(base_meta.seq_len)
-    horizon = Int(base_meta.horizon)
-    X3, Y2 = make_sequences(Xmat; seq_len = seq_len, horizon = horizon)
-
-    split = base_meta.split
-    _, _, Xval, Yval, Xte, Yte =
-        train_val_test_split(X3, Y2; ratios = (split.train, split.val, split.test))
-
-    scaler = base_meta.scaler
-    n_scaler = length(scaler.μ)
-    n_feat = size(Xval, 1)
-    n_scaler == n_feat || error(
-        "Scaler dimension ($n_scaler) from expert model does not match " *
-        "dataset features ($n_feat). The expert was likely trained on a " *
-        "different dataset. Check that `dataset_path` in the YAML matches " *
-        "the experts' training data.",
-    )
-    Xval_s = scale_inputs(scaler, Xval)
-    Xte_s = scale_inputs(scaler, Xte)
-    Yval_s = scale_targets(scaler, Yval)
-    Yte_s = scale_targets(scaler, Yte)
-
-    n_val = size(Xval, 3)
-    n_test = size(Xte, 3)
-
-    # Ground truth as vectors of vectors (for RxInfer)
-    y_val = [Float64.(Yval_s[:, j]) for j = 1:n_val]
-    y_test = [Float64.(Yte_s[:, j]) for j = 1:n_test]
-
-    # 3. Generate expert predictions
-    predictions_val, predictions_test =
-        generate_expert_predictions(spec.prediction_type, experts, scaler, Xval_s, Xte_s)
-
+    y_val, y_test, predictions_val, predictions_test, features_val, features_test =
+        before_rxinfer(spec)
     n_forecasters = size(predictions_val, 1)
+    n_val = length(y_val)
+    n_test = length(y_test)
+    d = length(y_val[1])
 
-    # 4. Construct features from scaled inputs
-    features_val = make_features(Xval_s)
-    features_test = make_features(Xte_s)
+    n_obs = something(spec.subsample_size, n_val)
+    model = multivariate_hierarchical_model(
+        n_forecasters = n_forecasters,
+        n_obs = n_obs,
+        priors = spec.priors,
+    )
+    constraints = multivariate_hierarchical_constraints()
+    init = multivariate_hierarchical_init(spec.priors)
+    data = (y = y_val, features = features_val, predictions = predictions_val)
 
-    # 5. Fit hierarchical ensemble on validation data
     @info "Fitting hierarchical multivariate ensemble on validation data" d n_forecasters n_val
-    result = infer(
-        model = multivariate_hierarchical_model(
-            n_forecasters = n_forecasters,
-            n_obs = n_val,
-            priors = spec.priors,
-        ),
-        data = (y = y_val, features = features_val, predictions = predictions_val),
-        constraints = multivariate_hierarchical_constraints(),
-        initialization = multivariate_hierarchical_init(spec.priors),
-        iterations = spec.inference_iterations,
-        free_energy = true,
+    result = run_training_rxinfer(
+        spec,
+        model,
+        data;
+        constraints = constraints,
+        initialization = init,
         showprogress = true,
     )
 
@@ -1069,7 +948,7 @@ function run_hierarchical_multivariate(spec::ExperimentSpecifier{Multivariate,Hi
     γ_means_val = mean.(γ_posteriors)
 
     # Per-expert validation MSE (multivariate)
-    Yval_mat = Float64.(Yval_s)
+    Yval_mat = reduce(hcat, y_val)
     @info "Learned hierarchical weights on validation"
     for i = 1:n_forecasters
         pred_mat_i = reduce(hcat, predictions_val[i, :])
@@ -1079,7 +958,7 @@ function run_hierarchical_multivariate(spec::ExperimentSpecifier{Multivariate,Hi
             round(mse_i; digits = 6)
     end
 
-    # 6. Ensemble predictions on test
+    # Ensemble predictions on test
     @info "Generating hierarchical ensemble predictions on test"
     posterior_priors = Dict{Symbol,Any}(
         :w => w_posteriors,
@@ -1115,8 +994,8 @@ function run_hierarchical_multivariate(spec::ExperimentSpecifier{Multivariate,Hi
     γ_test_posteriors = infer_test.posteriors[:γ][end]
     γ_means_test = mean.(γ_test_posteriors)
 
-    # 7. Metrics (multivariate)
-    Yte_mat = Float64.(Yte_s)
+    # Metrics (multivariate)
+    Yte_mat = reduce(hcat, y_test)
     ensemble_metrics = (
         mse = mse_mv(ensemble_mean, Yte_mat),
         mae = mae_mv(ensemble_mean, Yte_mat),
@@ -1128,7 +1007,7 @@ function run_hierarchical_multivariate(spec::ExperimentSpecifier{Multivariate,Hi
 
     @info "Ensemble test metrics (multivariate)" ensemble_metrics...
 
-    # 8. Save results
+    # Save results
     results = (
         w_posteriors = w_posteriors,
         τ_posteriors = τ_posteriors,
@@ -1155,66 +1034,30 @@ function run_hierarchical_multivariate(spec::ExperimentSpecifier{Multivariate,Hi
 end
 
 function run_deep_multivariate(spec::ExperimentSpecifier{Multivariate,Deep})
-    # 1. Load expert models
-    @info "Loading expert models" n = length(spec.experts)
-    experts = map(load_jld2_model, spec.experts)
-    base_meta = experts[1].meta
-
-    # 2. Load raw data & split
-    Xmat, feat_cols = load_dataset(spec.dataset, spec.dataset_path)
-
-    d = length(feat_cols)
-    seq_len = Int(base_meta.seq_len)
-    horizon = Int(base_meta.horizon)
-    X3, Y2 = make_sequences(Xmat; seq_len = seq_len, horizon = horizon)
-
-    split = base_meta.split
-    _, _, Xval, Yval, Xte, Yte =
-        train_val_test_split(X3, Y2; ratios = (split.train, split.val, split.test))
-
-    scaler = base_meta.scaler
-    n_scaler = length(scaler.μ)
-    n_feat = size(Xval, 1)
-    n_scaler == n_feat || error(
-        "Scaler dimension ($n_scaler) from expert model does not match " *
-        "dataset features ($n_feat). The expert was likely trained on a " *
-        "different dataset. Check that `dataset_path` in the YAML matches " *
-        "the experts' training data.",
-    )
-    Xval_s = scale_inputs(scaler, Xval)
-    Xte_s = scale_inputs(scaler, Xte)
-    Yval_s = scale_targets(scaler, Yval)
-    Yte_s = scale_targets(scaler, Yte)
-
-    n_val = size(Xval, 3)
-    n_test = size(Xte, 3)
-
-    y_val = [Float64.(Yval_s[:, j]) for j = 1:n_val]
-    y_test = [Float64.(Yte_s[:, j]) for j = 1:n_test]
-
-    # 3. Generate expert predictions
-    predictions_val, predictions_test =
-        generate_expert_predictions(spec.prediction_type, experts, scaler, Xval_s, Xte_s)
-
+    y_val, y_test, predictions_val, predictions_test, features_val, features_test =
+        before_rxinfer(spec)
     n_forecasters = size(predictions_val, 1)
+    n_val = length(y_val)
+    n_test = length(y_test)
+    d = length(y_val[1])
 
-    # 4. Construct features from scaled inputs
-    features_val = make_features(Xval_s)
-    features_test = make_features(Xte_s)
+    n_obs = something(spec.subsample_size, n_val)
+    model = multivariate_deep_model(
+        n_forecasters = n_forecasters,
+        n_obs = n_obs,
+        priors = spec.priors,
+    )
+    constraints = multivariate_deep_constraints()
+    init = multivariate_deep_init(spec.priors)
+    data = (y = y_val, features = features_val, predictions = predictions_val)
 
-    # 5. Fit deep ensemble on validation data
     @info "Fitting deep multivariate ensemble on validation data" d n_forecasters n_val
-    result = infer(
-        model = multivariate_deep_model(
-            n_forecasters = n_forecasters,
-            n_obs = n_val,
-            priors = spec.priors,
-        ),
-        data = (y = y_val, features = features_val, predictions = predictions_val),
-        constraints = multivariate_deep_constraints(),
-        initialization = multivariate_deep_init(spec.priors),
-        iterations = spec.inference_iterations,
-        free_energy = true,
+    result = run_training_rxinfer(
+        spec,
+        model,
+        data;
+        constraints = constraints,
+        initialization = init,
         showprogress = true,
     )
 
@@ -1227,7 +1070,7 @@ function run_deep_multivariate(spec::ExperimentSpecifier{Multivariate,Deep})
 
     γ_means_val = mean.(γ_posteriors)
 
-    Yval_mat = Float64.(Yval_s)
+    Yval_mat = reduce(hcat, y_val)
     @info "Learned deep weights on validation"
     for i = 1:n_forecasters
         pred_mat_i = reduce(hcat, predictions_val[i, :])
@@ -1237,7 +1080,7 @@ function run_deep_multivariate(spec::ExperimentSpecifier{Multivariate,Deep})
             round(mse_i; digits = 6)
     end
 
-    # 6. Ensemble predictions on test
+    # Ensemble predictions on test
     @info "Generating deep ensemble predictions on test"
     posterior_priors = Dict{Symbol,Any}(
         :w => w_posteriors,
@@ -1273,8 +1116,8 @@ function run_deep_multivariate(spec::ExperimentSpecifier{Multivariate,Deep})
     γ_test_posteriors = infer_test.posteriors[:γ][end]
     γ_means_test = mean.(γ_test_posteriors)
 
-    # 7. Metrics
-    Yte_mat = Float64.(Yte_s)
+    # Metrics
+    Yte_mat = reduce(hcat, y_test)
     ensemble_metrics = (
         mse = mse_mv(ensemble_mean, Yte_mat),
         mae = mae_mv(ensemble_mean, Yte_mat),
@@ -1286,7 +1129,7 @@ function run_deep_multivariate(spec::ExperimentSpecifier{Multivariate,Deep})
 
     @info "Ensemble test metrics (multivariate)" ensemble_metrics...
 
-    # 8. Save results
+    # Save results
     results = (
         w_posteriors = w_posteriors,
         v_posteriors = v_posteriors,
@@ -1318,64 +1161,25 @@ end
 # ---------------------------------------------------------------------------
 
 function run_deep_univariate(spec::ExperimentSpecifier{Univariate,Deep})
-    # 1. Load expert models
-    @info "Loading expert models" n = length(spec.experts)
-    experts = map(load_jld2_model, spec.experts)
-    base_meta = experts[1].meta
-
-    # 2. Load raw data & split
-    Xmat, feat_cols = load_dataset(spec.dataset, spec.dataset_path)
-
-    col_idx = find_column_index(feat_cols, spec.column)
-
-    seq_len = Int(base_meta.seq_len)
-    horizon = Int(base_meta.horizon)
-    X3, Y2 = make_sequences(Xmat; seq_len = seq_len, horizon = horizon)
-
-    split = base_meta.split
-    _, _, Xval, Yval, Xte, Yte =
-        train_val_test_split(X3, Y2; ratios = (split.train, split.val, split.test))
-
-    scaler = base_meta.scaler
-    Xval_s = scale_inputs(scaler, Xval)
-    Xte_s = scale_inputs(scaler, Xte)
-    Yval_s = scale_targets(scaler, Yval)
-    Yte_s = scale_targets(scaler, Yte)
-
-    y_val = Float64.(Yval_s[col_idx, :])
-    y_test = Float64.(Yte_s[col_idx, :])
-
-    # 3. Generate expert predictions
-    predictions_val, predictions_test = generate_expert_predictions(
-        spec.prediction_type,
-        experts,
-        scaler,
-        Xval_s,
-        Xte_s,
-        col_idx,
-    )
-
+    y_val, y_test, predictions_val, predictions_test, features_val, features_test =
+        before_rxinfer(spec)
     n_forecasters = size(predictions_val, 1)
     n_val = length(y_val)
     n_test = length(y_test)
 
-    # 4. Construct features from scaled inputs
-    features_val = make_features(Xval_s)
-    features_test = make_features(Xte_s)
+    n_obs = something(spec.subsample_size, n_val)
+    model = deep_model(n_forecasters = n_forecasters, n_obs = n_obs, priors = spec.priors)
+    constraints = deep_constraints()
+    init = deep_init(spec.priors)
+    data = (y = y_val, features = features_val, predictions = predictions_val)
 
-    # 5. Fit deep ensemble on validation data
     @info "Fitting deep ensemble on validation data" n_forecasters n_val
-    result = infer(
-        model = deep_model(
-            n_forecasters = n_forecasters,
-            n_obs = n_val,
-            priors = spec.priors,
-        ),
-        data = (y = y_val, features = features_val, predictions = predictions_val),
-        constraints = deep_constraints(),
-        initialization = deep_init(spec.priors),
-        iterations = spec.inference_iterations,
-        free_energy = true,
+    result = run_training_rxinfer(
+        spec,
+        model,
+        data;
+        constraints = constraints,
+        initialization = init,
         showprogress = true,
     )
 
