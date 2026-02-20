@@ -802,7 +802,7 @@ function run_hierarchical_univariate(spec::ExperimentSpecifier{Univariate,Hierar
         n_obs = n_obs,
         priors = spec.priors,
     )
-    constraints = hierarchical_constraints()
+    constraints = hierarchical_constraints(spec.priors, false)
     init = hierarchical_init(spec.priors)
     data = (y = y_val, features = features_val, predictions = predictions_val)
 
@@ -853,7 +853,7 @@ function run_hierarchical_univariate(spec::ExperimentSpecifier{Univariate,Hierar
             features = features_test,
             predictions = predictions_test,
         ),
-        constraints = hierarchical_constraints(),
+        constraints = hierarchical_constraints(spec.priors, true),
         initialization = hierarchical_init(posterior_priors),
         iterations = spec.prediction_iterations,
         free_energy = false,

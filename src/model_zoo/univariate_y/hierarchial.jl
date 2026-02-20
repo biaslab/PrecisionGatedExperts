@@ -18,7 +18,7 @@
     end
 end
 
-@constraints function hierarchical_constraints()
+@constraints function hierarchical_constraints(priors, prediction)
     q(w, z, β, γ, τ, ρ) = q(w)q(z, β)q(γ)q(τ)q(ρ)
     q(
         z,
@@ -32,6 +32,17 @@ end
         Gamma,
         parameters = ProjectionParameters(strategy = ClosedFormStrategy()),
     )
+    if prediction
+        for (i, prior) in enumerate(priors[:w])
+            q(w[i])::RxInfer.FixedMarginalFormConstraint(prior)
+        end
+        for (i, prior) in enumerate(priors[:τ])
+            q(τ[i])::RxInfer.FixedMarginalFormConstraint(prior)
+        end
+        for (i, prior) in enumerate(priors[:ρ])
+            q(ρ[i])::RxInfer.FixedMarginalFormConstraint(prior)
+        end
+    end
 end
 
 @initialization function hierarchical_init(priors)
