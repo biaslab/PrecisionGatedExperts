@@ -43,12 +43,12 @@ end
 
 function subsample_data(rng, sampled_ids, data::Vector, subsample_size::Int)
     indx = 1:size(data, 1)
-    sample!(rng, indx, sampled_ids; replace=false)
+    sample!(rng, indx, sampled_ids; replace = false)
     return view(data, sampled_ids)
 end
 
 function subsample_data(rng, sampled_ids, data::Matrix, subsample_size::Int)
     colindx = 1:size(data, 2)
-    sample!(rng, colindx, sampled_ids; replace=false)
+    sample!(rng, colindx, sampled_ids; replace = false)
     return view(data, :, sampled_ids)
 end

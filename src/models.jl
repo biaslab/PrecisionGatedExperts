@@ -326,7 +326,11 @@ function upsample_repeat_to(x::AbstractArray{T,3}, target_len::Int, factor::Int)
     end
 end
 
-function sinusoidal_positional_encoding(d_model::Int, n_tokens::Int, ::Type{T}) where {T<:Real}
+function sinusoidal_positional_encoding(
+    d_model::Int,
+    n_tokens::Int,
+    ::Type{T},
+) where {T<:Real}
     pe = Array{T}(undef, d_model, n_tokens, 1)
     @inbounds for p = 1:n_tokens
         pos = T(p - 1)

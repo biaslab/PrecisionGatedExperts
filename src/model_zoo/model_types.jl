@@ -92,8 +92,10 @@ function parse_priors(::Deep, cfg::Dict, n_forecasters::Int)
     n_features = w_cfg["n_features"]
     w_type = w_cfg["type"]
     if w_type == "MvNormalMeanScalePrecision"
-        priors[:w] =
-            [MvNormalMeanScalePrecision(zeros(n_features), w_cfg["scale"]) for _ = 1:n_forecasters]
+        priors[:w] = [
+            MvNormalMeanScalePrecision(zeros(n_features), w_cfg["scale"]) for
+            _ = 1:n_forecasters
+        ]
     else
         error("Unknown w prior type: $w_type. Supported: MvNormalMeanScalePrecision")
     end
@@ -102,8 +104,10 @@ function parse_priors(::Deep, cfg::Dict, n_forecasters::Int)
     n_features_v = v_cfg["n_features"]
     v_type = v_cfg["type"]
     if v_type == "MvNormalMeanScalePrecision"
-        priors[:v] =
-            [MvNormalMeanScalePrecision(zeros(n_features_v), v_cfg["scale"]) for _ = 1:n_forecasters]
+        priors[:v] = [
+            MvNormalMeanScalePrecision(zeros(n_features_v), v_cfg["scale"]) for
+            _ = 1:n_forecasters
+        ]
     else
         error("Unknown v prior type: $v_type. Supported: MvNormalMeanScalePrecision")
     end

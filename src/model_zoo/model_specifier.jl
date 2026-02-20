@@ -282,7 +282,7 @@ function before_rxinfer(spec::ExperimentSpecifier{Univariate})
     @info "Loading expert models" n = length(spec.experts)
     experts = map(load_jld2_model, spec.experts)
     base_meta = experts[1].meta
-    
+
     Xmat, feat_cols = load_dataset(spec.dataset, spec.dataset_path)
     col_idx = find_column_index(feat_cols, spec.column)
 
@@ -293,7 +293,7 @@ function before_rxinfer(spec::ExperimentSpecifier{Univariate})
     split = base_meta.split
     _, _, Xval, Yval, Xte, Yte =
         train_val_test_split(X3, Y2; ratios = (split.train, split.val, split.test))
-    
+
     scaler = base_meta.scaler
     Xval_s = scale_inputs(scaler, Xval)
     Xte_s = scale_inputs(scaler, Xte)
@@ -531,7 +531,8 @@ function run_static_multivariate(spec::ExperimentSpecifier{Multivariate,Static})
 end
 
 function run_dynamic_univariate(spec::ExperimentSpecifier{Univariate,Dynamic})
-    y_val, y_test, predictions_val, predictions_test, features_val, features_test = before_rxinfer(spec)
+    y_val, y_test, predictions_val, predictions_test, features_val, features_test =
+        before_rxinfer(spec)
     n_forecasters = size(predictions_val, 1)
     n_val = length(y_val)
     n_test = length(y_test)
@@ -643,7 +644,8 @@ end
 # ---------------------------------------------------------------------------
 
 function run_dynamic_multivariate(spec::ExperimentSpecifier{Multivariate,Dynamic})
-    y_val, y_test, predictions_val, predictions_test, features_val, features_test = before_rxinfer(spec)
+    y_val, y_test, predictions_val, predictions_test, features_val, features_test =
+        before_rxinfer(spec)
     n_forecasters = size(predictions_val, 1)
     n_val = length(y_val)
     n_test = length(y_test)
@@ -760,7 +762,8 @@ end
 # ---------------------------------------------------------------------------
 
 function run_hierarchical_univariate(spec::ExperimentSpecifier{Univariate,Hierarchical})
-    y_val, y_test, predictions_val, predictions_test, features_val, features_test = before_rxinfer(spec)
+    y_val, y_test, predictions_val, predictions_test, features_val, features_test =
+        before_rxinfer(spec)
     n_forecasters = size(predictions_val, 1)
     n_val = length(y_val)
     n_test = length(y_test)
@@ -876,7 +879,8 @@ end
 # ---------------------------------------------------------------------------
 
 function run_hierarchical_multivariate(spec::ExperimentSpecifier{Multivariate,Hierarchical})
-    y_val, y_test, predictions_val, predictions_test, features_val, features_test = before_rxinfer(spec)
+    y_val, y_test, predictions_val, predictions_test, features_val, features_test =
+        before_rxinfer(spec)
     n_forecasters = size(predictions_val, 1)
     n_val = length(y_val)
     n_test = length(y_test)
@@ -893,10 +897,10 @@ function run_hierarchical_multivariate(spec::ExperimentSpecifier{Multivariate,Hi
             n_obs = subsample_size,
             priors = spec.priors,
         ),
-        data = (y = 
-            SubsampledData(y_val, subsample_size), 
-            features = SubsampledData(features_val, subsample_size), 
-            predictions = SubsampledData(predictions_val, subsample_size)
+        data = (
+            y = SubsampledData(y_val, subsample_size),
+            features = SubsampledData(features_val, subsample_size),
+            predictions = SubsampledData(predictions_val, subsample_size),
         ),
         constraints = multivariate_hierarchical_constraints(),
         initialization = multivariate_hierarchical_init(spec.priors),
@@ -1002,7 +1006,8 @@ function run_hierarchical_multivariate(spec::ExperimentSpecifier{Multivariate,Hi
 end
 
 function run_deep_multivariate(spec::ExperimentSpecifier{Multivariate,Deep})
-    y_val, y_test, predictions_val, predictions_test, features_val, features_test = before_rxinfer(spec)
+    y_val, y_test, predictions_val, predictions_test, features_val, features_test =
+        before_rxinfer(spec)
     n_forecasters = size(predictions_val, 1)
     n_val = length(y_val)
     n_test = length(y_test)
@@ -1124,7 +1129,8 @@ end
 # ---------------------------------------------------------------------------
 
 function run_deep_univariate(spec::ExperimentSpecifier{Univariate,Deep})
-    y_val, y_test, predictions_val, predictions_test, features_val, features_test = before_rxinfer(spec)
+    y_val, y_test, predictions_val, predictions_test, features_val, features_test =
+        before_rxinfer(spec)
     n_forecasters = size(predictions_val, 1)
     n_val = length(y_val)
     n_test = length(y_test)
