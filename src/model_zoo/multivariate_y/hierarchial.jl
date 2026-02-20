@@ -74,7 +74,7 @@ function ReactiveMP.constrain_form(constraint::SubsampleFormConstraint, distribu
 end
 
 @meta function multivariate_hierarchical_meta()
-    # (bvdmidtri) This enables product from right to left
+    # (bvdmitri) This enables product from right to left
     # Though I didn't implement the proper rules
     # Instead it would result into a ProductOf structure 
     # Which then being processed by the `constrain_form` above 
