@@ -361,6 +361,32 @@ function before_rxinfer(spec::ExperimentSpecifier{Multivariate})
     return (y_val, y_test, predictions_val, predictions_test, features_val, features_test)
 end
 
+function run_training_rxinfer(spec, subsampled_data::Int, model, data; kwargs...)
+    @show "Use subsampled data with sample size $(subsampled_data)"
+    subsampled = (; (k => SubsampledData(v, subsampled_data) for (k, v) in pairs(data))...)
+    return infer(;
+        model = model,
+        data = subsampled,
+        iterations = spec.inference_iterations,
+        free_energy = true,
+        kwargs...,
+    )
+end
+
+function run_training_rxinfer(spec, ::Nothing, model, data; kwargs...)
+    @show "Run inference on the full dataset"
+    return infer(;
+        model = model,
+        data = data,
+        iterations = spec.inference_iterations,
+        free_energy = true,
+        kwargs...,
+    )
+end
+
+function run_training_rxinfer(spec, model, data; kwargs...)
+    return run_training_rxinfer(spec, spec.subsample_size, model, data; kwargs...)
+end
 # ---------------------------------------------------------------------------
 # Static Univariate pipeline
 # ---------------------------------------------------------------------------
@@ -369,16 +395,14 @@ function run_static_univariate(spec::ExperimentSpecifier{Univariate,Static})
     y_val, y_test, predictions_val, predictions_test, _, _ = before_rxinfer(spec)
     n_forecasters = size(predictions_val, 1)
 
-    @info "Fitting static ensemble on validation data"
-    result = infer(
-        model = univariate_ensemble_precision_model(
-            n_forecasters = n_forecasters,
-            priors = spec.priors,
-        ),
-        data = (y = y_val, X = predictions_val),
-        iterations = spec.inference_iterations,
-        free_energy = true,
+    model = univariate_ensemble_precision_model(
+        n_forecasters = n_forecasters,
+        priors = spec.priors,
     )
+    data = (y = y_val, X = predictions_val)
+
+    @info "Fitting static ensemble on validation data"
+    result = run_training_rxinfer(spec, model, data)
 
     free_energy = result.free_energy
     γ_posteriors = result.posteriors[:γ][end]
@@ -449,17 +473,14 @@ function run_static_multivariate(spec::ExperimentSpecifier{Multivariate,Static})
     n_test = length(y_test)
     d = length(y_val[1])
 
-    @info "Fitting static multivariate ensemble on validation data" d n_forecasters
-    result = infer(
-        model = multivariate_ensemble_precision_model(
-            n_forecasters = n_forecasters,
-            priors = spec.priors,
-        ),
-        data = (y = y_val, X = predictions_val),
-        iterations = spec.inference_iterations,
-        free_energy = true,
-        showprogress = true,
+    model = multivariate_ensemble_precision_model(
+        n_forecasters = n_forecasters,
+        priors = spec.priors,
     )
+    data = (y = y_val, X = predictions_val)
+
+    @info "Fitting static multivariate ensemble on validation data" d n_forecasters
+    result = run_training_rxinfer(spec, model, data; showprogress = true)
 
     free_energy = result.free_energy
     γ_posteriors = result.posteriors[:γ][end]
@@ -537,19 +558,23 @@ function run_dynamic_univariate(spec::ExperimentSpecifier{Univariate,Dynamic})
     n_val = length(y_val)
     n_test = length(y_test)
 
-    # Fit dynamic ensemble on validation data
+    n_obs = something(spec.subsample_size, n_val)
+    model = univariate_dynamic_ensemble(
+        n_forecasters = n_forecasters,
+        n_obs = n_obs,
+        priors = spec.priors,
+    )
+    constraints = univariate_dynamic_ensemble_constraints()
+    init = univariate_dynamic_ensemble_init(spec.priors)
+    data = (y = y_val, features = features_val, predictions = predictions_val)
+
     @info "Fitting dynamic ensemble on validation data" n_forecasters n_val
-    result = infer(
-        model = univariate_dynamic_ensemble(
-            n_forecasters = n_forecasters,
-            n_obs = n_val,
-            priors = spec.priors,
-        ),
-        data = (y = y_val, features = features_val, predictions = predictions_val),
-        constraints = univariate_dynamic_ensemble_constraints(),
-        initialization = univariate_dynamic_ensemble_init(spec.priors),
-        iterations = spec.inference_iterations,
-        free_energy = true,
+    result = run_training_rxinfer(
+        spec,
+        model,
+        data;
+        constraints = constraints,
+        initialization = init,
         showprogress = true,
     )
 
@@ -651,19 +676,23 @@ function run_dynamic_multivariate(spec::ExperimentSpecifier{Multivariate,Dynamic
     n_test = length(y_test)
     d = length(y_val[1])
 
-    # Fit dynamic ensemble on validation data
+    n_obs = something(spec.subsample_size, n_val)
+    model = multivariate_dynamic_ensemble(
+        n_forecasters = n_forecasters,
+        n_obs = n_obs,
+        priors = spec.priors,
+    )
+    constraints = multivariate_dynamic_ensemble_constraints()
+    init = multivariate_dynamic_ensemble_init(spec.priors)
+    data = (y = y_val, features = features_val, predictions = predictions_val)
+
     @info "Fitting dynamic multivariate ensemble on validation data" d n_forecasters n_val
-    result = infer(
-        model = multivariate_dynamic_ensemble(
-            n_forecasters = n_forecasters,
-            n_obs = n_val,
-            priors = spec.priors,
-        ),
-        data = (y = y_val, features = features_val, predictions = predictions_val),
-        constraints = multivariate_dynamic_ensemble_constraints(),
-        initialization = multivariate_dynamic_ensemble_init(spec.priors),
-        iterations = spec.inference_iterations,
-        free_energy = true,
+    result = run_training_rxinfer(
+        spec,
+        model,
+        data;
+        constraints = constraints,
+        initialization = init,
         showprogress = true,
     )
 
@@ -768,19 +797,23 @@ function run_hierarchical_univariate(spec::ExperimentSpecifier{Univariate,Hierar
     n_val = length(y_val)
     n_test = length(y_test)
 
-    # Fit hierarchical ensemble on validation data
+    n_obs = something(spec.subsample_size, n_val)
+    model = hierarchical_model(
+        n_forecasters = n_forecasters,
+        n_obs = n_obs,
+        priors = spec.priors,
+    )
+    constraints = hierarchical_constraints()
+    init = hierarchical_init(spec.priors)
+    data = (y = y_val, features = features_val, predictions = predictions_val)
+
     @info "Fitting hierarchical ensemble on validation data" n_forecasters n_val
-    result = infer(
-        model = hierarchical_model(
-            n_forecasters = n_forecasters,
-            n_obs = n_val,
-            priors = spec.priors,
-        ),
-        data = (y = y_val, features = features_val, predictions = predictions_val),
-        constraints = hierarchical_constraints(),
-        initialization = hierarchical_init(spec.priors),
-        iterations = spec.inference_iterations,
-        free_energy = true,
+    result = run_training_rxinfer(
+        spec,
+        model,
+        data;
+        constraints = constraints,
+        initialization = init,
         showprogress = true,
     )
 
@@ -886,27 +919,23 @@ function run_hierarchical_multivariate(spec::ExperimentSpecifier{Multivariate,Hi
     n_test = length(y_test)
     d = length(y_val[1])
 
-    # For the validation part we subsample data on each variational iteration
-    subsample_size = 100
+    n_obs = something(spec.subsample_size, n_val)
+    model = multivariate_hierarchical_model(
+        n_forecasters = n_forecasters,
+        n_obs = n_obs,
+        priors = spec.priors,
+    )
+    constraints = multivariate_hierarchical_constraints()
+    init = multivariate_hierarchical_init(spec.priors)
+    data = (y = y_val, features = features_val, predictions = predictions_val)
 
-    # Fit hierarchical ensemble on validation data
-    @info "Fitting hierarchical multivariate ensemble on validation data" d n_forecasters n_val subsample_size
-    result = infer(
-        model = multivariate_hierarchical_model(
-            n_forecasters = n_forecasters,
-            n_obs = subsample_size,
-            priors = spec.priors,
-        ),
-        data = (
-            y = SubsampledData(y_val, subsample_size),
-            features = SubsampledData(features_val, subsample_size),
-            predictions = SubsampledData(predictions_val, subsample_size),
-        ),
-        constraints = multivariate_hierarchical_constraints(),
-        initialization = multivariate_hierarchical_init(spec.priors),
-        meta = multivariate_hierarchical_meta(),
-        iterations = spec.inference_iterations,
-        free_energy = true,
+    @info "Fitting hierarchical multivariate ensemble on validation data" d n_forecasters n_val
+    result = run_training_rxinfer(
+        spec,
+        model,
+        data;
+        constraints = constraints,
+        initialization = init,
         showprogress = true,
     )
 
@@ -952,7 +981,6 @@ function run_hierarchical_multivariate(spec::ExperimentSpecifier{Multivariate,Hi
         ),
         constraints = multivariate_hierarchical_constraints(),
         initialization = multivariate_hierarchical_init(posterior_priors),
-        meta = multivariate_hierarchical_meta(),
         iterations = spec.prediction_iterations,
         free_energy = false,
         showprogress = true,
@@ -1013,19 +1041,23 @@ function run_deep_multivariate(spec::ExperimentSpecifier{Multivariate,Deep})
     n_test = length(y_test)
     d = length(y_val[1])
 
-    # Fit deep ensemble on validation data
+    n_obs = something(spec.subsample_size, n_val)
+    model = multivariate_deep_model(
+        n_forecasters = n_forecasters,
+        n_obs = n_obs,
+        priors = spec.priors,
+    )
+    constraints = multivariate_deep_constraints()
+    init = multivariate_deep_init(spec.priors)
+    data = (y = y_val, features = features_val, predictions = predictions_val)
+
     @info "Fitting deep multivariate ensemble on validation data" d n_forecasters n_val
-    result = infer(
-        model = multivariate_deep_model(
-            n_forecasters = n_forecasters,
-            n_obs = n_val,
-            priors = spec.priors,
-        ),
-        data = (y = y_val, features = features_val, predictions = predictions_val),
-        constraints = multivariate_deep_constraints(),
-        initialization = multivariate_deep_init(spec.priors),
-        iterations = spec.inference_iterations,
-        free_energy = true,
+    result = run_training_rxinfer(
+        spec,
+        model,
+        data;
+        constraints = constraints,
+        initialization = init,
         showprogress = true,
     )
 
@@ -1135,19 +1167,19 @@ function run_deep_univariate(spec::ExperimentSpecifier{Univariate,Deep})
     n_val = length(y_val)
     n_test = length(y_test)
 
-    # Fit deep ensemble on validation data
+    n_obs = something(spec.subsample_size, n_val)
+    model = deep_model(n_forecasters = n_forecasters, n_obs = n_obs, priors = spec.priors)
+    constraints = deep_constraints()
+    init = deep_init(spec.priors)
+    data = (y = y_val, features = features_val, predictions = predictions_val)
+
     @info "Fitting deep ensemble on validation data" n_forecasters n_val
-    result = infer(
-        model = deep_model(
-            n_forecasters = n_forecasters,
-            n_obs = n_val,
-            priors = spec.priors,
-        ),
-        data = (y = y_val, features = features_val, predictions = predictions_val),
-        constraints = deep_constraints(),
-        initialization = deep_init(spec.priors),
-        iterations = spec.inference_iterations,
-        free_energy = true,
+    result = run_training_rxinfer(
+        spec,
+        model,
+        data;
+        constraints = constraints,
+        initialization = init,
         showprogress = true,
     )
 

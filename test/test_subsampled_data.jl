@@ -18,7 +18,7 @@ sample_pred = RxInfer.get_data(predictons_val_data);
 sample_features = RxInfer.get_data(features_val_data);
 
 @show y_sampled_data.rng
-@show y_sampled_data.rng
+@show predictons_val_data.rng
 @show y_sampled_data.rng == predictons_val_data.rng 
 @show predictons_val_data.sampled_ids == y_sampled_data.sampled_ids
 @show all(predictions_val[:, y_sampled_data.sampled_ids[1]] .≈ sample_pred)
