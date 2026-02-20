@@ -1045,7 +1045,7 @@ function run_hierarchical_multivariate(spec::ExperimentSpecifier{Multivariate,Hi
     features_test = make_features(Xte_s)
 
     # For the validation part we subsample data on each variational iteration
-    subsample_size = 25
+    subsample_size = 100
 
     # 5. Fit hierarchical ensemble on validation data
     @info "Fitting hierarchical multivariate ensemble on validation data" d n_forecasters n_val subsample_size

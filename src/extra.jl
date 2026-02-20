@@ -32,8 +32,7 @@ struct SubsampledData{R,T}
 end
 
 function SubsampledData(original_data::T, subsample_size::Int) where {T}
-    lastdimension_len = last(size(original_data))
-    rng = StableRNGs.StableRNG(lastdimension_len)
+    rng = StableRNGs.StableRNG(subsample_size)
     sampled_ids = zeros(Int, subsample_size)
     return SubsampledData(original_data, subsample_size, rng, sampled_ids)
 end
