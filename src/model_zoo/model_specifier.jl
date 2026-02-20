@@ -700,11 +700,10 @@ function run_dynamic_multivariate(spec::ExperimentSpecifier{Multivariate,Dynamic
     w_posteriors = result.posteriors[:w][end]
     τ_posteriors = result.posteriors[:τ][end]
     β_posteriors = result.posteriors[:β][end]
-    γ_posteriors = result.posteriors[:γ][end]  # (n_forecasters, n_val)
+    γ_posteriors = result.posteriors[:γ][end]
 
     γ_means_val = mean.(γ_posteriors)
 
-    # Per-expert validation MSE (multivariate)
     Yval_mat = reduce(hcat, y_val)
     @info "Learned dynamic weights on validation"
     for i = 1:n_forecasters
@@ -925,7 +924,7 @@ function run_hierarchical_multivariate(spec::ExperimentSpecifier{Multivariate,Hi
         n_obs = n_obs,
         priors = spec.priors,
     )
-    constraints = multivariate_hierarchical_constraints()
+    constraints = multivariate_hierarchical_constraints(spec.priors, false)
     init = multivariate_hierarchical_init(spec.priors)
     data = (y = y_val, features = features_val, predictions = predictions_val)
 
@@ -945,9 +944,7 @@ function run_hierarchical_multivariate(spec::ExperimentSpecifier{Multivariate,Hi
     ρ_posteriors = result.posteriors[:ρ][end]
     γ_posteriors = result.posteriors[:γ][end]
 
-    γ_means_val = mean.(γ_posteriors)
-
-    # Per-expert validation MSE (multivariate)
+    γ_means_val = mean.(γ_posteriors)    
     Yval_mat = reduce(hcat, y_val)
     @info "Learned hierarchical weights on validation"
     for i = 1:n_forecasters
@@ -958,7 +955,6 @@ function run_hierarchical_multivariate(spec::ExperimentSpecifier{Multivariate,Hi
             round(mse_i; digits = 6)
     end
 
-    # Ensemble predictions on test
     @info "Generating hierarchical ensemble predictions on test"
     posterior_priors = Dict{Symbol,Any}(
         :w => w_posteriors,
@@ -979,7 +975,7 @@ function run_hierarchical_multivariate(spec::ExperimentSpecifier{Multivariate,Hi
             features = features_test,
             predictions = predictions_test,
         ),
-        constraints = multivariate_hierarchical_constraints(),
+        constraints = multivariate_hierarchical_constraints(posterior_priors, true),
         initialization = multivariate_hierarchical_init(posterior_priors),
         iterations = spec.prediction_iterations,
         free_energy = false,

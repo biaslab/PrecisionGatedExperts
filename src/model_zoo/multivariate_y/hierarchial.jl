@@ -25,7 +25,7 @@
     end
 end
 
-@constraints function multivariate_hierarchical_constraints()
+@constraints function multivariate_hierarchical_constraints(priors, prediction)
     q(w, z, β, γ, τ, ρ) = q(w)q(z, β)q(γ)q(τ)q(ρ)
     q(
         z,
@@ -39,14 +39,24 @@ end
         Gamma,
         parameters = ProjectionParameters(strategy = ClosedFormStrategy()),
     )
-    # q(w) :: SubsampleFormConstraint(100) # This will subsample messages inside the product
+    if prediction
+        for (i, prior) in enumerate(priors[:w])
+            q(w[i])::RxInfer.FixedMarginalFormConstraint(prior)
+        end
+        for (i, prior) in enumerate(priors[:τ])
+            q(τ[i])::RxInfer.FixedMarginalFormConstraint(prior)
+        end
+        for (i, prior) in enumerate(priors[:ρ])
+            q(ρ[i])::RxInfer.FixedMarginalFormConstraint(prior)
+        end
+    end
 end
 
 @initialization function multivariate_hierarchical_init(priors)
     q(w) = priors[:w]
+    q(τ) = priors[:τ]
+    q(ρ) = priors[:ρ]
     q(z) = NormalMeanVariance(0.0, 1.0)
     q(β) = GammaShapeScale(1.0, 1.0)
     q(γ) = GammaShapeScale(1.0, 1.0)
-    q(τ) = priors[:τ]
-    q(ρ) = priors[:ρ]
 end

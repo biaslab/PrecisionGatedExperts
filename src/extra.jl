@@ -1,3 +1,5 @@
+export FrozenDistribution
+
 # Unavoidable type piracy due to RxInfer design
 
 using BayesBase
