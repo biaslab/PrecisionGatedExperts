@@ -45,10 +45,8 @@ function parse_model_type(s::String)
     error("Unknown model_type: $s")
 end
 
-function run_experiment(path_to_yaml::String)
-    config = YAML.load_file(path_to_yaml)
+function _parse_spec(config)
     p = config["params"]
-
     prediction_type = parse_prediction_type(p["prediction_type"])
     model_type = parse_model_type(p["model_type"])
     column = get(p, "column", nothing)
@@ -61,7 +59,7 @@ function run_experiment(path_to_yaml::String)
     prediction_iterations = p["prediction_iterations"]
     save_predictions = get(p, "save_predictions", false)
     subsample_size = get(p, "subsample_size", nothing)
-    spec = ExperimentSpecifier(
+    return ExperimentSpecifier(
         prediction_type,
         model_type,
         column,
@@ -75,9 +73,12 @@ function run_experiment(path_to_yaml::String)
         save_predictions,
         subsample_size,
     )
-    
-    results = run_experiment(spec)
+end
 
+function run_experiment(path_to_yaml::String)
+    config = YAML.load_file(path_to_yaml)
+    spec = _parse_spec(config)
+    results = run_experiment(spec)
     results_dir = "final_results"
     mkpath(results_dir)
     ds_name = typeof(spec.dataset).parameters[1]
