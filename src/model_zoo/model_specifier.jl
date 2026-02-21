@@ -95,7 +95,8 @@ function run_experiment(path_to_yaml::String)
         pairs(results)
     else
         @info "predictions are not saved"
-        (k => v for (k, v) in pairs(results) if k !== :predictions_test)
+        skipped_fields = [:ensemble_std, :ensemble_mean, :y_test, :predictions_test]
+        (k => v for (k, v) in pairs(results) if !(k in skipped_fields))
     end
     JLD2.jldsave(results_path; save_data...)
     @info "Results saved" path=results_path save_predictions=spec.save_predictions
