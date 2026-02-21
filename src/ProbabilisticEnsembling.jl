@@ -4,6 +4,7 @@ using RxInfer
 using StableRNGs
 
 include("utils.jl")
+include("average_error.jl")
 include("log.jl")
 include("extra.jl")
 include("models.jl")
