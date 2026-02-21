@@ -332,30 +332,11 @@ function predict_from_trained_ensemble(
 
     ensemble_preds = infer_test.predictions[:y][end]
 
-    if prediction_type isa Univariate
-        ensemble_mean = map(mean, ensemble_preds)
-        ensemble_std = map(std, ensemble_preds)
-        ensemble_metrics = (
-            mse = mse(ensemble_mean, y_test),
-            mae = mae(ensemble_mean, y_test),
-            rmse = rmse(ensemble_mean, y_test),
-            r2 = r2(ensemble_mean, y_test),
-            mape = mape(ensemble_mean, y_test),
-            smape = smape(ensemble_mean, y_test),
-        )
-    else
-        ensemble_mean = reduce(hcat, map(mean, ensemble_preds))
-        ensemble_std = reduce(hcat, map(std, ensemble_preds))
-        y_test_mat = reduce(hcat, y_test)
-        ensemble_metrics = (
-            mse = mse_mv(ensemble_mean, y_test_mat),
-            mae = mae_mv(ensemble_mean, y_test_mat),
-            rmse = rmse_mv(ensemble_mean, y_test_mat),
-            r2 = r2_mv(ensemble_mean, y_test_mat),
-            mape = mape_mv(ensemble_mean, y_test_mat),
-            smape = smape_mv(ensemble_mean, y_test_mat),
-        )
-    end
+    ensemble_mean, ensemble_std, ensemble_metrics = compute_ensemble_metrics(
+        spec_for_data.prediction_type,
+        ensemble_preds,
+        y_test
+    )
 
     return (
         n_prediction_steps = n_steps,
