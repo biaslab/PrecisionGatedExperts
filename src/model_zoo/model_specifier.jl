@@ -6,7 +6,7 @@ using JLD2
 using Lux
 using Reactant
 
-export run_experiment
+export run_experiment, predict_from_trained_ensemble
 
 # prediction_type: univariate | multivariate
 struct Univariate end
@@ -102,6 +102,265 @@ function run_experiment(path_to_yaml::String)
     @info "Results saved" path=results_path save_predictions=spec.save_predictions
 
     return results
+end
+
+function _parse_saved_prediction_type(s::AbstractString)
+    occursin("Univariate", s) && return Univariate()
+    occursin("Multivariate", s) && return Multivariate()
+    error("Unknown saved prediction_type: $s")
+end
+
+function _parse_saved_model_type(s::AbstractString)
+    occursin("Static", s) && return Static()
+    occursin("Dynamic", s) && return Dynamic()
+    occursin("Hierarchical", s) && return Hierarchical()
+    occursin("Deep", s) && return Deep()
+    error("Unknown saved model_type: $s")
+end
+
+function _dataset_val(x)
+    return x isa Symbol ? Val(x) : Val(Symbol(x))
+end
+
+"""
+    predict_from_trained_ensemble(path_to_jld2; prediction_iterations=20, alpha=1.0)
+
+Load a trained RxInfer ensemble from a saved results `.jld2` and run prediction on the
+full available test set using the same dataset + expert checkpoints recorded in the file.
+"""
+function predict_from_trained_ensemble(
+    path_to_jld2::AbstractString,
+    prediction_iterations::Int = 20,
+    alpha::Float64 = 1.0,
+)
+    isfile(path_to_jld2) || error("Results file not found: $path_to_jld2")
+    prediction_iterations > 0 || error("prediction_iterations must be > 0")
+
+    saved = JLD2.load(path_to_jld2)
+    haskey(saved, "spec") || error("Missing `spec` in results file: $path_to_jld2")
+    spec_saved = saved["spec"]
+
+    prediction_type = _parse_saved_prediction_type(string(spec_saved.prediction_type))
+    model_type = _parse_saved_model_type(string(spec_saved.model_type))
+    column = isnothing(spec_saved.column) ? nothing : String(spec_saved.column)
+    dataset = _dataset_val(spec_saved.dataset)
+    dataset_path = String(spec_saved.dataset_path)
+    experts = String.(spec_saved.experts)
+
+    spec_for_data = ExperimentSpecifier(
+        prediction_type,
+        model_type,
+        column,
+        Int(spec_saved.horizon),
+        dataset,
+        dataset_path,
+        experts,
+        Dict{Symbol,Any}(),
+        1,
+        prediction_iterations,
+        false,
+        nothing,
+        nothing,
+    )
+
+    _, y_test_all, _, predictions_test_all, _, features_test_all = before_rxinfer(spec_for_data)
+    n_steps = length(y_test_all)
+
+    if prediction_type isa Univariate
+        y_test = Float64.(y_test_all)
+        predictions_test = predictions_test_all
+        features_test = features_test_all
+    else
+        y_test = if y_test_all isa AbstractMatrix
+            [Float64.(y_test_all[:, j]) for j = 1:n_steps]
+        else
+            y_test_all
+        end
+        predictions_test = predictions_test_all
+        features_test = features_test_all
+    end
+
+    n_forecasters = size(predictions_test, 1)
+    prediction_array = [missing for _ = 1:n_steps]
+
+    infer_test = if prediction_type isa Univariate && model_type isa Static
+        priors = Dict{Symbol,Any}(:γ => saved["γ_posteriors"])
+        infer(
+            model = univariate_ensemble_precision_model(
+                n_forecasters = n_forecasters,
+                priors = priors,
+            ),
+            data = (y = prediction_array, X = predictions_test),
+            iterations = prediction_iterations,
+        )
+    elseif prediction_type isa Multivariate && model_type isa Static
+        priors = Dict{Symbol,Any}(:γ => saved["γ_posteriors"])
+        infer(
+            model = multivariate_ensemble_precision_model(
+                n_forecasters = n_forecasters,
+                priors = priors,
+            ),
+            data = (y = prediction_array, X = predictions_test),
+            iterations = prediction_iterations,
+        )
+    elseif prediction_type isa Univariate && model_type isa Dynamic
+        priors = Dict{Symbol,Any}(
+            :w => saved["w_posteriors"],
+            :τ => saved["τ_posteriors"],
+            :β => saved["β_posteriors"],
+        )
+        infer(
+            model = univariate_dynamic_ensemble(
+                n_forecasters = n_forecasters,
+                n_obs = n_steps,
+                priors = priors,
+            ),
+            data = (y = prediction_array, features = features_test, predictions = predictions_test),
+            constraints = univariate_dynamic_ensemble_constraints(),
+            initialization = univariate_dynamic_ensemble_init(priors),
+            iterations = prediction_iterations,
+            free_energy = false,
+            showprogress = true,
+        )
+    elseif prediction_type isa Multivariate && model_type isa Dynamic
+        priors = Dict{Symbol,Any}(
+            :w => saved["w_posteriors"],
+            :τ => saved["τ_posteriors"],
+            :β => saved["β_posteriors"],
+        )
+        infer(
+            model = multivariate_dynamic_ensemble(
+                n_forecasters = n_forecasters,
+                n_obs = n_steps,
+                priors = priors,
+            ),
+            data = (y = prediction_array, features = features_test, predictions = predictions_test),
+            constraints = multivariate_dynamic_ensemble_constraints(),
+            initialization = multivariate_dynamic_ensemble_init(priors),
+            iterations = prediction_iterations,
+            free_energy = false,
+            showprogress = true,
+        )
+    elseif prediction_type isa Univariate && model_type isa Hierarchical
+        priors = Dict{Symbol,Any}(
+            :w => saved["w_posteriors"],
+            :τ => saved["τ_posteriors"],
+            :ρ => saved["ρ_posteriors"],
+            :α => alpha,
+        )
+        infer(
+            model = hierarchical_model(
+                n_forecasters = n_forecasters,
+                n_obs = n_steps,
+                priors = priors,
+            ),
+            data = (y = prediction_array, features = features_test, predictions = predictions_test),
+            constraints = hierarchical_constraints(priors, true),
+            initialization = hierarchical_init(priors),
+            iterations = prediction_iterations,
+            free_energy = false,
+            showprogress = true,
+        )
+    elseif prediction_type isa Multivariate && model_type isa Hierarchical
+        priors = Dict{Symbol,Any}(
+            :w => saved["w_posteriors"],
+            :τ => saved["τ_posteriors"],
+            :ρ => saved["ρ_posteriors"],
+            :α => alpha,
+        )
+        infer(
+            model = multivariate_hierarchical_model(
+                n_forecasters = n_forecasters,
+                n_obs = n_steps,
+                priors = priors,
+            ),
+            data = (y = prediction_array, features = features_test, predictions = predictions_test),
+            constraints = multivariate_hierarchical_constraints(priors, true),
+            initialization = multivariate_hierarchical_init(priors),
+            iterations = prediction_iterations,
+            free_energy = false,
+            showprogress = true,
+        )
+    elseif prediction_type isa Univariate && model_type isa Deep
+        priors = Dict{Symbol,Any}(
+            :w => saved["w_posteriors"],
+            :v => saved["v_posteriors"],
+            :τ => saved["τ_posteriors"],
+            :ρ => saved["ρ_posteriors"],
+            :α => alpha,
+        )
+        infer(
+            model = deep_model(
+                n_forecasters = n_forecasters,
+                n_obs = n_steps,
+                priors = priors,
+            ),
+            data = (y = prediction_array, features = features_test, predictions = predictions_test),
+            constraints = deep_constraints(),
+            initialization = deep_init(priors),
+            iterations = prediction_iterations,
+            free_energy = false,
+            showprogress = true,
+        )
+    elseif prediction_type isa Multivariate && model_type isa Deep
+        priors = Dict{Symbol,Any}(
+            :w => saved["w_posteriors"],
+            :v => saved["v_posteriors"],
+            :τ => saved["τ_posteriors"],
+            :ρ => saved["ρ_posteriors"],
+            :α => alpha,
+        )
+        infer(
+            model = multivariate_deep_model(
+                n_forecasters = n_forecasters,
+                n_obs = n_steps,
+                priors = priors,
+            ),
+            data = (y = prediction_array, features = features_test, predictions = predictions_test),
+            constraints = multivariate_deep_constraints(),
+            initialization = multivariate_deep_init(priors),
+            iterations = prediction_iterations,
+            free_energy = false,
+            showprogress = true,
+        )
+    else
+        error("Unsupported model/prediction combination")
+    end
+
+    ensemble_preds = infer_test.predictions[:y][end]
+
+    if prediction_type isa Univariate
+        ensemble_mean = map(mean, ensemble_preds)
+        ensemble_std = map(std, ensemble_preds)
+        ensemble_metrics = (
+            mse = mse(ensemble_mean, y_test),
+            mae = mae(ensemble_mean, y_test),
+            rmse = rmse(ensemble_mean, y_test),
+            r2 = r2(ensemble_mean, y_test),
+            mape = mape(ensemble_mean, y_test),
+            smape = smape(ensemble_mean, y_test),
+        )
+    else
+        ensemble_mean = reduce(hcat, map(mean, ensemble_preds))
+        ensemble_std = reduce(hcat, map(std, ensemble_preds))
+        y_test_mat = reduce(hcat, y_test)
+        ensemble_metrics = (
+            mse = mse_mv(ensemble_mean, y_test_mat),
+            mae = mae_mv(ensemble_mean, y_test_mat),
+            rmse = rmse_mv(ensemble_mean, y_test_mat),
+            r2 = r2_mv(ensemble_mean, y_test_mat),
+            mape = mape_mv(ensemble_mean, y_test_mat),
+            smape = smape_mv(ensemble_mean, y_test_mat),
+        )
+    end
+
+    return (
+        n_prediction_steps = n_steps,
+        ensemble_mean = ensemble_mean,
+        ensemble_std = ensemble_std,
+        ensemble_metrics = ensemble_metrics,
+        infer_result = infer_test,
+    )
 end
 
 # ---------------------------------------------------------------------------
