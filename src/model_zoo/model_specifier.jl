@@ -25,6 +25,7 @@ struct ExperimentSpecifier{P,M,D}
     prediction_iterations::Int
     save_predictions::Bool
     subsample_size::Union{Int,Nothing}
+    subsample_percentage::Union{Float64,Nothing}
 end
 
 # ---------------------------------------------------------------------------
@@ -59,6 +60,7 @@ function _parse_spec(config)
     prediction_iterations = p["prediction_iterations"]
     save_predictions = get(p, "save_predictions", false)
     subsample_size = get(p, "subsample_size", nothing)
+    subsample_percentage = get(p, "subsample_percentage", nothing)
     return ExperimentSpecifier(
         prediction_type,
         model_type,
@@ -72,6 +74,7 @@ function _parse_spec(config)
         prediction_iterations,
         save_predictions,
         subsample_size,
+        subsample_percentage,
     )
 end
 
@@ -374,6 +377,20 @@ function run_training_rxinfer(spec, subsampled_data::Int, model, data; kwargs...
     )
 end
 
+function run_training_rxinfer(spec, subsample_percentage::Float64, model, data; kwargs...)
+    @show "Use subsampled data with sample percentage $(subsample_percentage)"
+    subsampled_data = round(Int, length(data.y)*subsample_percentage)
+    @info subsampled_data
+    subsampled = (; (k => SubsampledData(v, subsampled_data) for (k, v) in pairs(data))...)
+    return infer(;
+        model = model,
+        data = subsampled,
+        iterations = spec.inference_iterations,
+        free_energy = true,
+        kwargs...,
+    )
+end
+
 function run_training_rxinfer(spec, ::Nothing, model, data; kwargs...)
     @show "Run inference on the full dataset"
     return infer(;
@@ -386,8 +403,13 @@ function run_training_rxinfer(spec, ::Nothing, model, data; kwargs...)
 end
 
 function run_training_rxinfer(spec, model, data; kwargs...)
-    return run_training_rxinfer(spec, spec.subsample_size, model, data; kwargs...)
+    if !isnothing(spec.subsample_size)
+        return run_training_rxinfer(spec, spec.subsample_size, model, data; kwargs...)
+    elseif !isnothing(spec.subsample_percentage)
+        return run_training_rxinfer(spec, spec.subsample_percentage, model, data; kwargs...)
+    end
 end
+
 # ---------------------------------------------------------------------------
 # Static Univariate pipeline
 # ---------------------------------------------------------------------------
@@ -559,7 +581,13 @@ function run_dynamic_univariate(spec::ExperimentSpecifier{Univariate,Dynamic})
     n_val = length(y_val)
     n_test = length(y_test)
 
-    n_obs = something(spec.subsample_size, n_val)
+    if !isnothing(spec.subsample_percentage)
+        n_obs = round(Int,n_val*spec.subsample_percentage)
+    else
+        n_obs = something(spec.subsample_size, n_val)
+    end
+    @info n_obs
+
     model = univariate_dynamic_ensemble(
         n_forecasters = n_forecasters,
         n_obs = n_obs,
@@ -677,7 +705,13 @@ function run_dynamic_multivariate(spec::ExperimentSpecifier{Multivariate,Dynamic
     n_test = length(y_test)
     d = length(y_val[1])
 
-    n_obs = something(spec.subsample_size, n_val)
+    if !isnothing(spec.subsample_percentage)
+        n_obs = round(Int,n_val*spec.subsample_percentage)
+    else
+        n_obs = something(spec.subsample_size, n_val)
+    end
+    @info n_obs
+
     model = multivariate_dynamic_ensemble(
         n_forecasters = n_forecasters,
         n_obs = n_obs,
@@ -797,7 +831,13 @@ function run_hierarchical_univariate(spec::ExperimentSpecifier{Univariate,Hierar
     n_val = length(y_val)
     n_test = length(y_test)
 
-    n_obs = something(spec.subsample_size, n_val)
+    if !isnothing(spec.subsample_percentage)
+        n_obs = round(Int,n_val*spec.subsample_percentage)
+    else
+        n_obs = something(spec.subsample_size, n_val)
+    end
+    @info n_obs
+
     model = hierarchical_model(
         n_forecasters = n_forecasters,
         n_obs = n_obs,
@@ -919,7 +959,13 @@ function run_hierarchical_multivariate(spec::ExperimentSpecifier{Multivariate,Hi
     n_test = length(y_test)
     d = length(y_val[1])
 
-    n_obs = something(spec.subsample_size, n_val)
+    if !isnothing(spec.subsample_percentage)
+        n_obs = round(Int,n_val*spec.subsample_percentage)
+    else
+        n_obs = something(spec.subsample_size, n_val)
+    end
+    @info n_obs
+
     model = multivariate_hierarchical_model(
         n_forecasters = n_forecasters,
         n_obs = n_obs,
@@ -1038,7 +1084,13 @@ function run_deep_multivariate(spec::ExperimentSpecifier{Multivariate,Deep})
     n_test = length(y_test)
     d = length(y_val[1])
 
-    n_obs = something(spec.subsample_size, n_val)
+    if !isnothing(spec.subsample_percentage)
+        n_obs = round(Int,n_val*spec.subsample_percentage)
+    else
+        n_obs = something(spec.subsample_size, n_val)
+    end
+    @info n_obs
+
     model = multivariate_deep_model(
         n_forecasters = n_forecasters,
         n_obs = n_obs,
@@ -1164,7 +1216,13 @@ function run_deep_univariate(spec::ExperimentSpecifier{Univariate,Deep})
     n_val = length(y_val)
     n_test = length(y_test)
 
-    n_obs = something(spec.subsample_size, n_val)
+    if !isnothing(spec.subsample_percentage)
+        n_obs = round(Int,n_val*spec.subsample_percentage)
+    else
+        n_obs = something(spec.subsample_size, n_val)
+    end
+    @info n_obs
+
     model = deep_model(n_forecasters = n_forecasters, n_obs = n_obs, priors = spec.priors)
     constraints = deep_constraints()
     init = deep_init(spec.priors)
