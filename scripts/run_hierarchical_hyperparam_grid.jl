@@ -6,39 +6,27 @@ using CSV
 using DataFrames
 using Plots
 
-const DATASETS = ["ETTh1", "ETTh2", "exchange_rate"]
+const DATASETS = ["exchange_rate","ETTh2"]
 const HORIZONS = [96, 192, 336, 720]
-const W_SCALES = [0.1, 1.0]
-const TAU_RATES = [1e-3, 1.0]
-const SUBSAMPLE_SIZES = [10, 20]
+const W_SCALES = [0.1, 1.0, 2.0, 5.0]
+# const PRED_STEPS = [1,2,4,8]
+const SUBSAMPLE_PERCENTAGES = [0.005, 0.01, 0.02]
 
 function session_path(dataset::String, horizon::Int)
     return joinpath("sessions", "hierarchical", "hierarchical_$(dataset)_$(horizon).yaml")
 end
 
-function get_tau_prior(priors::Dict)
-    if haskey(priors, "τ")
-        return priors["τ"]
-    elseif haskey(priors, "tau")
-        return priors["tau"]
-    else
-        error("Could not find τ (or tau) prior in YAML priors.")
-    end
-end
-
-function one_run(dataset::String, horizon::Int, w_scale::Float64, tau_rate::Float64, subsample_size::Int)
+function one_run(dataset::String, horizon::Int, w_scale::Float64, subsample_percentage::Float64)
     path = session_path(dataset, horizon)
     isfile(path) || error("Session file not found: $path")
 
     config = YAML.load_file(path)
     params = config["params"]
     priors = params["priors"]
-    tau_prior = get_tau_prior(priors)
     w_prior = priors["w"]
 
     w_prior["scale"] = w_scale
-    tau_prior["rate"] = tau_rate
-    params["subsample_size"] = subsample_size
+    params["subsample_percentage"] = subsample_percentage
 
     tmp_dir = mktempdir()
     tmp_yaml = joinpath(tmp_dir, "session.yaml")
@@ -60,7 +48,7 @@ function param_tag(v::Real)
     return s
 end
 
-function save_prediction_plot(results, dataset::String, horizon::Int, w_scale::Float64, tau_rate::Float64, subsample_size::Int)
+function save_prediction_plot(results, dataset::String, horizon::Int, w_scale::Float64, subsample_percentage::Float64)
     if !(dataset in ("ETTh1", "ETTh2"))
         return nothing
     end
@@ -81,77 +69,72 @@ function save_prediction_plot(results, dataset::String, horizon::Int, w_scale::F
     )
     plot!(plt, x, y_pred; label = "Ensemble", linewidth = 2, color = :dodgerblue)
 
-    plots_dir = joinpath("results", "hierarchical_prediction_plots", dataset, "h$(horizon)")
+    plots_dir = joinpath("results", "hierarchical_prediction_plots_2", dataset, "h$(horizon)")
     mkpath(plots_dir)
-    filename = "pred_ws$(param_tag(w_scale))_tr$(param_tag(tau_rate))_ss$(subsample_size).png"
+    filename = "pred_ws$(param_tag(w_scale))_sp$(param_tag(subsample_percentage)).png"
     out_path = joinpath(plots_dir, filename)
     savefig(plt, out_path)
     return out_path
 end
 
 function main()
-    out_path = length(ARGS) >= 1 ? ARGS[1] : "results/hierarchical_hyperparam_grid.csv"
+    out_path = length(ARGS) >= 1 ? ARGS[1] : "results/hierarchical_hyperparam_grid_2.csv"
     mkpath(dirname(out_path))
 
     rows = DataFrame(
         dataset = String[],
         horizon = Int[],
         w_scale = Float64[],
-        tau_rate = Float64[],
-        subsample_size = Int[],
+        subsample_percentage = Float64[],
         mse = Union{Missing, Float64}[],
         mae = Union{Missing, Float64}[],
         status = String[],
         error = String[],
     )
 
-    total = length(DATASETS) * length(HORIZONS) * length(W_SCALES) * length(TAU_RATES) * length(SUBSAMPLE_SIZES)
+    total = length(DATASETS) * length(HORIZONS) * length(W_SCALES) * length(SUBSAMPLE_PERCENTAGES)
     run_idx = 0
 
     for dataset in DATASETS
         for horizon in HORIZONS
             for w_scale in W_SCALES
-                for tau_rate in TAU_RATES
-                    for subsample_size in SUBSAMPLE_SIZES
-                        run_idx += 1
-                        println("[$run_idx/$total] dataset=$dataset horizon=$horizon w.scale=$w_scale τ.rate=$tau_rate subsample_size=$subsample_size")
-                        try
-                            run_out = one_run(dataset, horizon, w_scale, tau_rate, subsample_size)
-                            save_prediction_plot(run_out.results, dataset, horizon, w_scale, tau_rate, subsample_size)
-                            push!(
-                                rows,
-                                (
-                                    dataset = dataset,
-                                    horizon = horizon,
-                                    w_scale = w_scale,
-                                    tau_rate = tau_rate,
-                                    subsample_size = subsample_size,
-                                    mse = run_out.mse,
-                                    mae = run_out.mae,
-                                    status = "ok",
-                                    error = "",
-                                ),
-                            )
-                        catch err
-                            push!(
-                                rows,
-                                (
-                                    dataset = dataset,
-                                    horizon = horizon,
-                                    w_scale = w_scale,
-                                    tau_rate = tau_rate,
-                                    subsample_size = subsample_size,
-                                    mse = missing,
-                                    mae = missing,
-                                    status = "error",
-                                    error = sprint(showerror, err),
-                                ),
-                            )
-                            @warn "Run failed" dataset horizon w_scale tau_rate subsample_size err
-                        end
-
-                        CSV.write(out_path, rows)
+                for subsample_percentage in SUBSAMPLE_PERCENTAGES
+                    run_idx += 1
+                    println("[$run_idx/$total] dataset=$dataset horizon=$horizon w.scale=$w_scale subsample_percentage=$subsample_percentage")
+                    try
+                        run_out = one_run(dataset, horizon, w_scale, subsample_percentage)
+                        save_prediction_plot(run_out.results, dataset, horizon, w_scale, subsample_percentage)
+                        push!(
+                            rows,
+                            (
+                                dataset = dataset,
+                                horizon = horizon,
+                                w_scale = w_scale,
+                                subsample_percentage = subsample_percentage,
+                                mse = run_out.mse,
+                                mae = run_out.mae,
+                                status = "ok",
+                                error = "",
+                            ),
+                        )
+                    catch err
+                        push!(
+                            rows,
+                            (
+                                dataset = dataset,
+                                horizon = horizon,
+                                w_scale = w_scale,
+                                subsample_percentage = subsample_percentage,
+                                mse = missing,
+                                mae = missing,
+                                status = "error",
+                                error = sprint(showerror, err),
+                            ),
+                        )
+                        @warn "Run failed" dataset horizon w_scale subsample_percentage err
                     end
+
+                    CSV.write(out_path, rows)
                 end
             end
         end
