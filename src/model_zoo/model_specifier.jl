@@ -174,6 +174,7 @@ function compute_ensemble_metrics(::Univariate, ensemble_preds, y_test)
         r2 = r2(ensemble_mean, y_test),
         mape = mape(ensemble_mean, y_test),
         smape = smape(ensemble_mean, y_test),
+        nll = mean(map((y_dist) -> logpdf(y_dist[2], y_dist[1]), zip(y_test, ensemble_preds)))
     )
     return (; ensemble_mean, ensemble_std, ensemble_metrics)
 end
@@ -188,6 +189,7 @@ function compute_ensemble_metrics(::Multivariate, ensemble_preds, y_test)
         r2 = r2_mv(ensemble_mean, y_test),
         mape = mape_mv(ensemble_mean, y_test),
         smape = smape_mv(ensemble_mean, y_test),
+        nll = mean(map((y_dist) -> logpdf(y_dist[2], y_dist[1]), zip(eachcol(y_test), ensemble_preds)))
     )
     return (; ensemble_mean, ensemble_std, ensemble_metrics)
 end
