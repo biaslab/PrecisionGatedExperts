@@ -609,7 +609,7 @@ function run_dynamic_univariate(spec::ExperimentSpecifier{Univariate,Dynamic})
         n_obs = n_obs,
         priors = spec.priors,
     )
-    constraints = univariate_dynamic_ensemble_constraints()
+    constraints = univariate_dynamic_ensemble_constraints(spec.priors, false)
     init = univariate_dynamic_ensemble_init(spec.priors)
     data = (y = y_val, features = features_val, predictions = predictions_val)
 
@@ -656,7 +656,7 @@ function run_dynamic_univariate(spec::ExperimentSpecifier{Univariate,Dynamic})
             features = features_test,
             predictions = predictions_test,
         ),
-        constraints = univariate_dynamic_ensemble_constraints(),
+        constraints = univariate_dynamic_ensemble_constraints(posterior_priors, true),
         initialization = univariate_dynamic_ensemble_init(posterior_priors),
         iterations = spec.prediction_iterations,
         free_energy = false,
@@ -723,7 +723,7 @@ function run_dynamic_multivariate(spec::ExperimentSpecifier{Multivariate,Dynamic
         n_obs = n_obs,
         priors = spec.priors,
     )
-    constraints = multivariate_dynamic_ensemble_constraints()
+    constraints = multivariate_dynamic_ensemble_constraints(spec.priors, false)
     init = multivariate_dynamic_ensemble_init(spec.priors)
     data = (y = y_val, features = features_val, predictions = predictions_val)
 
@@ -772,7 +772,7 @@ function run_dynamic_multivariate(spec::ExperimentSpecifier{Multivariate,Dynamic
             features = features_test,
             predictions = predictions_test,
         ),
-        constraints = multivariate_dynamic_ensemble_constraints(),
+        constraints = multivariate_dynamic_ensemble_constraints(posterior_priors, true),
         initialization = multivariate_dynamic_ensemble_init(posterior_priors),
         iterations = spec.prediction_iterations,
         free_energy = false,

@@ -24,7 +24,7 @@
     end
 end
 
-@constraints function univariate_dynamic_ensemble_constraints()
+@constraints function univariate_dynamic_ensemble_constraints(priors, prediction)
     q(w, z, γ, τ, β) = q(w)q(z, γ)q(τ)q(β)
     q(
         z,
@@ -38,6 +38,17 @@ end
         Gamma,
         parameters = ProjectionParameters(strategy = ClosedFormStrategy()),
     )
+    if prediction
+        for (i, prior) in enumerate(priors[:w])
+            q(w[i])::RxInfer.FixedMarginalFormConstraint(prior)
+        end
+        for (i, prior) in enumerate(priors[:τ])
+            q(τ[i])::RxInfer.FixedMarginalFormConstraint(prior)
+        end
+        for (i, prior) in enumerate(priors[:β])
+            q(β[i])::RxInfer.FixedMarginalFormConstraint(prior)
+        end
+    end
 end
 
 @initialization function univariate_dynamic_ensemble_init(priors)
