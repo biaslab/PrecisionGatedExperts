@@ -91,8 +91,10 @@ function run_experiment(path_to_yaml::String)
     end
     results_path = joinpath(results_dir, fname)
     save_data = if spec.save_predictions
+        @info "predictions are saved"
         pairs(results)
     else
+        @info "predictions are not saved"
         (k => v for (k, v) in pairs(results) if k !== :predictions_test)
     end
     JLD2.jldsave(results_path; save_data...)
@@ -419,7 +421,7 @@ function run_static_univariate(spec::ExperimentSpecifier{Univariate,Static})
 
     @info "Generating ensemble predictions on test"
     posterior_priors = Dict{Symbol,Any}(:γ => γ_posteriors)
-    prediction_array = [missing for _ = 1:n_test]
+    prediction_array = [missing for _ = 1:length(y_test)]
     infer_test = infer(
         model = univariate_ensemble_precision_model(
             n_forecasters = n_forecasters,
