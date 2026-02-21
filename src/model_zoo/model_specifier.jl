@@ -83,10 +83,11 @@ function run_experiment(path_to_yaml::String)
     mkpath(results_dir)
     ds_name = typeof(spec.dataset).parameters[1]
     model_name = lowercase(string(typeof(spec.model_type)))
+
     if spec.prediction_type isa Univariate
-        fname = "$(ds_name)_h$(spec.horizon)_$(spec.column)_$(model_name).jld2"
+        fname = "$(ds_name)_h$(spec.horizon)_$(spec.column)_$(model_name)_$(hash(config)).jld2"
     else
-        fname = "$(ds_name)_h$(spec.horizon)_multivariate_$(model_name).jld2"
+        fname = "$(ds_name)_h$(spec.horizon)_multivariate_$(model_name)_$(hash(config)).jld2"
     end
     results_path = joinpath(results_dir, fname)
     save_data = if spec.save_predictions
@@ -944,7 +945,7 @@ function run_hierarchical_multivariate(spec::ExperimentSpecifier{Multivariate,Hi
     ρ_posteriors = result.posteriors[:ρ][end]
     γ_posteriors = result.posteriors[:γ][end]
 
-    γ_means_val = mean.(γ_posteriors)    
+    γ_means_val = mean.(γ_posteriors)
     Yval_mat = reduce(hcat, y_val)
     @info "Learned hierarchical weights on validation"
     for i = 1:n_forecasters
