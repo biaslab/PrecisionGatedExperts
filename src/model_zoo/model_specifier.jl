@@ -94,9 +94,12 @@ function run_experiment(path_to_yaml::String)
     end
     results_path = joinpath(results_dir, fname)
     save_data = if spec.save_predictions
+        @info "predictions are saved"
         pairs(results)
     else
-        (k => v for (k, v) in pairs(results) if k !== :predictions_test)
+        @info "predictions are not saved"
+        skipped_fields = [:ensemble_std, :ensemble_mean, :y_test, :predictions_test]
+        (k => v for (k, v) in pairs(results) if !(k in skipped_fields))
     end
     JLD2.jldsave(results_path; save_data...)
     @info "Results saved" path=results_path save_predictions=spec.save_predictions
@@ -420,6 +423,36 @@ function predict_unscaled(model, ps, st, X_scaled; dev = reactant_device())
     return Array(cpu_dev()(y_sc))
 end
 
+function compute_ensemble_metrics(::Univariate, ensemble_preds, y_test)
+    ensemble_mean = map(mean, ensemble_preds)
+    ensemble_std = map(std, ensemble_preds)
+    ensemble_metrics = (
+        mse = mse(ensemble_mean, y_test),
+        mae = mae(ensemble_mean, y_test),
+        rmse = rmse(ensemble_mean, y_test),
+        r2 = r2(ensemble_mean, y_test),
+        mape = mape(ensemble_mean, y_test),
+        smape = smape(ensemble_mean, y_test),
+        nll = mean(map((y_dist) -> logpdf(y_dist[2], y_dist[1]), zip(y_test, ensemble_preds)))
+    )
+    return (; ensemble_mean, ensemble_std, ensemble_metrics)
+end
+
+function compute_ensemble_metrics(::Multivariate, ensemble_preds, y_test)
+    ensemble_mean = reduce(hcat, map(mean, ensemble_preds))
+    ensemble_std = reduce(hcat, map(std, ensemble_preds))
+    ensemble_metrics = (
+        mse = mse_mv(ensemble_mean, y_test),
+        mae = mae_mv(ensemble_mean, y_test),
+        rmse = rmse_mv(ensemble_mean, y_test),
+        r2 = r2_mv(ensemble_mean, y_test),
+        mape = mape_mv(ensemble_mean, y_test),
+        smape = smape_mv(ensemble_mean, y_test),
+        nll = mean(map((y_dist) -> logpdf(y_dist[2], y_dist[1]), zip(eachcol(y_test), ensemble_preds)))
+    )
+    return (; ensemble_mean, ensemble_std, ensemble_metrics)
+end
+
 function find_column_index(feat_cols::Vector{String}, column::String)
     idx = findfirst(==(column), feat_cols)
     isnothing(idx) && error("Column \"$column\" not found. Available: $feat_cols")
@@ -666,6 +699,8 @@ function run_training_rxinfer(spec, model, data; kwargs...)
         return run_training_rxinfer(spec, spec.subsample_size, model, data; kwargs...)
     elseif !isnothing(spec.subsample_percentage)
         return run_training_rxinfer(spec, spec.subsample_percentage, model, data; kwargs...)
+    else
+        return run_training_rxinfer(spec, nothing, model, data; kwargs...)
     end
 end
 
@@ -700,7 +735,7 @@ function run_static_univariate(spec::ExperimentSpecifier{Univariate,Static})
 
     @info "Generating ensemble predictions on test"
     posterior_priors = Dict{Symbol,Any}(:γ => γ_posteriors)
-    prediction_array = [missing for _ = 1:n_test]
+    prediction_array = [missing for _ = 1:length(y_test)]
     infer_test = infer(
         model = univariate_ensemble_precision_model(
             n_forecasters = n_forecasters,
@@ -711,17 +746,8 @@ function run_static_univariate(spec::ExperimentSpecifier{Univariate,Static})
     )
 
     ensemble_preds = infer_test.predictions[:y][end]
-    ensemble_mean = map(mean, ensemble_preds)
-    ensemble_std = map(std, ensemble_preds)
-
-    ensemble_metrics = (
-        mse = mse(ensemble_mean, y_test),
-        mae = mae(ensemble_mean, y_test),
-        rmse = rmse(ensemble_mean, y_test),
-        r2 = r2(ensemble_mean, y_test),
-        mape = mape(ensemble_mean, y_test),
-        smape = smape(ensemble_mean, y_test),
-    )
+    (; ensemble_mean, ensemble_std, ensemble_metrics) =
+        compute_ensemble_metrics(spec.prediction_type, ensemble_preds, y_test)
 
     results = (
         γ_posteriors = γ_posteriors,
@@ -793,19 +819,9 @@ function run_static_multivariate(spec::ExperimentSpecifier{Multivariate,Static})
     )
 
     ensemble_preds = infer_test.predictions[:y][end]
-    ensemble_mean = reduce(hcat, map(mean, ensemble_preds))  # (d, n_test)
-    ensemble_std = reduce(hcat, map(std, ensemble_preds))   # (d, n_test)
-
-    # 6. Metrics (multivariate)
     Yte_mat = reduce(hcat, y_test)
-    ensemble_metrics = (
-        mse = mse_mv(ensemble_mean, Yte_mat),
-        mae = mae_mv(ensemble_mean, Yte_mat),
-        rmse = rmse_mv(ensemble_mean, Yte_mat),
-        r2 = r2_mv(ensemble_mean, Yte_mat),
-        mape = mape_mv(ensemble_mean, Yte_mat),
-        smape = smape_mv(ensemble_mean, Yte_mat),
-    )
+    (; ensemble_mean, ensemble_std, ensemble_metrics) =
+        compute_ensemble_metrics(spec.prediction_type, ensemble_preds, Yte_mat)
 
     @info "Ensemble test metrics (multivariate)" ensemble_metrics...
 
@@ -852,7 +868,7 @@ function run_dynamic_univariate(spec::ExperimentSpecifier{Univariate,Dynamic})
         n_obs = n_obs,
         priors = spec.priors,
     )
-    constraints = univariate_dynamic_ensemble_constraints()
+    constraints = univariate_dynamic_ensemble_constraints(spec.priors, false)
     init = univariate_dynamic_ensemble_init(spec.priors)
     data = (y = y_val, features = features_val, predictions = predictions_val)
 
@@ -899,7 +915,7 @@ function run_dynamic_univariate(spec::ExperimentSpecifier{Univariate,Dynamic})
             features = features_test,
             predictions = predictions_test,
         ),
-        constraints = univariate_dynamic_ensemble_constraints(),
+        constraints = univariate_dynamic_ensemble_constraints(posterior_priors, true),
         initialization = univariate_dynamic_ensemble_init(posterior_priors),
         iterations = spec.prediction_iterations,
         free_energy = false,
@@ -907,22 +923,12 @@ function run_dynamic_univariate(spec::ExperimentSpecifier{Univariate,Dynamic})
     )
 
     ensemble_preds = infer_test.predictions[:y][end]
-    ensemble_mean = map(mean, ensemble_preds)
-    ensemble_std = map(std, ensemble_preds)
+    (; ensemble_mean, ensemble_std, ensemble_metrics) =
+        compute_ensemble_metrics(spec.prediction_type, ensemble_preds, y_test)
 
     # Extract dynamic precision weights on test
     γ_test_posteriors = infer_test.posteriors[:γ][end]
     γ_means_test = mean.(γ_test_posteriors)
-
-    # 7. Metrics
-    ensemble_metrics = (
-        mse = mse(ensemble_mean, y_test),
-        mae = mae(ensemble_mean, y_test),
-        rmse = rmse(ensemble_mean, y_test),
-        r2 = r2(ensemble_mean, y_test),
-        mape = mape(ensemble_mean, y_test),
-        smape = smape(ensemble_mean, y_test),
-    )
 
     @info "Ensemble test metrics" ensemble_metrics...
 
@@ -976,7 +982,7 @@ function run_dynamic_multivariate(spec::ExperimentSpecifier{Multivariate,Dynamic
         n_obs = n_obs,
         priors = spec.priors,
     )
-    constraints = multivariate_dynamic_ensemble_constraints()
+    constraints = multivariate_dynamic_ensemble_constraints(spec.priors, false)
     init = multivariate_dynamic_ensemble_init(spec.priors)
     data = (y = y_val, features = features_val, predictions = predictions_val)
 
@@ -1025,7 +1031,7 @@ function run_dynamic_multivariate(spec::ExperimentSpecifier{Multivariate,Dynamic
             features = features_test,
             predictions = predictions_test,
         ),
-        constraints = multivariate_dynamic_ensemble_constraints(),
+        constraints = multivariate_dynamic_ensemble_constraints(posterior_priors, true),
         initialization = multivariate_dynamic_ensemble_init(posterior_priors),
         iterations = spec.prediction_iterations,
         free_energy = false,
@@ -1033,23 +1039,13 @@ function run_dynamic_multivariate(spec::ExperimentSpecifier{Multivariate,Dynamic
     )
 
     ensemble_preds = infer_test.predictions[:y][end]
-    ensemble_mean = reduce(hcat, map(mean, ensemble_preds))  # (d, n_test)
-    ensemble_std = reduce(hcat, map(std, ensemble_preds))   # (d, n_test)
+    Yte_mat = reduce(hcat, y_test)
+    (; ensemble_mean, ensemble_std, ensemble_metrics) =
+        compute_ensemble_metrics(spec.prediction_type, ensemble_preds, Yte_mat)
 
     # Extract dynamic precision weights on test
     γ_test_posteriors = infer_test.posteriors[:γ][end]
     γ_means_test = mean.(γ_test_posteriors)
-
-    # Metrics (multivariate)
-    Yte_mat = reduce(hcat, y_test)
-    ensemble_metrics = (
-        mse = mse_mv(ensemble_mean, Yte_mat),
-        mae = mae_mv(ensemble_mean, Yte_mat),
-        rmse = rmse_mv(ensemble_mean, Yte_mat),
-        r2 = r2_mv(ensemble_mean, Yte_mat),
-        mape = mape_mv(ensemble_mean, Yte_mat),
-        smape = smape_mv(ensemble_mean, Yte_mat),
-    )
 
     @info "Ensemble test metrics (multivariate)" ensemble_metrics...
 
@@ -1161,22 +1157,12 @@ function run_hierarchical_univariate(spec::ExperimentSpecifier{Univariate,Hierar
     )
 
     ensemble_preds = infer_test.predictions[:y][end]
-    ensemble_mean = map(mean, ensemble_preds)
-    ensemble_std = map(std, ensemble_preds)
+    (; ensemble_mean, ensemble_std, ensemble_metrics) =
+        compute_ensemble_metrics(spec.prediction_type, ensemble_preds, y_test)
 
     # Extract precision weights on test
     γ_test_posteriors = infer_test.posteriors[:γ][end]
     γ_means_test = mean.(γ_test_posteriors)
-
-    # 7. Metrics
-    ensemble_metrics = (
-        mse = mse(ensemble_mean, y_test),
-        mae = mae(ensemble_mean, y_test),
-        rmse = rmse(ensemble_mean, y_test),
-        r2 = r2(ensemble_mean, y_test),
-        mape = mape(ensemble_mean, y_test),
-        smape = smape(ensemble_mean, y_test),
-    )
 
     @info "Ensemble test metrics" ensemble_metrics...
 
@@ -1289,23 +1275,13 @@ function run_hierarchical_multivariate(spec::ExperimentSpecifier{Multivariate,Hi
     )
 
     ensemble_preds = infer_test.predictions[:y][end]
-    ensemble_mean = reduce(hcat, map(mean, ensemble_preds))  # (d, n_test)
-    ensemble_std = reduce(hcat, map(std, ensemble_preds))   # (d, n_test)
+    Yte_mat = reduce(hcat, y_test)
+    (; ensemble_mean, ensemble_std, ensemble_metrics) =
+        compute_ensemble_metrics(spec.prediction_type, ensemble_preds, Yte_mat)
 
     # Extract precision weights on test
     γ_test_posteriors = infer_test.posteriors[:γ][end]
     γ_means_test = mean.(γ_test_posteriors)
-
-    # Metrics (multivariate)
-    Yte_mat = reduce(hcat, y_test)
-    ensemble_metrics = (
-        mse = mse_mv(ensemble_mean, Yte_mat),
-        mae = mae_mv(ensemble_mean, Yte_mat),
-        rmse = rmse_mv(ensemble_mean, Yte_mat),
-        r2 = r2_mv(ensemble_mean, Yte_mat),
-        mape = mape_mv(ensemble_mean, Yte_mat),
-        smape = smape_mv(ensemble_mean, Yte_mat),
-    )
 
     @info "Ensemble test metrics (multivariate)" ensemble_metrics...
 
@@ -1418,22 +1394,12 @@ function run_deep_multivariate(spec::ExperimentSpecifier{Multivariate,Deep})
     )
 
     ensemble_preds = infer_test.predictions[:y][end]
-    ensemble_mean = reduce(hcat, map(mean, ensemble_preds))
-    ensemble_std = reduce(hcat, map(std, ensemble_preds))
+    Yte_mat = reduce(hcat, y_test)
+    (; ensemble_mean, ensemble_std, ensemble_metrics) =
+        compute_ensemble_metrics(spec.prediction_type, ensemble_preds, Yte_mat)
 
     γ_test_posteriors = infer_test.posteriors[:γ][end]
     γ_means_test = mean.(γ_test_posteriors)
-
-    # Metrics
-    Yte_mat = reduce(hcat, y_test)
-    ensemble_metrics = (
-        mse = mse_mv(ensemble_mean, Yte_mat),
-        mae = mae_mv(ensemble_mean, Yte_mat),
-        rmse = rmse_mv(ensemble_mean, Yte_mat),
-        r2 = r2_mv(ensemble_mean, Yte_mat),
-        mape = mape_mv(ensemble_mean, Yte_mat),
-        smape = smape_mv(ensemble_mean, Yte_mat),
-    )
 
     @info "Ensemble test metrics (multivariate)" ensemble_metrics...
 
@@ -1544,22 +1510,12 @@ function run_deep_univariate(spec::ExperimentSpecifier{Univariate,Deep})
     )
 
     ensemble_preds = infer_test.predictions[:y][end]
-    ensemble_mean = map(mean, ensemble_preds)
-    ensemble_std = map(std, ensemble_preds)
+    (; ensemble_mean, ensemble_std, ensemble_metrics) =
+        compute_ensemble_metrics(spec.prediction_type, ensemble_preds, y_test)
 
     # Extract precision weights on test
     γ_test_posteriors = infer_test.posteriors[:γ][end]
     γ_means_test = mean.(γ_test_posteriors)
-
-    # 7. Metrics
-    ensemble_metrics = (
-        mse = mse(ensemble_mean, y_test),
-        mae = mae(ensemble_mean, y_test),
-        rmse = rmse(ensemble_mean, y_test),
-        r2 = r2(ensemble_mean, y_test),
-        mape = mape(ensemble_mean, y_test),
-        smape = smape(ensemble_mean, y_test),
-    )
 
     @info "Ensemble test metrics" ensemble_metrics...
 
