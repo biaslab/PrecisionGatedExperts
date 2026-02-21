@@ -1,7 +1,7 @@
 using JLD2
 using Printf
 
-const RESULTS_DIR = joinpath(@__DIR__, "..", "final_results")
+const RESULTS_DIR = joinpath(@__DIR__, "..", "paper", "results", "static")
 const HORIZONS = [96, 192, 336, 720]
 const MODEL_TYPES = ["static", "dynamic", "hierarchical"]
 const MODEL_LABELS = Dict(
@@ -37,7 +37,7 @@ function load_metrics(dataset::String, horizon::Int, pred_type::Symbol, model_ty
     end
     data = JLD2.load(fpath)
     metrics = data["ensemble_metrics"]
-    return (mse = metrics.mse, mae = metrics.mae)
+    return (mse = metrics.mse, mae = metrics.mae, nll = -metrics.nll)
 end
 
 function fmt(val)
@@ -50,7 +50,7 @@ end
 function build_latex_table()
     n_models = length(MODEL_TYPES)
     # Collect all data first to identify best values per row
-    all_data = Dict{Tuple{String,Int,String}, Union{Nothing,NamedTuple{(:mse,:mae), Tuple{Float64,Float64}}}}()
+    all_data = Dict{Tuple{String,Int,String}, Union{Nothing,NamedTuple{(:mse,:mae,:nll), Tuple{Float64,Float64,Float64}}}}()
     for (ds, _, pred_type) in DATASETS
         for h in HORIZONS
             for mt in MODEL_TYPES
@@ -59,24 +59,24 @@ function build_latex_table()
         end
     end
 
-    col_spec = "ll" * repeat(" cc", n_models)
+    col_spec = "ll" * join([" ccc" for _ in MODEL_TYPES], " @{\\hskip 6pt}")
     cmidrules = join(
-        ["\\cmidrule(lr){$(2i+1)-$(2i+2)}" for i in 1:n_models],
+        ["\\cmidrule(lr){$(3i)-$(3i+2)}" for i in 1:n_models],
     )
 
     header_models = join(
-        ["\\multicolumn{2}{c}{$(MODEL_LABELS[mt])}" for mt in MODEL_TYPES],
+        ["\\multicolumn{3}{c}{$(MODEL_LABELS[mt])}" for mt in MODEL_TYPES],
         " &\n",
     )
 
-    subheader = join(["MSE & MAE" for _ in MODEL_TYPES], " & ")
+    subheader = join(["MSE & MAE & NLL" for _ in MODEL_TYPES], " & ")
 
     lines = String[]
     push!(lines, "\\begin{table}[t]")
     push!(lines, "\\centering")
     push!(lines, "\\scriptsize")
     push!(lines, "\\setlength{\\tabcolsep}{2.5pt}")
-    push!(lines, "\\caption{MSE / MAE for Static, Dynamic (Dyn.), and Hierarchical (Hier.) ensembles.}")
+    push!(lines, "\\caption{MSE / MAE / NLL for Static, Dynamic (Dyn.), and Hierarchical (Hier.) ensembles.}")
     push!(lines, "\\label{tab:ensemble_comparison}")
     push!(lines, "\\begin{tabular}{$col_spec}")
     push!(lines, "\\toprule")
@@ -92,37 +92,47 @@ function build_latex_table()
         # Collect metrics for avg computation
         avg_mse = Dict(mt => Float64[] for mt in MODEL_TYPES)
         avg_mae = Dict(mt => Float64[] for mt in MODEL_TYPES)
+        avg_nll = Dict(mt => Float64[] for mt in MODEL_TYPES)
 
         for h in HORIZONS
             row_mse = Dict{String,Union{Nothing,Float64}}()
             row_mae = Dict{String,Union{Nothing,Float64}}()
+            row_nll = Dict{String,Union{Nothing,Float64}}()
             for mt in MODEL_TYPES
                 m = all_data[(ds, h, mt)]
                 row_mse[mt] = m === nothing ? nothing : m.mse
                 row_mae[mt] = m === nothing ? nothing : m.mae
+                row_nll[mt] = m === nothing ? nothing : m.nll
                 if m !== nothing
                     push!(avg_mse[mt], m.mse)
                     push!(avg_mae[mt], m.mae)
+                    push!(avg_nll[mt], m.nll)
                 end
             end
 
-            # Find best (min) MSE and MAE across models for this row
+            # Find best (min) MSE, MAE, and NLL across models for this row
             valid_mse = [v for v in values(row_mse) if v !== nothing]
             valid_mae = [v for v in values(row_mae) if v !== nothing]
+            valid_nll = [v for v in values(row_nll) if v !== nothing]
             best_mse = isempty(valid_mse) ? nothing : minimum(valid_mse)
             best_mae = isempty(valid_mae) ? nothing : minimum(valid_mae)
+            best_nll = isempty(valid_nll) ? nothing : minimum(valid_nll)
 
             cells = String[]
             for mt in MODEL_TYPES
                 mse_str = fmt(row_mse[mt])
                 mae_str = fmt(row_mae[mt])
+                nll_str = fmt(row_nll[mt])
                 if row_mse[mt] !== nothing && row_mse[mt] == best_mse
                     mse_str = "\\textbf{$mse_str}"
                 end
                 if row_mae[mt] !== nothing && row_mae[mt] == best_mae
                     mae_str = "\\textbf{$mae_str}"
                 end
-                push!(cells, "$mse_str & $mae_str")
+                if row_nll[mt] !== nothing && row_nll[mt] == best_nll
+                    nll_str = "\\textbf{$nll_str}"
+                end
+                push!(cells, "$mse_str & $mae_str & $nll_str")
             end
 
             push!(lines, "& $h  & $(join(cells, " & ")) \\\\")
@@ -132,31 +142,40 @@ function build_latex_table()
         avg_cells = String[]
         avg_mse_vals = Dict{String,Union{Nothing,Float64}}()
         avg_mae_vals = Dict{String,Union{Nothing,Float64}}()
+        avg_nll_vals = Dict{String,Union{Nothing,Float64}}()
         for mt in MODEL_TYPES
             if isempty(avg_mse[mt])
                 avg_mse_vals[mt] = nothing
                 avg_mae_vals[mt] = nothing
+                avg_nll_vals[mt] = nothing
             else
                 avg_mse_vals[mt] = sum(avg_mse[mt]) / length(avg_mse[mt])
                 avg_mae_vals[mt] = sum(avg_mae[mt]) / length(avg_mae[mt])
+                avg_nll_vals[mt] = sum(avg_nll[mt]) / length(avg_nll[mt])
             end
         end
 
         valid_avg_mse = [v for v in values(avg_mse_vals) if v !== nothing]
         valid_avg_mae = [v for v in values(avg_mae_vals) if v !== nothing]
+        valid_avg_nll = [v for v in values(avg_nll_vals) if v !== nothing]
         best_avg_mse = isempty(valid_avg_mse) ? nothing : minimum(valid_avg_mse)
         best_avg_mae = isempty(valid_avg_mae) ? nothing : minimum(valid_avg_mae)
+        best_avg_nll = isempty(valid_avg_nll) ? nothing : minimum(valid_avg_nll)
 
         for mt in MODEL_TYPES
             mse_str = fmt(avg_mse_vals[mt])
             mae_str = fmt(avg_mae_vals[mt])
+            nll_str = fmt(avg_nll_vals[mt])
             if avg_mse_vals[mt] !== nothing && avg_mse_vals[mt] == best_avg_mse
                 mse_str = "\\textbf{$mse_str}"
             end
             if avg_mae_vals[mt] !== nothing && avg_mae_vals[mt] == best_avg_mae
                 mae_str = "\\textbf{$mae_str}"
             end
-            push!(avg_cells, "$mse_str & $mae_str")
+            if avg_nll_vals[mt] !== nothing && avg_nll_vals[mt] == best_avg_nll
+                nll_str = "\\textbf{$nll_str}"
+            end
+            push!(avg_cells, "$mse_str & $mae_str & $nll_str")
         end
 
         push!(lines, "& Avg & $(join(avg_cells, " & ")) \\\\")
