@@ -40,8 +40,10 @@ function one_run(dataset::String, horizon::Int, w_scale::Float64, tau_rate::Floa
     tau_prior["rate"] = tau_rate
     params["subsample_size"] = subsample_size
 
-    spec = ProbabilisticEnsembling._parse_spec(config)
-    results = ProbabilisticEnsembling.run_experiment(spec)
+    tmp_dir = mktempdir()
+    tmp_yaml = joinpath(tmp_dir, "session.yaml")
+    YAML.write_file(tmp_yaml, config)
+    results = ProbabilisticEnsembling.run_experiment(tmp_yaml)
     metrics = results.ensemble_metrics
 
     return (

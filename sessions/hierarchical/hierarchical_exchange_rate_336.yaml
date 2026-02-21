@@ -5,7 +5,7 @@ params:
   dataset_path: "data/exchange_rate.csv"
   horizon: 336
   inference_iterations: 500
-  prediction_iterations: 1
+  prediction_iterations: 10
   experts:
     - "models/exchange_rate_h336_s96_CNN_enzyme.jld2"
     - "models/exchange_rate_h336_s96_MLP_enzyme.jld2"
