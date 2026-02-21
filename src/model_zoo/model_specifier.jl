@@ -340,6 +340,7 @@ function predict_from_trained_ensemble(
     prediction_array = [missing for _ = 1:n_steps]
 
     priors = extract_prediction_priors(model_type, saved, alpha)
+    @info "Prediction start"
     infer_test = predict_with_model(
         prediction_type, model_type, priors;
         n_forecasters = n_forecasters,
