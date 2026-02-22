@@ -1,0 +1,162 @@
+using ProbabilisticEnsembling
+using ExponentialFamily
+using JLD2
+using Plots
+using BayesBase: cov
+
+saved = JLD2.load("final_results/exchange_rate_h192_multivariate_probabilisticensembling.hierarchical_1112068165064376254.jld2")
+spec_saved = saved["spec"]
+
+prediction_type = ProbabilisticEnsembling._parse_saved_prediction_type(string(spec_saved.prediction_type))
+model_type = ProbabilisticEnsembling._parse_saved_model_type(string(spec_saved.model_type))
+column = isnothing(spec_saved.column) ? nothing : String(spec_saved.column)
+dataset = ProbabilisticEnsembling._dataset_val(spec_saved.dataset)
+dataset_path = String(spec_saved.dataset_path)
+experts = String.(spec_saved.experts)
+prediction_iterations = 1
+
+spec_for_data = ProbabilisticEnsembling.ExperimentSpecifier(
+    prediction_type,
+    model_type,
+    column,
+    Int(spec_saved.horizon),
+    dataset,
+    dataset_path,
+    experts,
+    Dict{Symbol,Any}(),
+    1,
+    prediction_iterations,
+    false,
+    nothing,
+    nothing,
+)
+
+_, y_test_all, _, predictions_test_all, _, features_test_all = ProbabilisticEnsembling.before_rxinfer(spec_for_data);
+n_steps = length(y_test_all)
+
+y_test = ProbabilisticEnsembling.prepare_y_test(prediction_type, y_test_all, n_steps);
+predictions_test = predictions_test_all;
+features_test = features_test_all;
+
+n_forecasters = size(predictions_test, 1);
+prediction_array = [missing for _ = 1:n_steps]
+
+train_results, train_ensemble_preds = begin
+    priors = ProbabilisticEnsembling.extract_prediction_priors(model_type, saved, 0.1);
+    @info "Prediction start"
+    infer_test = ProbabilisticEnsembling.predict_with_model(
+        prediction_type, model_type, priors;
+        n_forecasters = n_forecasters,
+        n_steps = n_steps,
+        prediction_array = prediction_array,
+        predictions_test = predictions_test,
+        features_test = features_test,
+        prediction_iterations = prediction_iterations,
+    )
+    @info [mean(posterior) for posterior in infer_test.posteriors[:γ][end]][1:5]
+    ensemble_preds = infer_test.predictions[:y][end];
+
+    Y_for_metrics = ProbabilisticEnsembling.prepare_y_for_metrics(prediction_type, y_test);
+
+    ensemble_mean, ensemble_std, ensemble_metrics = ProbabilisticEnsembling.compute_ensemble_metrics(
+        spec_for_data.prediction_type,
+        ensemble_preds,
+        Y_for_metrics
+    )
+
+    ensemble_metrics, ensemble_preds
+end;
+
+zero_init_metrics, zero_init_ensemble_preds = begin
+    priors = ProbabilisticEnsembling.extract_prediction_priors(model_type, saved, 0.1);
+    priors[:w] = [MvNormalMeanScalePrecision(zeros(length(features_test[1])), 1e12) for _ in 1:n_forecasters]
+    @info "Prediction start"
+    infer_test = ProbabilisticEnsembling.predict_with_model(
+        prediction_type, model_type, priors;
+        n_forecasters = n_forecasters,
+        n_steps = n_steps,
+        prediction_array = prediction_array,
+        predictions_test = predictions_test,
+        features_test = features_test,
+        prediction_iterations = prediction_iterations,
+    )
+
+    @info [mean(posterior) for posterior in infer_test.posteriors[:γ][end]][1:5]
+    ensemble_preds = infer_test.predictions[:y][end];
+
+    Y_for_metrics = ProbabilisticEnsembling.prepare_y_for_metrics(prediction_type, y_test);
+
+    ensemble_mean, ensemble_std, ensemble_metrics = ProbabilisticEnsembling.compute_ensemble_metrics(
+        spec_for_data.prediction_type,
+        ensemble_preds,
+        Y_for_metrics
+    )
+
+    ensemble_metrics, ensemble_preds
+end
+
+full_default_metrics, full_default_ensemble_preds = begin
+    priors = ProbabilisticEnsembling.extract_prediction_priors(model_type, saved, 0.1);
+    priors[:w] = [MvNormalMeanScalePrecision(zeros(length(features_test[1])), 1e12) for _ in 1:n_forecasters]
+    priors[:τ] = [GammaShapeRate(1, 1) for _ in 1:n_forecasters]
+    priors[:ρ] = [GammaShapeRate(1, 1) for _ in 1:n_forecasters]
+    @info "Prediction start"
+    infer_test = ProbabilisticEnsembling.predict_with_model(
+        prediction_type, model_type, priors;
+        n_forecasters = n_forecasters,
+        n_steps = n_steps,
+        prediction_array = prediction_array,
+        predictions_test = predictions_test,
+        features_test = features_test,
+        prediction_iterations = prediction_iterations,
+    )
+
+    @info [mean(posterior) for posterior in infer_test.posteriors[:γ][end]][1:5]
+    ensemble_preds = infer_test.predictions[:y][end];
+
+    Y_for_metrics = ProbabilisticEnsembling.prepare_y_for_metrics(prediction_type, y_test);
+
+    ensemble_mean, ensemble_std, ensemble_metrics = ProbabilisticEnsembling.compute_ensemble_metrics(
+        spec_for_data.prediction_type,
+        ensemble_preds,
+        Y_for_metrics
+    )
+
+    ensemble_metrics, ensemble_preds
+end
+
+# --- Plot all three predictions with confidence intervals ---
+using LinearAlgebra: diag
+using BayesBase: cov
+
+Y_for_metrics = ProbabilisticEnsembling.prepare_y_for_metrics(prediction_type, y_test)
+dim = 1  # which variable to plot (change to plot a different one)
+
+# Extract marginal mean and std for a given dimension from ensemble predictions
+function marginal_mean_std(preds, dim)
+    μ = [mean(p)[dim] for p in preds]
+    σ = [sqrt(cov(p)[dim, dim]) for p in preds]
+    return μ, σ
+end
+
+begin
+    y_true = Y_for_metrics[dim, :]
+    t = 1:length(y_true)
+
+    p = plot(t, y_true, label="Ground Truth", color=:black, linewidth=2, legend=:topright,
+        xlabel="Time Step", ylabel="Value", title="Predictions Comparison (dim=$dim)")
+
+    for (name, preds, color) in [
+        ("Saved Priors", train_ensemble_preds, :blue),
+        ("Zero Init w", zero_init_ensemble_preds, :red),
+        ("Full Default", full_default_ensemble_preds, :green),
+    ]
+        μ, σ = marginal_mean_std(preds, dim)
+        plot!(p, t, μ, label=name, color=color, linewidth=1.5)
+        plot!(p, t, μ .+ 1.96 .* σ, fillrange=μ .- 1.96 .* σ, fillalpha=0.15,
+            linealpha=0, label="", color=color)
+    end
+end
+
+savefig(p, "predictions_comparison.png")
+display(p)
