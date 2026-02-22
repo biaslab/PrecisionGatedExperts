@@ -20,6 +20,8 @@ struct ExperimentSpecifier{P,M,D}
     dataset::D            # Val{:ETTh1}, Val{:electricity}, etc. — dispatches load_dataset
     dataset_path::String  # absolute path to the CSV
     experts::Vector{String}
+    selected_quantiles::Vector{Float64}
+    number_of_quantiles::Union{Int,Nothing}
     priors::Dict{Symbol,Any}
     inference_iterations::Int
     prediction_iterations::Int
@@ -46,6 +48,47 @@ function parse_model_type(s::String)
     error("Unknown model_type: $s")
 end
 
+function _normalize_selected_quantiles(raw_quantiles)
+    quantiles_vec = Float64.(raw_quantiles)
+    isempty(quantiles_vec) && return Float64[]
+
+    all_in_unit_interval = all(0.0 <= q <= 1.0 for q in quantiles_vec)
+    all_in_percent_range = all(0.0 <= q <= 100.0 for q in quantiles_vec)
+
+    if all_in_unit_interval
+        quantiles_vec .*= 100.0
+    elseif !all_in_percent_range
+        error("Quantiles must be in [0, 1] or [0, 100]. Got: $(quantiles_vec)")
+    end
+
+    all(0.0 < q < 100.0 for q in quantiles_vec) ||
+        error("Quantiles must be strictly inside (0, 100). Got: $(quantiles_vec)")
+
+    return unique(sort(quantiles_vec))
+end
+
+function _uniform_selected_quantiles(number_of_quantiles::Int)
+    number_of_quantiles >= 0 || error("number_of_quantiles must be >= 0")
+    number_of_quantiles == 0 && return Float64[]
+
+    quantiles_unit = range(0.0, 1.0; length = number_of_quantiles + 2)[2:end-1]
+    return 100.0 .* collect(quantiles_unit)
+end
+
+function _resolve_selected_quantiles(params::Dict)
+    has_explicit_quantiles = haskey(params, "quantiles") || haskey(params, "selected_quantiles")
+    number_of_quantiles = get(params, "number_of_quantiles", nothing)
+
+    if has_explicit_quantiles
+        raw = haskey(params, "quantiles") ? params["quantiles"] : params["selected_quantiles"]
+        return _normalize_selected_quantiles(raw), nothing
+    elseif !isnothing(number_of_quantiles)
+        return _uniform_selected_quantiles(Int(number_of_quantiles)), Int(number_of_quantiles)
+    else
+        return [10.0, 90.0], 2
+    end
+end
+
 function _parse_spec(config)
     p = config["params"]
     prediction_type = parse_prediction_type(p["prediction_type"])
@@ -54,8 +97,12 @@ function _parse_spec(config)
     horizon = p["horizon"]
     dataset = Val(Symbol(p["dataset"]))
     dataset_path = p["dataset_path"]
-    experts = String.(p["experts"])
-    priors = parse_priors(model_type, p["priors"], length(experts) + 2)
+    experts = collect(String, p["experts"])
+    selected_quantiles, number_of_quantiles = _resolve_selected_quantiles(p)
+    n_forecasters = length(experts) + length(selected_quantiles)
+    n_forecasters > 0 ||
+        error("At least one forecaster is required. Provide experts, quantiles, or number_of_quantiles > 0.")
+    priors = parse_priors(model_type, p["priors"], n_forecasters)
     inference_iterations = p["inference_iterations"]
     prediction_iterations = p["prediction_iterations"]
     save_predictions = get(p, "save_predictions", false)
@@ -69,6 +116,8 @@ function _parse_spec(config)
         dataset,
         dataset_path,
         experts,
+        selected_quantiles,
+        number_of_quantiles,
         priors,
         inference_iterations,
         prediction_iterations,
@@ -123,6 +172,10 @@ end
 
 function _dataset_val(x)
     return x isa Symbol ? Val(x) : Val(Symbol(x))
+end
+
+function _has_field(x, name::Symbol)
+    return name in fieldnames(typeof(x))
 end
 
 # ---------------------------------------------------------------------------
@@ -320,7 +373,20 @@ function predict_from_trained_ensemble(
     column = isnothing(spec_saved.column) ? nothing : String(spec_saved.column)
     dataset = _dataset_val(spec_saved.dataset)
     dataset_path = String(spec_saved.dataset_path)
-    experts = String.(spec_saved.experts)
+    experts = collect(String, spec_saved.experts)
+    selected_quantiles = if _has_field(spec_saved, :selected_quantiles)
+        Float64.(spec_saved.selected_quantiles)
+    elseif _has_field(spec_saved, :quantiles)
+        _normalize_selected_quantiles(spec_saved.quantiles)
+    else
+        [10.0, 90.0]
+    end
+    number_of_quantiles = if _has_field(spec_saved, :number_of_quantiles) &&
+                             !isnothing(spec_saved.number_of_quantiles)
+        Int(spec_saved.number_of_quantiles)
+    else
+        nothing
+    end
 
     spec_for_data = ExperimentSpecifier(
         prediction_type,
@@ -330,6 +396,8 @@ function predict_from_trained_ensemble(
         dataset,
         dataset_path,
         experts,
+        selected_quantiles,
+        number_of_quantiles,
         Dict{Symbol,Any}(),
         1,
         prediction_iterations,
@@ -538,9 +606,18 @@ load_dataset(::Val{:traffic}, path::String) = load_ett(path)
 # Expert prediction generation
 # ---------------------------------------------------------------------------
 
-function generate_expert_predictions(::Univariate, experts, scaler, Xval_s, Xte_s, col_idx)
+function generate_expert_predictions(
+    ::Univariate,
+    experts,
+    scaler,
+    Xval_s,
+    Xte_s,
+    col_idx,
+    selected_quantiles,
+)
     n_model_forecasters = length(experts)
-    n_forecasters = n_model_forecasters + 2
+    n_quantile_forecasters = length(selected_quantiles)
+    n_forecasters = n_model_forecasters + n_quantile_forecasters
     n_val = size(Xval_s, 3)
     n_test = size(Xte_s, 3)
 
@@ -557,31 +634,33 @@ function generate_expert_predictions(::Univariate, experts, scaler, Xval_s, Xte_
         @info "Expert ready" index = i model_type = m.model_type
     end
 
-    x_last_val_scaled = Float64.(vec(Xval_s[col_idx, end, :]))
-    q10_scaled = quantile(x_last_val_scaled, 0.1)
-    q90_scaled = quantile(x_last_val_scaled, 0.9)
-
-    q10_probe = zeros(Float64, size(Xval_s, 1), 1)
-    q90_probe = zeros(Float64, size(Xval_s, 1), 1)
-    q10_probe[col_idx, 1] = q10_scaled
-    q90_probe[col_idx, 1] = q90_scaled
-    q10 = Float64(q10_probe[col_idx, 1])
-    q90 = Float64(q90_probe[col_idx, 1])
-
-    idx_q10 = n_model_forecasters + 1
-    idx_q90 = n_model_forecasters + 2
-    predictions_val[idx_q10, :] .= q10
-    predictions_val[idx_q90, :] .= q90
-    predictions_test[idx_q10, :] .= q10
-    predictions_test[idx_q90, :] .= q90
-    @info "Added constant experts" q10_idx = idx_q10 q90_idx = idx_q90 q10 q90
+    if n_quantile_forecasters > 0
+        x_last_val_scaled = Float64.(vec(Xval_s[col_idx, end, :]))
+        for (offset, q_pct) in enumerate(selected_quantiles)
+            idx = n_model_forecasters + offset
+            q = quantile(x_last_val_scaled, q_pct / 100.0)
+            predictions_val[idx, :] .= q
+            predictions_test[idx, :] .= q
+        end
+        @info "Added constant quantile experts" quantiles = selected_quantiles
+    else
+        @info "No quantile experts selected"
+    end
 
     return predictions_val, predictions_test
 end
 
-function generate_expert_predictions(::Multivariate, experts, scaler, Xval_s, Xte_s)
+function generate_expert_predictions(
+    ::Multivariate,
+    experts,
+    scaler,
+    Xval_s,
+    Xte_s,
+    selected_quantiles,
+)
     n_model_forecasters = length(experts)
-    n_forecasters = n_model_forecasters + 2
+    n_quantile_forecasters = length(selected_quantiles)
+    n_forecasters = n_model_forecasters + n_quantile_forecasters
     n_val = size(Xval_s, 3)
     n_test = size(Xte_s, 3)
     d = size(Xval_s, 1)
@@ -603,24 +682,23 @@ function generate_expert_predictions(::Multivariate, experts, scaler, Xval_s, Xt
         @info "Expert ready" index = i model_type = m.model_type
     end
 
-    x_last_val_scaled = Float64.(Xval_s[:, end, :])
-    q10_scaled = [quantile(Float64.(view(x_last_val_scaled, k, :)), 0.1) for k = 1:d]
-    q90_scaled = [quantile(Float64.(view(x_last_val_scaled, k, :)), 0.9) for k = 1:d]
-    q10 = vec(Float64.(reshape(q10_scaled, :, 1)[:, 1]))
-    q90 = vec(Float64.(reshape(q90_scaled, :, 1)[:, 1]))
-
-
-    idx_q10 = n_model_forecasters + 1
-    idx_q90 = n_model_forecasters + 2
-    for j = 1:n_val
-        predictions_val[idx_q10, j] = copy(q10)
-        predictions_val[idx_q90, j] = copy(q90)
+    if n_quantile_forecasters > 0
+        x_last_val_scaled = Float64.(Xval_s[:, end, :])
+        for (offset, q_pct) in enumerate(selected_quantiles)
+            idx = n_model_forecasters + offset
+            q_vec = [quantile(Float64.(view(x_last_val_scaled, k, :)), q_pct / 100.0) for k = 1:d]
+            q = vec(Float64.(reshape(q_vec, :, 1)[:, 1]))
+            for j = 1:n_val
+                predictions_val[idx, j] = copy(q)
+            end
+            for j = 1:n_test
+                predictions_test[idx, j] = copy(q)
+            end
+        end
+        @info "Added constant quantile experts (multivariate)" quantiles = selected_quantiles
+    else
+        @info "No quantile experts selected (multivariate)"
     end
-    for j = 1:n_test
-        predictions_test[idx_q10, j] = copy(q10)
-        predictions_test[idx_q90, j] = copy(q90)
-    end
-    @info "Added constant experts (multivariate)" q10_idx = idx_q10 q90_idx = idx_q90
 
     return predictions_val, predictions_test
 end
@@ -628,20 +706,27 @@ end
 function before_rxinfer(spec::ExperimentSpecifier{Univariate})
     @info "Loading expert models" n = length(spec.experts)
     experts = map(load_jld2_model, spec.experts)
-    base_meta = experts[1].meta
 
     Xmat, feat_cols = load_dataset(spec.dataset, spec.dataset_path)
     col_idx = find_column_index(feat_cols, spec.column)
 
-    seq_len = Int(base_meta.seq_len)
-    horizon = Int(base_meta.horizon)
-    X3, Y2 = make_sequences(Xmat; seq_len = seq_len, horizon = horizon)
+    if isempty(experts)
+        seq_len = 96
+        X3, Y2 = make_sequences(Xmat; seq_len = seq_len, horizon = spec.horizon)
+        Xtr, _, Xval, Yval, Xte, Yte = train_val_test_split(X3, Y2)
+        scaler = fit_scaler(Xtr)
+        @info "No model experts; using dataset-only setup" seq_len horizon = spec.horizon
+    else
+        base_meta = experts[1].meta
+        seq_len = Int(base_meta.seq_len)
+        horizon = Int(base_meta.horizon)
+        X3, Y2 = make_sequences(Xmat; seq_len = seq_len, horizon = horizon)
+        split = base_meta.split
+        _, _, Xval, Yval, Xte, Yte =
+            train_val_test_split(X3, Y2; ratios = (split.train, split.val, split.test))
+        scaler = base_meta.scaler
+    end
 
-    split = base_meta.split
-    _, _, Xval, Yval, Xte, Yte =
-        train_val_test_split(X3, Y2; ratios = (split.train, split.val, split.test))
-
-    scaler = base_meta.scaler
     Xval_s = scale_inputs(scaler, Xval)
     Xte_s = scale_inputs(scaler, Xte)
     Yval_s = scale_targets(scaler, Yval)
@@ -657,6 +742,7 @@ function before_rxinfer(spec::ExperimentSpecifier{Univariate})
         Xval_s,
         Xte_s,
         col_idx,
+        spec.selected_quantiles,
     )
 
     features_val = make_features(Xval_s)
@@ -667,28 +753,36 @@ end
 function before_rxinfer(spec::ExperimentSpecifier{Multivariate})
     @info "Loading expert models" n = length(spec.experts)
     experts = map(load_jld2_model, spec.experts)
-    base_meta = experts[1].meta
 
     Xmat, feat_cols = load_dataset(spec.dataset, spec.dataset_path)
 
     d = length(feat_cols)
-    seq_len = Int(base_meta.seq_len)
-    horizon = Int(base_meta.horizon)
-    X3, Y2 = make_sequences(Xmat; seq_len = seq_len, horizon = horizon)
+    if isempty(experts)
+        seq_len = 96
+        X3, Y2 = make_sequences(Xmat; seq_len = seq_len, horizon = spec.horizon)
+        Xtr, _, Xval, Yval, Xte, Yte = train_val_test_split(X3, Y2)
+        scaler = fit_scaler(Xtr)
+        @info "No model experts; using dataset-only setup (multivariate)" seq_len horizon =
+            spec.horizon
+    else
+        base_meta = experts[1].meta
+        seq_len = Int(base_meta.seq_len)
+        horizon = Int(base_meta.horizon)
+        X3, Y2 = make_sequences(Xmat; seq_len = seq_len, horizon = horizon)
+        split = base_meta.split
+        _, _, Xval, Yval, Xte, Yte =
+            train_val_test_split(X3, Y2; ratios = (split.train, split.val, split.test))
+        scaler = base_meta.scaler
+        n_scaler = length(scaler.μ)
+        n_feat = size(Xval, 1)
+        n_scaler == n_feat || error(
+            "Scaler dimension ($n_scaler) from expert model does not match " *
+            "dataset features ($n_feat). The expert was likely trained on a " *
+            "different dataset. Check that `dataset_path` in the YAML matches " *
+            "the experts' training data.",
+        )
+    end
 
-    split = base_meta.split
-    _, _, Xval, Yval, Xte, Yte =
-        train_val_test_split(X3, Y2; ratios = (split.train, split.val, split.test))
-
-    scaler = base_meta.scaler
-    n_scaler = length(scaler.μ)
-    n_feat = size(Xval, 1)
-    n_scaler == n_feat || error(
-        "Scaler dimension ($n_scaler) from expert model does not match " *
-        "dataset features ($n_feat). The expert was likely trained on a " *
-        "different dataset. Check that `dataset_path` in the YAML matches " *
-        "the experts' training data.",
-    )
     Xval_s = scale_inputs(scaler, Xval)
     Xte_s = scale_inputs(scaler, Xte)
     Yval_s = scale_targets(scaler, Yval)
@@ -701,7 +795,14 @@ function before_rxinfer(spec::ExperimentSpecifier{Multivariate})
     y_test = [Float64.(Yte_s[:, j]) for j = 1:n_test]
 
     predictions_val, predictions_test =
-        generate_expert_predictions(spec.prediction_type, experts, scaler, Xval_s, Xte_s)
+        generate_expert_predictions(
+            spec.prediction_type,
+            experts,
+            scaler,
+            Xval_s,
+            Xte_s,
+            spec.selected_quantiles,
+        )
 
     features_val = make_features(Xval_s)
     features_test = make_features(Xte_s)

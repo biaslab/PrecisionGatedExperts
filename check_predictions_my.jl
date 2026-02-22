@@ -6,7 +6,7 @@ using BayesBase: cov
 using Distributions
 using StableRNGs
 
-saved = JLD2.load("final_results/exchange_rate_h192_multivariate_probabilisticensembling.hierarchical_1112068165064376254.jld2")
+saved = JLD2.load("final_results/ETTh1_h96_OT_probabilisticensembling.dynamic_12619270389987250442.jld2")
 spec_saved = saved["spec"]
 
 prediction_type = ProbabilisticEnsembling._parse_saved_prediction_type(string(spec_saved.prediction_type))
@@ -26,6 +26,8 @@ spec_for_data = ProbabilisticEnsembling.ExperimentSpecifier(
     dataset,
     dataset_path,
     experts,
+    [10.0, 90.0],
+    2,
     Dict{Symbol,Any}(),
     1,
     prediction_iterations,
@@ -148,6 +150,8 @@ function marginal_mean_std(preds, dim)
 end
 
 normalized_samples = normalized_influence_dist(StableRNG(42), train_influence, 100)
+n_f = size(train_influence, 1)
+n_t = size(train_influence, 2)
 
 # Compute mean and credible intervals of normalized influence
 norm_influence_mean = dropdims(mean(normalized_samples, dims=1), dims=1)  # (n_f × n_t)
@@ -170,7 +174,7 @@ forecaster_labels = forecaster_labels[1:n_f]
 
 # --- Create combined plot ---
 begin
-    y_true = Y_for_metrics[dim, :]
+    y_true = Y_for_metrics
     t = 1:length(y_true)
 
     # Top subplot: predictions comparison

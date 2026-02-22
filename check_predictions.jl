@@ -21,6 +21,8 @@ spec_for_data = ProbabilisticEnsembling.ExperimentSpecifier(
     dataset,
     dataset_path,
     experts,
+    [10.0, 90.0],
+    2,
     Dict{Symbol,Any}(),
     1,
     prediction_iterations,

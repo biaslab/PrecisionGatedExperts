@@ -47,6 +47,12 @@ params:
       scale: 1.0
 ```
 
+Quantile forecasters configuration:
+- `selected_quantiles` (or `quantiles`): explicit quantile list in percent (`[10, 90]`) or unit interval (`[0.1, 0.9]`).
+- `number_of_quantiles`: generates uniformly spaced quantiles in `(0, 1)`; e.g. `4` -> `[20, 40, 60, 80]`.
+- If neither field is provided, defaults to `[10, 90]`.
+- `experts` may be empty (`experts: []`) for quantile-only runs.
+
 ## Datasets
 
 to download traffic.csv and electricity.csv: https://drive.google.com/drive/folders/1x3lrzu0qMUXMAJPxg6gIWV_4h6sGFKn7?usp=sharing
