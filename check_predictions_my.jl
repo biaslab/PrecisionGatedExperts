@@ -6,7 +6,7 @@ using BayesBase: cov
 using Distributions
 using StableRNGs
 
-saved = JLD2.load("final_results/ETTh1_h96_OT_probabilisticensembling.dynamic_2710193489645658496.jld2")
+saved = JLD2.load("final_results/ETTh1_h96_OT_probabilisticensembling.hierarchical_203123442109960750.jld2")
 spec_saved = saved["spec"]
 
 prediction_type = ProbabilisticEnsembling._parse_saved_prediction_type(string(spec_saved.prediction_type))

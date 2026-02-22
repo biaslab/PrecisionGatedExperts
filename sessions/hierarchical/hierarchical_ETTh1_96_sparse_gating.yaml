@@ -1,0 +1,28 @@
+params:
+  prediction_type: "univariate"
+  column: "OT"
+  model_type: "hierarchical"
+  dataset: "ETTh1"
+  dataset_path: "data/ETTh1.csv"
+  horizon: 96
+  inference_iterations: 150
+  prediction_iterations: 2
+  experts:
+    - "models/ETTh1_h96_s96_CNN_enzyme.jld2"
+  selected_quantiles: [10, 90]
+  priors:
+    τ:
+      type: "GammaShapeRate"
+      shape: 2.0
+      rate: 0.2
+    ρ:
+      type: "GammaShapeRate"
+      shape: 2.0
+      rate: 0.5
+    α:
+      value: 0.7
+    w:
+      type: "MvNormalMeanScalePrecision"
+      n_features: 22
+      scale: 0.05
+  subsample_size: 256
