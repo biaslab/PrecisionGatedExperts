@@ -6,9 +6,9 @@ using CSV
 using DataFrames
 using Plots
 
-const DATASETS = ["exchange_rate","ETTh2"]
+const DATASETS = ["exchange_rate","ETTh1"]
 const HORIZONS = [96, 192, 336, 720]
-const W_SCALES = [0.1, 1.0, 2.0, 5.0]
+const W_SCALES = [0.001, 100.0, 1000.0]
 # const PRED_STEPS = [1,2,4,8]
 const SUBSAMPLE_PERCENTAGES = [0.005, 0.01, 0.02]
 
@@ -69,7 +69,7 @@ function save_prediction_plot(results, dataset::String, horizon::Int, w_scale::F
     )
     plot!(plt, x, y_pred; label = "Ensemble", linewidth = 2, color = :dodgerblue)
 
-    plots_dir = joinpath("results", "hierarchical_prediction_plots_2", dataset, "h$(horizon)")
+    plots_dir = joinpath("results", "hierarchical_prediction_plots_3", dataset, "h$(horizon)")
     mkpath(plots_dir)
     filename = "pred_ws$(param_tag(w_scale))_sp$(param_tag(subsample_percentage)).png"
     out_path = joinpath(plots_dir, filename)
@@ -78,7 +78,7 @@ function save_prediction_plot(results, dataset::String, horizon::Int, w_scale::F
 end
 
 function main()
-    out_path = length(ARGS) >= 1 ? ARGS[1] : "results/hierarchical_hyperparam_grid_2.csv"
+    out_path = length(ARGS) >= 1 ? ARGS[1] : "results/hierarchical_hyperparam_grid_3.csv"
     mkpath(dirname(out_path))
 
     rows = DataFrame(

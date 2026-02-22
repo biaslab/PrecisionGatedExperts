@@ -2,7 +2,7 @@ using ProbabilisticEnsembling
 using ExponentialFamily
 using JLD2
 
-saved = JLD2.load("/Users/ruiite/projects/prob_ensem_mle/probabilistic_ensemble_forecasting/final_results/exchange_rate_h192_multivariate_probabilisticensembling.dynamic_1787947453790851371.jld2")
+saved = JLD2.load("/Users/ruiite/projects/prob_ensem_mle/probabilistic_ensemble_forecasting/final_results/ETTh2_h336_OT_probabilisticensembling.static_11370337655097017902.jld2")
 spec_saved = saved["spec"]
 
 prediction_type = ProbabilisticEnsembling._parse_saved_prediction_type(string(spec_saved.prediction_type))
@@ -11,7 +11,7 @@ column = isnothing(spec_saved.column) ? nothing : String(spec_saved.column)
 dataset = ProbabilisticEnsembling._dataset_val(spec_saved.dataset)
 dataset_path = String(spec_saved.dataset_path)
 experts = String.(spec_saved.experts)
-prediction_iterations = 4
+prediction_iterations = 1
 
 spec_for_data = ProbabilisticEnsembling.ExperimentSpecifier(
     prediction_type,
