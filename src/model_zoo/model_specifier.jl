@@ -288,6 +288,15 @@ function predict_with_model(
     )
 end
 
+function prepare_y_for_metrics(::Univariate, y_test)
+    return y_test
+end
+
+function prepare_y_for_metrics(::Multivariate, y_test)
+    return reduce(hcat, y_test)
+end
+
+
 """
     predict_from_trained_ensemble(path_to_jld2; prediction_iterations=20, alpha=1.0)
 
@@ -353,10 +362,12 @@ function predict_from_trained_ensemble(
 
     ensemble_preds = infer_test.predictions[:y][end]
 
+    Y_for_metrics = prepare_y_for_metrics(prediction_type, y_test)
+
     ensemble_mean, ensemble_std, ensemble_metrics = compute_ensemble_metrics(
         spec_for_data.prediction_type,
         ensemble_preds,
-        y_test
+        Y_for_metrics
     )
 
     return (
