@@ -2,7 +2,7 @@ using ProbabilisticEnsembling
 using ExponentialFamily
 using JLD2
 
-saved = JLD2.load("final_results/exchange_rate_h96_multivariate_probabilisticensembling.hierarchical_12115624976589196239.jld2")
+saved = JLD2.load("/Users/ruiite/projects/prob_ensem_mle/probabilistic_ensemble_forecasting/final_results/exchange_rate_h192_multivariate_probabilisticensembling.dynamic_1787947453790851371.jld2")
 spec_saved = saved["spec"]
 
 prediction_type = ProbabilisticEnsembling._parse_saved_prediction_type(string(spec_saved.prediction_type))
@@ -11,7 +11,7 @@ column = isnothing(spec_saved.column) ? nothing : String(spec_saved.column)
 dataset = ProbabilisticEnsembling._dataset_val(spec_saved.dataset)
 dataset_path = String(spec_saved.dataset_path)
 experts = String.(spec_saved.experts)
-prediction_iterations = 1
+prediction_iterations = 4
 
 spec_for_data = ProbabilisticEnsembling.ExperimentSpecifier(
     prediction_type,
@@ -51,7 +51,7 @@ train_results, train_preds = begin
         features_test = features_test,
         prediction_iterations = prediction_iterations,
     )
-    @info [mean(posterior) for posterior in infer_test.posteriors[:γ][end]][1:5]
+    #@info [mean(posterior) for posterior in infer_test.posteriors[:γ][end]][1:5]
     ensemble_preds = infer_test.predictions[:y][end];
 
     Y_for_metrics = ProbabilisticEnsembling.prepare_y_for_metrics(prediction_type, y_test);
@@ -79,7 +79,7 @@ zero_init = begin
         prediction_iterations = prediction_iterations,
     )
 
-    @info [mean(posterior) for posterior in infer_test.posteriors[:γ][end]][1:5]
+    #@info [mean(posterior) for posterior in infer_test.posteriors[:γ][end]][1:5]
     ensemble_preds = infer_test.predictions[:y][end];
 
     Y_for_metrics = ProbabilisticEnsembling.prepare_y_for_metrics(prediction_type, y_test);
@@ -89,8 +89,6 @@ zero_init = begin
         ensemble_preds,
         Y_for_metrics
     )
-
-    ensemble_metrics
 end
 
 full_default = begin
@@ -109,7 +107,7 @@ full_default = begin
         prediction_iterations = prediction_iterations,
     )
 
-    @info [mean(posterior) for posterior in infer_test.posteriors[:γ][end]][1:5]
+    #@info [mean(posterior) for posterior in infer_test.posteriors[:γ][end]][1:5]
     ensemble_preds = infer_test.predictions[:y][end];
 
     Y_for_metrics = ProbabilisticEnsembling.prepare_y_for_metrics(prediction_type, y_test);
@@ -119,6 +117,9 @@ full_default = begin
         ensemble_preds,
         Y_for_metrics
     )
-
-    ensemble_metrics
 end
+
+
+@info train_results
+@info zero_init.ensemble_metrics
+@info full_default.ensemble_metrics

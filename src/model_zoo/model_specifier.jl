@@ -426,6 +426,20 @@ reactant_device() =
         Lux.cpu_device()
     end
 cpu_dev() = Lux.cpu_device()
+const ZSCORE_95 = 1.959963984540054
+const ALPHA_95 = 0.05
+
+function _marginal_std(dist)
+    s = std(dist)
+    if s isa Number
+        return [Float64(s)]
+    elseif s isa AbstractVector
+        return Float64.(s)
+    elseif s isa AbstractMatrix
+        return sqrt.(max.(diag(Matrix(s)), 0.0))
+    end
+    error("Unsupported std output type $(typeof(s)) for distribution $(typeof(dist))")
+end
 
 function predict_unscaled(model, ps, st, X_scaled; dev = reactant_device())
     Xd = dev(Float32.(X_scaled))
@@ -439,6 +453,15 @@ end
 function compute_ensemble_metrics(::Univariate, ensemble_preds, y_test)
     ensemble_mean = map(mean, ensemble_preds)
     ensemble_std = map(std, ensemble_preds)
+    ci95_lower = ensemble_mean .- ZSCORE_95 .* ensemble_std
+    ci95_upper = ensemble_mean .+ ZSCORE_95 .* ensemble_std
+    ci95_target_overlap = mean((y_test .>= ci95_lower) .& (y_test .<= ci95_upper))
+    ci95_avg_width = mean(ci95_upper .- ci95_lower)
+    ci95_interval_score = mean(
+        (ci95_upper .- ci95_lower) .+
+        (2 / ALPHA_95) .* ((ci95_lower .- y_test) .* (y_test .< ci95_lower)) .+
+        (2 / ALPHA_95) .* ((y_test .- ci95_upper) .* (y_test .> ci95_upper))
+    )
     ensemble_metrics = (
         mse = mse(ensemble_mean, y_test),
         mae = mae(ensemble_mean, y_test),
@@ -446,14 +469,26 @@ function compute_ensemble_metrics(::Univariate, ensemble_preds, y_test)
         r2 = r2(ensemble_mean, y_test),
         mape = mape(ensemble_mean, y_test),
         smape = smape(ensemble_mean, y_test),
-        nll = mean(map((y_dist) -> logpdf(y_dist[2], y_dist[1]), zip(y_test, ensemble_preds)))
+        nll = mean(map((y_dist) -> logpdf(y_dist[2], y_dist[1]), zip(y_test, ensemble_preds))),
+        ci95_target_overlap = ci95_target_overlap,
+        ci95_avg_width = ci95_avg_width,
+        ci95_interval_score = ci95_interval_score
     )
     return (; ensemble_mean, ensemble_std, ensemble_metrics)
 end
 
 function compute_ensemble_metrics(::Multivariate, ensemble_preds, y_test)
     ensemble_mean = reduce(hcat, map(mean, ensemble_preds))
-    ensemble_std = reduce(hcat, map(std, ensemble_preds))
+    ensemble_std = reduce(hcat, map(_marginal_std, ensemble_preds))
+    ci95_lower = ensemble_mean .- ZSCORE_95 .* ensemble_std
+    ci95_upper = ensemble_mean .+ ZSCORE_95 .* ensemble_std
+    ci95_target_overlap = mean((y_test .>= ci95_lower) .& (y_test .<= ci95_upper))
+    ci95_avg_width = mean(ci95_upper .- ci95_lower)
+    ci95_interval_score = mean(
+        (ci95_upper .- ci95_lower) .+
+        (2 / ALPHA_95) .* ((ci95_lower .- y_test) .* (y_test .< ci95_lower)) .+
+        (2 / ALPHA_95) .* ((y_test .- ci95_upper) .* (y_test .> ci95_upper))
+    )
     ensemble_metrics = (
         mse = mse_mv(ensemble_mean, y_test),
         mae = mae_mv(ensemble_mean, y_test),
@@ -461,7 +496,10 @@ function compute_ensemble_metrics(::Multivariate, ensemble_preds, y_test)
         r2 = r2_mv(ensemble_mean, y_test),
         mape = mape_mv(ensemble_mean, y_test),
         smape = smape_mv(ensemble_mean, y_test),
-        nll = mean(map((y_dist) -> logpdf(y_dist[2], y_dist[1]), zip(eachcol(y_test), ensemble_preds)))
+        nll = mean(map((y_dist) -> logpdf(y_dist[2], y_dist[1]), zip(eachcol(y_test), ensemble_preds))),
+        ci95_target_overlap = ci95_target_overlap,
+        ci95_avg_width = ci95_avg_width,
+        ci95_interval_score = ci95_interval_score
     )
     return (; ensemble_mean, ensemble_std, ensemble_metrics)
 end
