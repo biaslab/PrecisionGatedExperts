@@ -31,4 +31,7 @@ include("model_zoo/model_types.jl")
 # model running
 include("model_zoo/model_specifier.jl")
 
+# viz utils
+include("dist_normalized_weights.jl")
+
 end
