@@ -6,35 +6,20 @@ using BayesBase: cov
 using Distributions
 using StableRNGs
 
-saved = JLD2.load("final_results/ETTh1_h96_OT_probabilisticensembling.dynamic_12619270389987250442.jld2")
+saved = JLD2.load("final_results/ETTh1_h96_OT_probabilisticensembling.dynamic_2710193489645658496.jld2")
 spec_saved = saved["spec"]
 
 prediction_type = ProbabilisticEnsembling._parse_saved_prediction_type(string(spec_saved.prediction_type))
 model_type = ProbabilisticEnsembling._parse_saved_model_type(string(spec_saved.model_type))
-column = isnothing(spec_saved.column) ? nothing : String(spec_saved.column)
-dataset = ProbabilisticEnsembling._dataset_val(spec_saved.dataset)
-dataset_path = String(spec_saved.dataset_path)
-experts = String.(spec_saved.experts)
 prediction_iterations = 1
 alpha = 1
 
-spec_for_data = ProbabilisticEnsembling.ExperimentSpecifier(
-    prediction_type,
-    model_type,
-    column,
-    Int(spec_saved.horizon),
-    dataset,
-    dataset_path,
-    experts,
-    [10.0, 90.0],
-    2,
-    Dict{Symbol,Any}(),
-    1,
+spec_for_data = ProbabilisticEnsembling._spec_for_prediction_from_saved(
+    saved,
     prediction_iterations,
-    false,
-    nothing,
-    nothing,
 )
+experts = spec_for_data.experts
+saved_selected_quantiles = spec_for_data.selected_quantiles
 
 _, y_test_all, _, predictions_test_all, _, features_test_all = ProbabilisticEnsembling.before_rxinfer(spec_for_data);
 n_steps = length(y_test_all)
@@ -164,7 +149,8 @@ for i in 1:n_f, j in 1:n_t
 end
 
 # Build forecaster labels
-forecaster_labels = vcat(experts, ["q10", "q90"])
+quantile_labels = ["q$(Int(round(q)))" for q in saved_selected_quantiles]
+forecaster_labels = vcat(experts, quantile_labels)
 if length(forecaster_labels) < n_f
     for k in (length(forecaster_labels)+1):n_f
         push!(forecaster_labels, "Expert $k")

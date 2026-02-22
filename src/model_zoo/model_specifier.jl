@@ -131,6 +131,7 @@ function run_experiment(path_to_yaml::String)
     config = YAML.load_file(path_to_yaml)
     spec = _parse_spec(config)
     results = run_experiment(spec)
+    results_with_raw_spec = merge(results, (raw_spec = config,))
     results_dir = "final_results"
     mkpath(results_dir)
     ds_name = typeof(spec.dataset).parameters[1]
@@ -144,16 +145,16 @@ function run_experiment(path_to_yaml::String)
     results_path = joinpath(results_dir, fname)
     save_data = if spec.save_predictions
         @info "predictions are saved"
-        pairs(results)
+        pairs(results_with_raw_spec)
     else
         @info "predictions are not saved"
         skipped_fields = [:ensemble_std, :ensemble_mean, :y_test, :predictions_test]
-        (k => v for (k, v) in pairs(results) if !(k in skipped_fields))
+        (k => v for (k, v) in pairs(results_with_raw_spec) if !(k in skipped_fields))
     end
     JLD2.jldsave(results_path; save_data...)
     @info "Results saved" path=results_path save_predictions=spec.save_predictions
 
-    return results
+    return results_with_raw_spec
 end
 
 function _parse_saved_prediction_type(s::AbstractString)
@@ -176,6 +177,88 @@ end
 
 function _has_field(x, name::Symbol)
     return name in fieldnames(typeof(x))
+end
+
+function _saved_quantile_config(spec_saved)
+    selected_quantiles = if _has_field(spec_saved, :selected_quantiles)
+        Float64.(spec_saved.selected_quantiles)
+    elseif _has_field(spec_saved, :quantiles)
+        _normalize_selected_quantiles(spec_saved.quantiles)
+    else
+        [10.0, 90.0]
+    end
+
+    number_of_quantiles = if _has_field(spec_saved, :number_of_quantiles) &&
+                             !isnothing(spec_saved.number_of_quantiles)
+        Int(spec_saved.number_of_quantiles)
+    else
+        nothing
+    end
+    return selected_quantiles, number_of_quantiles
+end
+
+function _spec_for_prediction_from_saved(saved, prediction_iterations::Int)
+    haskey(saved, "spec") || error("Missing `spec` in saved results")
+    spec_saved = saved["spec"]
+
+    function _from_saved_fields()
+        prediction_type = _parse_saved_prediction_type(string(spec_saved.prediction_type))
+        model_type = _parse_saved_model_type(string(spec_saved.model_type))
+        column = isnothing(spec_saved.column) ? nothing : String(spec_saved.column)
+        dataset = _dataset_val(spec_saved.dataset)
+        dataset_path = String(spec_saved.dataset_path)
+        experts = collect(String, spec_saved.experts)
+        selected_quantiles, number_of_quantiles = _saved_quantile_config(spec_saved)
+
+        return ExperimentSpecifier(
+            prediction_type,
+            model_type,
+            column,
+            Int(spec_saved.horizon),
+            dataset,
+            dataset_path,
+            experts,
+            selected_quantiles,
+            number_of_quantiles,
+            Dict{Symbol,Any}(),
+            1,
+            prediction_iterations,
+            false,
+            nothing,
+            nothing,
+        )
+    end
+
+    if haskey(saved, "raw_spec")
+        try
+            spec_from_raw = _parse_spec(saved["raw_spec"])
+            return ExperimentSpecifier(
+                spec_from_raw.prediction_type,
+                spec_from_raw.model_type,
+                spec_from_raw.column,
+                spec_from_raw.horizon,
+                spec_from_raw.dataset,
+                spec_from_raw.dataset_path,
+                spec_from_raw.experts,
+                spec_from_raw.selected_quantiles,
+                spec_from_raw.number_of_quantiles,
+                Dict{Symbol,Any}(),
+                1,
+                prediction_iterations,
+                false,
+                nothing,
+                nothing,
+            )
+        catch err
+            @warn "Failed to parse raw_spec, falling back to saved spec fields" error = sprint(
+                showerror,
+                err,
+            )
+            return _from_saved_fields()
+        end
+    end
+
+    return _from_saved_fields()
 end
 
 # ---------------------------------------------------------------------------
@@ -365,46 +448,7 @@ function predict_from_trained_ensemble(
     prediction_iterations > 0 || error("prediction_iterations must be > 0")
 
     saved = JLD2.load(path_to_jld2)
-    haskey(saved, "spec") || error("Missing `spec` in results file: $path_to_jld2")
-    spec_saved = saved["spec"]
-
-    prediction_type = _parse_saved_prediction_type(string(spec_saved.prediction_type))
-    model_type = _parse_saved_model_type(string(spec_saved.model_type))
-    column = isnothing(spec_saved.column) ? nothing : String(spec_saved.column)
-    dataset = _dataset_val(spec_saved.dataset)
-    dataset_path = String(spec_saved.dataset_path)
-    experts = collect(String, spec_saved.experts)
-    selected_quantiles = if _has_field(spec_saved, :selected_quantiles)
-        Float64.(spec_saved.selected_quantiles)
-    elseif _has_field(spec_saved, :quantiles)
-        _normalize_selected_quantiles(spec_saved.quantiles)
-    else
-        [10.0, 90.0]
-    end
-    number_of_quantiles = if _has_field(spec_saved, :number_of_quantiles) &&
-                             !isnothing(spec_saved.number_of_quantiles)
-        Int(spec_saved.number_of_quantiles)
-    else
-        nothing
-    end
-
-    spec_for_data = ExperimentSpecifier(
-        prediction_type,
-        model_type,
-        column,
-        Int(spec_saved.horizon),
-        dataset,
-        dataset_path,
-        experts,
-        selected_quantiles,
-        number_of_quantiles,
-        Dict{Symbol,Any}(),
-        1,
-        prediction_iterations,
-        false,
-        nothing,
-        nothing,
-    )
+    spec_for_data = _spec_for_prediction_from_saved(saved, prediction_iterations)
 
     _, y_test_all, _, predictions_test_all, _, features_test_all = before_rxinfer(spec_for_data)
     n_steps = length(y_test_all)
@@ -918,6 +962,8 @@ function run_static_univariate(spec::ExperimentSpecifier{Univariate,Static})
             dataset = typeof(spec.dataset).parameters[1],
             dataset_path = spec.dataset_path,
             experts = spec.experts,
+            selected_quantiles = spec.selected_quantiles,
+            number_of_quantiles = spec.number_of_quantiles,
         ),
     )
 
@@ -995,6 +1041,8 @@ function run_static_multivariate(spec::ExperimentSpecifier{Multivariate,Static})
             dataset = typeof(spec.dataset).parameters[1],
             dataset_path = spec.dataset_path,
             experts = spec.experts,
+            selected_quantiles = spec.selected_quantiles,
+            number_of_quantiles = spec.number_of_quantiles,
         ),
     )
 
@@ -1104,6 +1152,8 @@ function run_dynamic_univariate(spec::ExperimentSpecifier{Univariate,Dynamic})
             dataset = typeof(spec.dataset).parameters[1],
             dataset_path = spec.dataset_path,
             experts = spec.experts,
+            selected_quantiles = spec.selected_quantiles,
+            number_of_quantiles = spec.number_of_quantiles,
         ),
     )
 
@@ -1221,6 +1271,8 @@ function run_dynamic_multivariate(spec::ExperimentSpecifier{Multivariate,Dynamic
             dataset = typeof(spec.dataset).parameters[1],
             dataset_path = spec.dataset_path,
             experts = spec.experts,
+            selected_quantiles = spec.selected_quantiles,
+            number_of_quantiles = spec.number_of_quantiles,
         ),
     )
 
@@ -1338,6 +1390,8 @@ function run_hierarchical_univariate(spec::ExperimentSpecifier{Univariate,Hierar
             dataset = typeof(spec.dataset).parameters[1],
             dataset_path = spec.dataset_path,
             experts = spec.experts,
+            selected_quantiles = spec.selected_quantiles,
+            number_of_quantiles = spec.number_of_quantiles,
         ),
     )
 
@@ -1457,6 +1511,8 @@ function run_hierarchical_multivariate(spec::ExperimentSpecifier{Multivariate,Hi
             dataset = typeof(spec.dataset).parameters[1],
             dataset_path = spec.dataset_path,
             experts = spec.experts,
+            selected_quantiles = spec.selected_quantiles,
+            number_of_quantiles = spec.number_of_quantiles,
         ),
     )
 
@@ -1576,6 +1632,8 @@ function run_deep_multivariate(spec::ExperimentSpecifier{Multivariate,Deep})
             dataset = typeof(spec.dataset).parameters[1],
             dataset_path = spec.dataset_path,
             experts = spec.experts,
+            selected_quantiles = spec.selected_quantiles,
+            number_of_quantiles = spec.number_of_quantiles,
         ),
     )
 
@@ -1692,6 +1750,8 @@ function run_deep_univariate(spec::ExperimentSpecifier{Univariate,Deep})
             dataset = typeof(spec.dataset).parameters[1],
             dataset_path = spec.dataset_path,
             experts = spec.experts,
+            selected_quantiles = spec.selected_quantiles,
+            number_of_quantiles = spec.number_of_quantiles,
         ),
     )
 
