@@ -1226,8 +1226,9 @@ function run_dynamic_univariate(spec::ExperimentSpecifier{Univariate,Dynamic})
 
     # 6. Ensemble predictions on test
     @info "Generating dynamic ensemble predictions on test"
+    # deepcopy posteriors to prevent in-place mutation by LowRank product rules
     posterior_priors =
-        Dict{Symbol,Any}(:w => w_posteriors, :τ => τ_posteriors, :β => β_posteriors)
+        Dict{Symbol,Any}(:w => deepcopy(w_posteriors), :τ => deepcopy(τ_posteriors), :β => deepcopy(β_posteriors))
     prediction_array = [missing for _ = 1:n_test]
 
     infer_test = infer(
@@ -1344,8 +1345,9 @@ function run_dynamic_multivariate(spec::ExperimentSpecifier{Multivariate,Dynamic
 
     # Ensemble predictions on test
     @info "Generating dynamic ensemble predictions on test"
+    # deepcopy posteriors to prevent in-place mutation by LowRank product rules
     posterior_priors =
-        Dict{Symbol,Any}(:w => w_posteriors, :τ => τ_posteriors, :β => β_posteriors)
+        Dict{Symbol,Any}(:w => deepcopy(w_posteriors), :τ => deepcopy(τ_posteriors), :β => deepcopy(β_posteriors))
 
     infer_test = predict_with_model(
         spec.prediction_type,
@@ -1453,10 +1455,11 @@ function run_hierarchical_univariate(spec::ExperimentSpecifier{Univariate,Hierar
 
     # 6. Ensemble predictions on test
     @info "Generating hierarchical ensemble predictions on test"
+    # deepcopy posteriors to prevent in-place mutation by LowRank product rules
     posterior_priors = Dict{Symbol,Any}(
-        :w => w_posteriors,
-        :τ => τ_posteriors,
-        :ρ => ρ_posteriors,
+        :w => deepcopy(w_posteriors),
+        :τ => deepcopy(τ_posteriors),
+        :ρ => deepcopy(ρ_posteriors),
         :α => spec.priors[:α],
     )
     prediction_array = [missing for _ = 1:n_test]
@@ -1573,10 +1576,11 @@ function run_hierarchical_multivariate(spec::ExperimentSpecifier{Multivariate,Hi
     end
 
     @info "Generating hierarchical ensemble predictions on test"
+    # deepcopy posteriors to prevent in-place mutation by LowRank product rules
     posterior_priors = Dict{Symbol,Any}(
-        :w => w_posteriors,
-        :τ => τ_posteriors,
-        :ρ => ρ_posteriors,
+        :w => deepcopy(w_posteriors),
+        :τ => deepcopy(τ_posteriors),
+        :ρ => deepcopy(ρ_posteriors),
         :α => spec.priors[:α],
     )
     prediction_array = [missing for _ = 1:n_test]
@@ -1693,11 +1697,12 @@ function run_deep_multivariate(spec::ExperimentSpecifier{Multivariate,Deep})
 
     # Ensemble predictions on test
     @info "Generating deep ensemble predictions on test"
+    # deepcopy posteriors to prevent in-place mutation by LowRank product rules
     posterior_priors = Dict{Symbol,Any}(
-        :w => w_posteriors,
-        :v => v_posteriors,
-        :τ => τ_posteriors,
-        :ρ => ρ_posteriors,
+        :w => deepcopy(w_posteriors),
+        :v => deepcopy(v_posteriors),
+        :τ => deepcopy(τ_posteriors),
+        :ρ => deepcopy(ρ_posteriors),
         :α => spec.priors[:α],
     )
     prediction_array = [missing for _ = 1:n_test]
@@ -1811,11 +1816,12 @@ function run_deep_univariate(spec::ExperimentSpecifier{Univariate,Deep})
 
     # 6. Ensemble predictions on test
     @info "Generating deep ensemble predictions on test"
+    # deepcopy posteriors to prevent in-place mutation by LowRank product rules
     posterior_priors = Dict{Symbol,Any}(
-        :w => w_posteriors,
-        :v => v_posteriors,
-        :τ => τ_posteriors,
-        :ρ => ρ_posteriors,
+        :w => deepcopy(w_posteriors),
+        :v => deepcopy(v_posteriors),
+        :τ => deepcopy(τ_posteriors),
+        :ρ => deepcopy(ρ_posteriors),
         :α => spec.priors[:α],
     )
     prediction_array = [missing for _ = 1:n_test]
