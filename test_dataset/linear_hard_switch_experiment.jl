@@ -15,9 +15,12 @@ n_train_last = convert(Int, ceil(train_size * size(data)[1]))
 data_train = data[1:n_train_last, :]
 scale = 1e-3
 priors = Dict{Symbol, Any}(
-    :w => [MvNormalMeanScalePrecision(zeros(2), scale), MvNormalMeanScalePrecision(zeros(2), scale)],
+    :w => [
+        MvNormalMeanScalePrecision(zeros(2), scale),   # expert A: high for x<1.5
+        MvNormalMeanScalePrecision(zeros(2), scale)    # expert B: high for x>1.5
+    ],
     :τ => [GammaShapeRate(1.0, 1.0), GammaShapeRate(1.0, 1.0)],
-    :β => [GammaShapeRate(1.0, 1.0), GammaShapeRate(1.0, 1.0)]
+    :β => [GammaShapeRate(1.0, 1e4), GammaShapeRate(1.0, 1e4)]
 );
 
 model = ProbabilisticEnsembling.univariate_dynamic_ensemble(
