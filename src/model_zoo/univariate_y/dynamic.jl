@@ -39,7 +39,7 @@ end
         parameters = ProjectionParameters(strategy = ClosedFormStrategy()),
     )
     if prediction
-        for (i, prior) in enumerate(priors[:w])
+        for (i, prior) in enumerate(deepcopy(priors[:w]))
             q(w[i])::RxInfer.FixedMarginalFormConstraint(prior)
         end
         for (i, prior) in enumerate(priors[:τ])
@@ -52,7 +52,7 @@ end
 end
 
 @initialization function univariate_dynamic_ensemble_init(priors)
-    q(w) = priors[:w]
+    q(w) = deepcopy(priors[:w])
     q(z) = NormalMeanVariance(0.0, 1.0)
     q(γ) = GammaShapeScale(1.0, 1.0)
     q(τ) = priors[:τ]
