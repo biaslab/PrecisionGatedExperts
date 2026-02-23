@@ -15,7 +15,7 @@ n_train_last = convert(Int, ceil(train_size * size(data)[1]))
 data_train = data[1:n_train_last, :]
 scale = 1e-3
 priors = Dict{Symbol, Any}(
-    :w => [MvNormalMeanScalePrecision(zeros(1), scale), MvNormalMeanScalePrecision(zeros(1), scale)],
+    :w => [MvNormalMeanScalePrecision(zeros(2), scale), MvNormalMeanScalePrecision(zeros(2), scale)],
     :τ => [GammaShapeRate(1.0, 1.0), GammaShapeRate(1.0, 1.0)],
     :β => [GammaShapeRate(1.0, 1.0), GammaShapeRate(1.0, 1.0)]
 );
@@ -31,7 +31,8 @@ y_val = data_train[!, :OT];
 constraints = ProbabilisticEnsembling.univariate_dynamic_ensemble_constraints(priors, false);
 init = ProbabilisticEnsembling.univariate_dynamic_ensemble_init(priors);
 predictions_matrix = permutedims(hcat(data_train[!, :pred_a], data_train[!, :pred_b]))  # 2 x n_obs
-features = [[x+1e-12] for x in data_train[:, :regime]]  # wrap each scalar in a 1-element vector
+# Affine gating features [1, x] allow a threshold between x=1 and x=2.
+features = [[1.0, x + 1e-12] for x in data_train[:, :regime]]
 data = (y = data_train[:, :OT], features = features, predictions = predictions_matrix);
 
 spec = (
@@ -53,7 +54,7 @@ w_posteriors = result.posteriors[:w][end]
 posterior_priors = Dict{Symbol,Any}(:w => w_posteriors, :τ => τ_posteriors, :β => β_posteriors)
 
 predictions_probe = zeros(2, 2)  # 2 forecasters x 2 observations (dummy, not used for weights)
-features_probe = [[1.0], [2.0]]  # regime 1 and regime 2
+features_probe = [[1.0, 1.0], [1.0, 2.0]]  # [bias, regime] for regime 1 and regime 2
 prediction_array = [missing, missing]
 
 infer_probe = ProbabilisticEnsembling.predict_with_model(
