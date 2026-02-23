@@ -11,7 +11,7 @@ spec_saved = saved["spec"]
 
 prediction_type = ProbabilisticEnsembling._parse_saved_prediction_type(string(spec_saved.prediction_type))
 model_type = ProbabilisticEnsembling._parse_saved_model_type(string(spec_saved.model_type))
-prediction_iterations = 1
+prediction_iterations = 3
 
 function resolve_saved_alpha(saved)
     if haskey(saved, "raw_spec")

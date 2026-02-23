@@ -40,7 +40,7 @@ end
         parameters = ProjectionParameters(strategy = ClosedFormStrategy()),
     )
     if prediction
-        for (i, prior) in enumerate(priors[:w])
+        for (i, prior) in enumerate(deepcopy(priors[:w]))
             q(w[i])::RxInfer.FixedMarginalFormConstraint(prior)
         end
         for (i, prior) in enumerate(priors[:τ])
@@ -53,7 +53,7 @@ end
 end
 
 @initialization function multivariate_hierarchical_init(priors)
-    q(w) = priors[:w]
+    q(w) = deepcopy(priors[:w])
     q(τ) = priors[:τ]
     q(ρ) = priors[:ρ]
     q(z) = NormalMeanVariance(0.0, 1.0)
