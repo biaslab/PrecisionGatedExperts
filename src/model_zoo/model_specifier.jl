@@ -102,6 +102,11 @@ function _parse_spec(config)
     n_forecasters = length(experts) + length(selected_quantiles)
     n_forecasters > 0 ||
         error("At least one forecaster is required. Provide experts, quantiles, or number_of_quantiles > 0.")
+    if haskey(p, "priors") && haskey(p["priors"], "w") &&
+       get(p["priors"]["w"], "break_symmetry_prior", false)
+        @info "Break-symmetry prior requested in config" n_forecasters strength =
+            get(p["priors"]["w"], "break_symmetry_strength", 0.01)
+    end
     priors = parse_priors(model_type, p["priors"], n_forecasters)
     inference_iterations = p["inference_iterations"]
     prediction_iterations = p["prediction_iterations"]
