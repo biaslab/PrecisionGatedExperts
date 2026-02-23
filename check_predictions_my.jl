@@ -6,7 +6,7 @@ using BayesBase: cov
 using Distributions
 using StableRNGs
 
-saved = JLD2.load("final_results/exchange_rate_h192_multivariate_probabilisticensembling.dynamic_7473143013234889183.jld2")
+saved = JLD2.load("final_results/exchange_rate_h192_multivariate_probabilisticensembling.dynamic_576970593316739443.jld2")
 spec_saved = saved["spec"]
 
 prediction_type = ProbabilisticEnsembling._parse_saved_prediction_type(string(spec_saved.prediction_type))
