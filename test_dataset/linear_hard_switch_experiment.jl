@@ -21,7 +21,7 @@ priors = Dict{Symbol, Any}(
         MvNormalMeanScalePrecision(zeros(2), scale)    # expert B: high for x>1.5
     ],
     :τ => [GammaShapeRate(1.0, 1.0), GammaShapeRate(1.0, 1.0)],
-    :β => [GammaShapeRate(1.0, 1e12), GammaShapeRate(1.0, 1e12)]
+    :β => [GammaShapeRate(1.0, 1e6), GammaShapeRate(1.0, 1e6)]
 );
 
 model = ProbabilisticEnsembling.univariate_dynamic_ensemble(
