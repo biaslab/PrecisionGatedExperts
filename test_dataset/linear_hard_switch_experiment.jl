@@ -41,7 +41,7 @@ data = (y = data_train[:, :OT], features = features, predictions = predictions_m
 spec = (
     prediction_type = ProbabilisticEnsembling.Univariate(),
     model_type = ProbabilisticEnsembling.Dynamic(),
-    inference_iterations = 20,
+    inference_iterations = 40,
     subsample_size = nothing,
     subsample_percentage = nothing
 )
@@ -73,3 +73,5 @@ infer_probe = ProbabilisticEnsembling.predict_with_model(
 γ_probe = infer_probe.posteriors[:γ][end]
 @show "Regime 1 weights:" mean.(γ_probe[:, 1]) ./ sum(mean.(γ_probe[:, 1]))
 @show "Regime 2 weights:" mean.(γ_probe[:, 2]) ./ sum(mean.(γ_probe[:, 2]))
+
+plot(result.free_energy, title = "Free Energy")

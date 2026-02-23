@@ -6,13 +6,30 @@ using BayesBase: cov
 using Distributions
 using StableRNGs
 
-saved = JLD2.load("final_results/ETTh1_h96_OT_probabilisticensembling.hierarchical_203123442109960750.jld2")
+saved = JLD2.load("final_results/ETTh1_h96_OT_probabilisticensembling.hierarchical_10650124495027166265.jld2")
 spec_saved = saved["spec"]
 
 prediction_type = ProbabilisticEnsembling._parse_saved_prediction_type(string(spec_saved.prediction_type))
 model_type = ProbabilisticEnsembling._parse_saved_model_type(string(spec_saved.model_type))
 prediction_iterations = 1
-alpha = 1
+
+function resolve_saved_alpha(saved)
+    if haskey(saved, "raw_spec")
+        params = get(saved["raw_spec"], "params", nothing)
+        if !isnothing(params)
+            priors = get(params, "priors", nothing)
+            if !isnothing(priors) && haskey(priors, "α")
+                α_cfg = priors["α"]
+                if haskey(α_cfg, "value")
+                    return Float64(α_cfg["value"])
+                end
+            end
+        end
+    end
+    return 1.0
+end
+
+alpha = resolve_saved_alpha(saved)
 
 spec_for_data = ProbabilisticEnsembling._spec_for_prediction_from_saved(
     saved,
@@ -147,6 +164,7 @@ for i in 1:n_f, j in 1:n_t
     norm_influence_lo[i, j] = quantile(samples_ij, 0.025)
     norm_influence_hi[i, j] = quantile(samples_ij, 0.975)
 end
+top_share = vec(maximum(norm_influence_mean; dims=1))
 
 # Build forecaster labels
 quantile_labels = ["q$(Int(round(q)))" for q in saved_selected_quantiles]
@@ -178,9 +196,9 @@ begin
             linealpha=0, label="", color=color)
     end
 
-    # Bottom subplot: normalized influence over time
+    # Bottom-left subplot: normalized influence over time
     expert_colors = distinguishable_colors(n_f, [RGB(1,1,1), RGB(0,0,0)], dropseed=true)
-    p2 = plot(title="Normalized Expert Influence (with 95% CI)",
+    p2 = plot(title="Gammas",
         ylabel="Influence (normalized)", xlabel="Time Step",
         legend=:outerright, legendfontsize=6)
 
@@ -192,7 +210,24 @@ begin
             fillalpha=0.15, linealpha=0, label="", color=expert_colors[i])
     end
 
-    p = plot(p1, p2, layout=(2, 1), size=(1200, 800), margin=5Plots.mm)
+    # Bottom-right subplot: top-share (dominance of strongest expert)
+    p3 = plot(
+        1:n_t,
+        top_share,
+        title = "TopShare",
+        xlabel = "Time Step",
+        ylabel = "Top-1 normalized gamma",
+        color = :darkblue,
+        linewidth = 2,
+        ylims = (0.0, 1.0),
+        label = "max_i γᵢ / Σγ",
+    )
+
+    # Layout:
+    # Prediction plot
+    # Gammas | TopShare
+    l = @layout [a{0.58h}; b c]
+    p = plot(p1, p2, p3, layout=l, size=(1300, 900), margin=5Plots.mm)
 end
 
 savefig(p, "predictions_comparison.png")
