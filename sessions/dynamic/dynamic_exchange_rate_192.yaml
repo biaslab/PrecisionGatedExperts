@@ -16,7 +16,7 @@ params:
     β:
       type: "GammaShapeRate"
       shape: 1.0
-      rate: 1.0
+      rate: 1e6
     τ:
       type: "GammaShapeRate"
       shape: 1.0
@@ -24,5 +24,5 @@ params:
     w:
       type: "MvNormalMeanScalePrecision"
       n_features: 25
-      scale: 1.0
+      scale: 0.1
   subsample_percentage: 0.01
