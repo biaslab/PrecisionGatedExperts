@@ -5,6 +5,7 @@ using StableRNGs
 using Random: shuffle
 using ExponentialFamily
 using Plots
+using Statistics
 
 rng = StableRNG(1234)
 train_size = 0.1

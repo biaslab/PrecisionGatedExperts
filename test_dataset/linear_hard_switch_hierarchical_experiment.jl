@@ -5,6 +5,7 @@ using StableRNGs
 using Random: shuffle
 using ExponentialFamily
 using Plots
+using Statistics
 
 # Minimal hierarchical hard-switch experiment on synthetic dataset.
 # Run:
