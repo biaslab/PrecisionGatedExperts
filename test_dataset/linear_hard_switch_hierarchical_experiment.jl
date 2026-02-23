@@ -30,7 +30,7 @@ priors = Dict{Symbol,Any}(
         MvNormalMeanScalePrecision(zeros(2), scale),
     ],
     :τ => [GammaShapeRate(1, 1), GammaShapeRate(1.0, 1.0)],
-    :ρ => [GammaShapeRate(1.0, 1e12), GammaShapeRate(1.0, 1e12)],
+    :ρ => [GammaShapeRate(1.0, 1e24), GammaShapeRate(1.0, 1e24)],
     :α => alpha,
 )
 
