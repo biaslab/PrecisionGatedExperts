@@ -15,12 +15,17 @@ function _break_symmetry_means(n_features::Int, n_forecasters::Int, strength::Fl
     return means
 end
 
-function parse_mvn_mean_scale_precision_priors(cfg::Dict, n_forecasters::Int; prior_name::String)
+function parse_mvn_mean_scale_precision_priors(
+    cfg::Dict,
+    n_forecasters::Int;
+    prior_name::String,
+)
     n_features = cfg["n_features"]
     scale = cfg["scale"]
     prior_type = cfg["type"]
-    prior_type == "MvNormalMeanScalePrecision" ||
-        error("Unknown $(prior_name) prior type: $(prior_type). Supported: MvNormalMeanScalePrecision")
+    prior_type == "MvNormalMeanScalePrecision" || error(
+        "Unknown $(prior_name) prior type: $(prior_type). Supported: MvNormalMeanScalePrecision",
+    )
 
     break_symmetry = get(cfg, "break_symmetry_prior", false)
     if !break_symmetry

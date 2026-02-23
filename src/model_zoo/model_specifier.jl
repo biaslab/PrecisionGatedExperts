@@ -71,19 +71,22 @@ function _uniform_selected_quantiles(number_of_quantiles::Int)
     number_of_quantiles >= 0 || error("number_of_quantiles must be >= 0")
     number_of_quantiles == 0 && return Float64[]
 
-    quantiles_unit = range(0.0, 1.0; length = number_of_quantiles + 2)[2:end-1]
+    quantiles_unit = range(0.0, 1.0; length = number_of_quantiles + 2)[2:(end-1)]
     return 100.0 .* collect(quantiles_unit)
 end
 
 function _resolve_selected_quantiles(params::Dict)
-    has_explicit_quantiles = haskey(params, "quantiles") || haskey(params, "selected_quantiles")
+    has_explicit_quantiles =
+        haskey(params, "quantiles") || haskey(params, "selected_quantiles")
     number_of_quantiles = get(params, "number_of_quantiles", nothing)
 
     if has_explicit_quantiles
-        raw = haskey(params, "quantiles") ? params["quantiles"] : params["selected_quantiles"]
+        raw =
+            haskey(params, "quantiles") ? params["quantiles"] : params["selected_quantiles"]
         return _normalize_selected_quantiles(raw), nothing
     elseif !isnothing(number_of_quantiles)
-        return _uniform_selected_quantiles(Int(number_of_quantiles)), Int(number_of_quantiles)
+        return _uniform_selected_quantiles(Int(number_of_quantiles)),
+        Int(number_of_quantiles)
     else
         return [10.0, 90.0], 2
     end
@@ -100,9 +103,11 @@ function _parse_spec(config)
     experts = collect(String, p["experts"])
     selected_quantiles, number_of_quantiles = _resolve_selected_quantiles(p)
     n_forecasters = length(experts) + length(selected_quantiles)
-    n_forecasters > 0 ||
-        error("At least one forecaster is required. Provide experts, quantiles, or number_of_quantiles > 0.")
-    if haskey(p, "priors") && haskey(p["priors"], "w") &&
+    n_forecasters > 0 || error(
+        "At least one forecaster is required. Provide experts, quantiles, or number_of_quantiles > 0.",
+    )
+    if haskey(p, "priors") &&
+       haskey(p["priors"], "w") &&
        get(p["priors"]["w"], "break_symmetry_prior", false)
         @info "Break-symmetry prior requested in config" n_forecasters strength =
             get(p["priors"]["w"], "break_symmetry_strength", 0.01)
@@ -193,12 +198,13 @@ function _saved_quantile_config(spec_saved)
         [10.0, 90.0]
     end
 
-    number_of_quantiles = if _has_field(spec_saved, :number_of_quantiles) &&
-                             !isnothing(spec_saved.number_of_quantiles)
-        Int(spec_saved.number_of_quantiles)
-    else
-        nothing
-    end
+    number_of_quantiles =
+        if _has_field(spec_saved, :number_of_quantiles) &&
+           !isnothing(spec_saved.number_of_quantiles)
+            Int(spec_saved.number_of_quantiles)
+        else
+            nothing
+        end
     return selected_quantiles, number_of_quantiles
 end
 
@@ -255,10 +261,8 @@ function _spec_for_prediction_from_saved(saved, prediction_iterations::Int)
                 nothing,
             )
         catch err
-            @warn "Failed to parse raw_spec, falling back to saved spec fields" error = sprint(
-                showerror,
-                err,
-            )
+            @warn "Failed to parse raw_spec, falling back to saved spec fields" error =
+                sprint(showerror, err)
             return _from_saved_fields()
         end
     end
@@ -273,9 +277,8 @@ end
 prepare_y_test(::Univariate, y_test_all, n_steps) = Float64.(y_test_all)
 
 function prepare_y_test(::Multivariate, y_test_all, n_steps)
-    return y_test_all isa AbstractMatrix ?
-        [Float64.(y_test_all[:, j]) for j = 1:n_steps] :
-        y_test_all
+    return y_test_all isa AbstractMatrix ? [Float64.(y_test_all[:, j]) for j = 1:n_steps] :
+           y_test_all
 end
 
 function extract_prediction_priors(::Static, saved, alpha)
@@ -312,22 +315,42 @@ end
 # --- Static ---
 
 function predict_with_model(
-    ::Univariate, ::Static, priors;
-    n_forecasters, n_steps, prediction_array, predictions_test, features_test, prediction_iterations,
+    ::Univariate,
+    ::Static,
+    priors;
+    n_forecasters,
+    n_steps,
+    prediction_array,
+    predictions_test,
+    features_test,
+    prediction_iterations,
 )
     return infer(
-        model = univariate_ensemble_precision_model(n_forecasters = n_forecasters, priors = priors),
+        model = univariate_ensemble_precision_model(
+            n_forecasters = n_forecasters,
+            priors = priors,
+        ),
         data = (y = prediction_array, X = predictions_test),
         iterations = prediction_iterations,
     )
 end
 
 function predict_with_model(
-    ::Multivariate, ::Static, priors;
-    n_forecasters, n_steps, prediction_array, predictions_test, features_test, prediction_iterations,
+    ::Multivariate,
+    ::Static,
+    priors;
+    n_forecasters,
+    n_steps,
+    prediction_array,
+    predictions_test,
+    features_test,
+    prediction_iterations,
 )
     return infer(
-        model = multivariate_ensemble_precision_model(n_forecasters = n_forecasters, priors = priors),
+        model = multivariate_ensemble_precision_model(
+            n_forecasters = n_forecasters,
+            priors = priors,
+        ),
         data = (y = prediction_array, X = predictions_test),
         iterations = prediction_iterations,
     )
@@ -336,12 +359,27 @@ end
 # --- Dynamic ---
 
 function predict_with_model(
-    ::Univariate, ::Dynamic, priors;
-    n_forecasters, n_steps, prediction_array, predictions_test, features_test, prediction_iterations,
+    ::Univariate,
+    ::Dynamic,
+    priors;
+    n_forecasters,
+    n_steps,
+    prediction_array,
+    predictions_test,
+    features_test,
+    prediction_iterations,
 )
     return infer(
-        model = univariate_dynamic_ensemble(n_forecasters = n_forecasters, n_obs = n_steps, priors = priors),
-        data = (y = prediction_array, features = features_test, predictions = predictions_test),
+        model = univariate_dynamic_ensemble(
+            n_forecasters = n_forecasters,
+            n_obs = n_steps,
+            priors = priors,
+        ),
+        data = (
+            y = prediction_array,
+            features = features_test,
+            predictions = predictions_test,
+        ),
         constraints = univariate_dynamic_ensemble_constraints(priors, true),
         initialization = univariate_dynamic_ensemble_init(priors),
         iterations = prediction_iterations,
@@ -351,12 +389,27 @@ function predict_with_model(
 end
 
 function predict_with_model(
-    ::Multivariate, ::Dynamic, priors;
-    n_forecasters, n_steps, prediction_array, predictions_test, features_test, prediction_iterations,
+    ::Multivariate,
+    ::Dynamic,
+    priors;
+    n_forecasters,
+    n_steps,
+    prediction_array,
+    predictions_test,
+    features_test,
+    prediction_iterations,
 )
     return infer(
-        model = multivariate_dynamic_ensemble(n_forecasters = n_forecasters, n_obs = n_steps, priors = priors),
-        data = (y = prediction_array, features = features_test, predictions = predictions_test),
+        model = multivariate_dynamic_ensemble(
+            n_forecasters = n_forecasters,
+            n_obs = n_steps,
+            priors = priors,
+        ),
+        data = (
+            y = prediction_array,
+            features = features_test,
+            predictions = predictions_test,
+        ),
         constraints = multivariate_dynamic_ensemble_constraints(priors, true),
         initialization = multivariate_dynamic_ensemble_init(priors),
         iterations = prediction_iterations,
@@ -368,12 +421,27 @@ end
 # --- Hierarchical ---
 
 function predict_with_model(
-    ::Univariate, ::Hierarchical, priors;
-    n_forecasters, n_steps, prediction_array, predictions_test, features_test, prediction_iterations,
+    ::Univariate,
+    ::Hierarchical,
+    priors;
+    n_forecasters,
+    n_steps,
+    prediction_array,
+    predictions_test,
+    features_test,
+    prediction_iterations,
 )
     return infer(
-        model = hierarchical_model(n_forecasters = n_forecasters, n_obs = n_steps, priors = priors),
-        data = (y = prediction_array, features = features_test, predictions = predictions_test),
+        model = hierarchical_model(
+            n_forecasters = n_forecasters,
+            n_obs = n_steps,
+            priors = priors,
+        ),
+        data = (
+            y = prediction_array,
+            features = features_test,
+            predictions = predictions_test,
+        ),
         constraints = hierarchical_constraints(priors, true),
         initialization = hierarchical_init(priors),
         iterations = prediction_iterations,
@@ -383,12 +451,27 @@ function predict_with_model(
 end
 
 function predict_with_model(
-    ::Multivariate, ::Hierarchical, priors;
-    n_forecasters, n_steps, prediction_array, predictions_test, features_test, prediction_iterations,
+    ::Multivariate,
+    ::Hierarchical,
+    priors;
+    n_forecasters,
+    n_steps,
+    prediction_array,
+    predictions_test,
+    features_test,
+    prediction_iterations,
 )
     return infer(
-        model = multivariate_hierarchical_model(n_forecasters = n_forecasters, n_obs = n_steps, priors = priors),
-        data = (y = prediction_array, features = features_test, predictions = predictions_test),
+        model = multivariate_hierarchical_model(
+            n_forecasters = n_forecasters,
+            n_obs = n_steps,
+            priors = priors,
+        ),
+        data = (
+            y = prediction_array,
+            features = features_test,
+            predictions = predictions_test,
+        ),
         constraints = multivariate_hierarchical_constraints(priors, true),
         initialization = multivariate_hierarchical_init(priors),
         iterations = prediction_iterations,
@@ -400,12 +483,23 @@ end
 # --- Deep ---
 
 function predict_with_model(
-    ::Univariate, ::Deep, priors;
-    n_forecasters, n_steps, prediction_array, predictions_test, features_test, prediction_iterations,
+    ::Univariate,
+    ::Deep,
+    priors;
+    n_forecasters,
+    n_steps,
+    prediction_array,
+    predictions_test,
+    features_test,
+    prediction_iterations,
 )
     return infer(
         model = deep_model(n_forecasters = n_forecasters, n_obs = n_steps, priors = priors),
-        data = (y = prediction_array, features = features_test, predictions = predictions_test),
+        data = (
+            y = prediction_array,
+            features = features_test,
+            predictions = predictions_test,
+        ),
         constraints = deep_constraints(),
         initialization = deep_init(priors),
         iterations = prediction_iterations,
@@ -415,12 +509,27 @@ function predict_with_model(
 end
 
 function predict_with_model(
-    ::Multivariate, ::Deep, priors;
-    n_forecasters, n_steps, prediction_array, predictions_test, features_test, prediction_iterations,
+    ::Multivariate,
+    ::Deep,
+    priors;
+    n_forecasters,
+    n_steps,
+    prediction_array,
+    predictions_test,
+    features_test,
+    prediction_iterations,
 )
     return infer(
-        model = multivariate_deep_model(n_forecasters = n_forecasters, n_obs = n_steps, priors = priors),
-        data = (y = prediction_array, features = features_test, predictions = predictions_test),
+        model = multivariate_deep_model(
+            n_forecasters = n_forecasters,
+            n_obs = n_steps,
+            priors = priors,
+        ),
+        data = (
+            y = prediction_array,
+            features = features_test,
+            predictions = predictions_test,
+        ),
         constraints = multivariate_deep_constraints(),
         initialization = multivariate_deep_init(priors),
         iterations = prediction_iterations,
@@ -455,7 +564,8 @@ function predict_from_trained_ensemble(
     saved = JLD2.load(path_to_jld2)
     spec_for_data = _spec_for_prediction_from_saved(saved, prediction_iterations)
 
-    _, y_test_all, _, predictions_test_all, _, features_test_all = before_rxinfer(spec_for_data)
+    _, y_test_all, _, predictions_test_all, _, features_test_all =
+        before_rxinfer(spec_for_data)
     n_steps = length(y_test_all)
 
     y_test = prepare_y_test(prediction_type, y_test_all, n_steps)
@@ -468,7 +578,9 @@ function predict_from_trained_ensemble(
     priors = extract_prediction_priors(model_type, saved, alpha)
     @info "Prediction start"
     infer_test = predict_with_model(
-        prediction_type, model_type, priors;
+        prediction_type,
+        model_type,
+        priors;
         n_forecasters = n_forecasters,
         n_steps = n_steps,
         prediction_array = prediction_array,
@@ -484,7 +596,7 @@ function predict_from_trained_ensemble(
     ensemble_mean, ensemble_std, ensemble_metrics = compute_ensemble_metrics(
         spec_for_data.prediction_type,
         ensemble_preds,
-        Y_for_metrics
+        Y_for_metrics,
     )
 
     return (
@@ -577,7 +689,7 @@ function compute_ensemble_metrics(::Univariate, ensemble_preds, y_test)
     ci95_interval_score = mean(
         (ci95_upper .- ci95_lower) .+
         (2 / ALPHA_95) .* ((ci95_lower .- y_test) .* (y_test .< ci95_lower)) .+
-        (2 / ALPHA_95) .* ((y_test .- ci95_upper) .* (y_test .> ci95_upper))
+        (2 / ALPHA_95) .* ((y_test .- ci95_upper) .* (y_test .> ci95_upper)),
     )
     ensemble_metrics = (
         mse = mse(ensemble_mean, y_test),
@@ -586,10 +698,12 @@ function compute_ensemble_metrics(::Univariate, ensemble_preds, y_test)
         r2 = r2(ensemble_mean, y_test),
         mape = mape(ensemble_mean, y_test),
         smape = smape(ensemble_mean, y_test),
-        nll = mean(map((y_dist) -> logpdf(y_dist[2], y_dist[1]), zip(y_test, ensemble_preds))),
+        nll = mean(
+            map((y_dist) -> logpdf(y_dist[2], y_dist[1]), zip(y_test, ensemble_preds)),
+        ),
         ci95_target_overlap = ci95_target_overlap,
         ci95_avg_width = ci95_avg_width,
-        ci95_interval_score = ci95_interval_score
+        ci95_interval_score = ci95_interval_score,
     )
     return (; ensemble_mean, ensemble_std, ensemble_metrics)
 end
@@ -604,7 +718,7 @@ function compute_ensemble_metrics(::Multivariate, ensemble_preds, y_test)
     ci95_interval_score = mean(
         (ci95_upper .- ci95_lower) .+
         (2 / ALPHA_95) .* ((ci95_lower .- y_test) .* (y_test .< ci95_lower)) .+
-        (2 / ALPHA_95) .* ((y_test .- ci95_upper) .* (y_test .> ci95_upper))
+        (2 / ALPHA_95) .* ((y_test .- ci95_upper) .* (y_test .> ci95_upper)),
     )
     ensemble_metrics = (
         mse = mse_mv(ensemble_mean, y_test),
@@ -613,10 +727,15 @@ function compute_ensemble_metrics(::Multivariate, ensemble_preds, y_test)
         r2 = r2_mv(ensemble_mean, y_test),
         mape = mape_mv(ensemble_mean, y_test),
         smape = smape_mv(ensemble_mean, y_test),
-        nll = mean(map((y_dist) -> logpdf(y_dist[2], y_dist[1]), zip(eachcol(y_test), ensemble_preds))),
+        nll = mean(
+            map(
+                (y_dist) -> logpdf(y_dist[2], y_dist[1]),
+                zip(eachcol(y_test), ensemble_preds),
+            ),
+        ),
         ci95_target_overlap = ci95_target_overlap,
         ci95_avg_width = ci95_avg_width,
-        ci95_interval_score = ci95_interval_score
+        ci95_interval_score = ci95_interval_score,
     )
     return (; ensemble_mean, ensemble_std, ensemble_metrics)
 end
@@ -735,7 +854,9 @@ function generate_expert_predictions(
         x_last_val_scaled = Float64.(Xval_s[:, end, :])
         for (offset, q_pct) in enumerate(selected_quantiles)
             idx = n_model_forecasters + offset
-            q_vec = [quantile(Float64.(view(x_last_val_scaled, k, :)), q_pct / 100.0) for k = 1:d]
+            q_vec = [
+                quantile(Float64.(view(x_last_val_scaled, k, :)), q_pct / 100.0) for k = 1:d
+            ]
             q = vec(Float64.(reshape(q_vec, :, 1)[:, 1]))
             for j = 1:n_val
                 predictions_val[idx, j] = copy(q)
@@ -744,7 +865,8 @@ function generate_expert_predictions(
                 predictions_test[idx, j] = copy(q)
             end
         end
-        @info "Added constant quantile experts (multivariate)" quantiles = selected_quantiles
+        @info "Added constant quantile experts (multivariate)" quantiles =
+            selected_quantiles
     else
         @info "No quantile experts selected (multivariate)"
     end
@@ -843,15 +965,14 @@ function before_rxinfer(spec::ExperimentSpecifier{Multivariate})
     y_val = [Float64.(Yval_s[:, j]) for j = 1:n_val]
     y_test = [Float64.(Yte_s[:, j]) for j = 1:n_test]
 
-    predictions_val, predictions_test =
-        generate_expert_predictions(
-            spec.prediction_type,
-            experts,
-            scaler,
-            Xval_s,
-            Xte_s,
-            spec.selected_quantiles,
-        )
+    predictions_val, predictions_test = generate_expert_predictions(
+        spec.prediction_type,
+        experts,
+        scaler,
+        Xval_s,
+        Xte_s,
+        spec.selected_quantiles,
+    )
 
     features_val = make_features(Xval_s)
     features_test = make_features(Xte_s)
@@ -1062,7 +1183,7 @@ function run_dynamic_univariate(spec::ExperimentSpecifier{Univariate,Dynamic})
     n_test = length(y_test)
 
     if !isnothing(spec.subsample_percentage)
-        n_obs = round(Int,n_val*spec.subsample_percentage)
+        n_obs = round(Int, n_val*spec.subsample_percentage)
     else
         n_obs = something(spec.subsample_size, n_val)
     end
@@ -1178,7 +1299,7 @@ function run_dynamic_multivariate(spec::ExperimentSpecifier{Multivariate,Dynamic
     d = length(y_val[1])
 
     if !isnothing(spec.subsample_percentage)
-        n_obs = round(Int,n_val*spec.subsample_percentage)
+        n_obs = round(Int, n_val*spec.subsample_percentage)
     else
         n_obs = something(spec.subsample_size, n_val)
     end
@@ -1225,24 +1346,17 @@ function run_dynamic_multivariate(spec::ExperimentSpecifier{Multivariate,Dynamic
     @info "Generating dynamic ensemble predictions on test"
     posterior_priors =
         Dict{Symbol,Any}(:w => w_posteriors, :τ => τ_posteriors, :β => β_posteriors)
-    prediction_array = [missing for _ = 1:n_test]
 
-    infer_test = infer(
-        model = multivariate_dynamic_ensemble(
-            n_forecasters = n_forecasters,
-            n_obs = n_test,
-            priors = posterior_priors,
-        ),
-        data = (
-            y = prediction_array,
-            features = features_test,
-            predictions = predictions_test,
-        ),
-        constraints = multivariate_dynamic_ensemble_constraints(posterior_priors, true),
-        initialization = multivariate_dynamic_ensemble_init(posterior_priors),
-        iterations = spec.prediction_iterations,
-        free_energy = false,
-        showprogress = true,
+    infer_test = predict_with_model(
+        spec.prediction_type,
+        spec.model_type,
+        posterior_priors;
+        n_forecasters = n_forecasters,
+        n_steps = n_test,
+        prediction_array = [missing for _ = 1:n_test],
+        predictions_test = predictions_test,
+        features_test = features_test,
+        prediction_iterations = spec.prediction_iterations,
     )
 
     ensemble_preds = infer_test.predictions[:y][end]
@@ -1296,7 +1410,7 @@ function run_hierarchical_univariate(spec::ExperimentSpecifier{Univariate,Hierar
     n_test = length(y_test)
 
     if !isnothing(spec.subsample_percentage)
-        n_obs = round(Int,n_val*spec.subsample_percentage)
+        n_obs = round(Int, n_val*spec.subsample_percentage)
     else
         n_obs = something(spec.subsample_size, n_val)
     end
@@ -1416,7 +1530,7 @@ function run_hierarchical_multivariate(spec::ExperimentSpecifier{Multivariate,Hi
     d = length(y_val[1])
 
     if !isnothing(spec.subsample_percentage)
-        n_obs = round(Int,n_val*spec.subsample_percentage)
+        n_obs = round(Int, n_val*spec.subsample_percentage)
     else
         n_obs = something(spec.subsample_size, n_val)
     end
@@ -1533,7 +1647,7 @@ function run_deep_multivariate(spec::ExperimentSpecifier{Multivariate,Deep})
     d = length(y_val[1])
 
     if !isnothing(spec.subsample_percentage)
-        n_obs = round(Int,n_val*spec.subsample_percentage)
+        n_obs = round(Int, n_val*spec.subsample_percentage)
     else
         n_obs = something(spec.subsample_size, n_val)
     end
@@ -1657,7 +1771,7 @@ function run_deep_univariate(spec::ExperimentSpecifier{Univariate,Deep})
     n_test = length(y_test)
 
     if !isnothing(spec.subsample_percentage)
-        n_obs = round(Int,n_val*spec.subsample_percentage)
+        n_obs = round(Int, n_val*spec.subsample_percentage)
     else
         n_obs = something(spec.subsample_size, n_val)
     end
