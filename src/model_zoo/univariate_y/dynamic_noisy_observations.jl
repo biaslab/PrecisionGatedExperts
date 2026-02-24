@@ -21,9 +21,9 @@
             z[i, j] ~ softdot(features[j], w[i], τ[i]) where {meta = LowRankMeta()}
             γ[i, j] ~ GammaShapeRate(1.0, β[i])
             z[i, j] ~ Log(γ[i, j])
-            y_hat[j] ~ NormalMeanPrecision(predictions[i, j], γ[i, j])
+            y_hat[i, j] ~ NormalMeanPrecision(predictions[i, j], γ[i, j])
+            y[j] ~ NormalMeanPrecision(y_hat[i, j], κ)
         end
-        y[j] ~ NormalMeanPrecision(y_hat[j], κ)
     end
 end
 
