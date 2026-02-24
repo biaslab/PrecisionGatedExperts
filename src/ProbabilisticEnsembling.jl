@@ -29,6 +29,9 @@ include("model_zoo/multivariate_y/deep.jl")
 # model types & prior parsing
 include("model_zoo/model_types.jl")
 
+# feature extraction
+include("model_zoo/features.jl")
+
 # model running
 include("model_zoo/model_specifier.jl")
 

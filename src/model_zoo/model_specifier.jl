@@ -12,7 +12,7 @@ export run_experiment, predict_from_trained_ensemble
 struct Univariate end
 struct Multivariate end
 
-struct ExperimentSpecifier{P,M,D}
+struct ExperimentSpecifier{P,M,D,F}
     prediction_type::P
     model_type::M
     column::Union{String,Nothing}
@@ -29,6 +29,7 @@ struct ExperimentSpecifier{P,M,D}
     subsample_size::Union{Int,Nothing}
     subsample_percentage::Union{Float64,Nothing}
     repeat_batch::Union{Int, Nothing}
+    feature_type::F
 end
 
 # ---------------------------------------------------------------------------
@@ -121,6 +122,7 @@ function _parse_spec(config)
     subsample_size = get(p, "subsample_size", nothing)
     subsample_percentage = get(p, "subsample_percentage", nothing)
     repeat_batch = get(p, "repeat_batch", nothing)
+    feature_type = parse_feature_type(get(p, "feature_type", "simple"))
     return ExperimentSpecifier(
         prediction_type,
         model_type,
@@ -137,7 +139,8 @@ function _parse_spec(config)
         save_predictions,
         subsample_size,
         subsample_percentage,
-        repeat_batch
+        repeat_batch,
+        feature_type,
     )
 end
 
@@ -242,7 +245,8 @@ function _spec_for_prediction_from_saved(saved, prediction_iterations::Int)
             false,
             nothing,
             nothing,
-            nothing
+            nothing,
+            SimpleFeatures(),
         )
     end
 
@@ -265,7 +269,8 @@ function _spec_for_prediction_from_saved(saved, prediction_iterations::Int)
                 false,
                 nothing,
                 nothing,
-                nothing
+                nothing,
+                spec_from_raw.feature_type,
             )
         catch err
             @warn "Failed to parse raw_spec, falling back to saved spec fields" error =
@@ -798,18 +803,6 @@ function find_column_index(feat_cols::Vector{String}, column::String)
     return idx
 end
 
-function make_features(X_scaled)
-    n = size(X_scaled, 3)
-    feats = Vector{Vector{Float64}}(undef, n)
-    for j = 1:n
-        x_last = Float64.(X_scaled[:, end, j])
-        x_last_cos = map(cos, X_scaled[:, end, j])
-        x_last_sin = map(sin, X_scaled[:, end, j])
-        feats[j] = vcat(1.0, x_last, x_last_cos, x_last_sin)
-    end
-    return feats
-end
-
 # ---------------------------------------------------------------------------
 # Dataset loading — dispatch on Val{:dataset_name}
 # Add new methods for other dataset formats, e.g.:
@@ -968,8 +961,8 @@ function before_rxinfer(spec::ExperimentSpecifier{Univariate})
         spec.selected_quantiles,
     )
 
-    features_val = make_features(Xval_s)
-    features_test = make_features(Xte_s)
+    features_val = make_features(spec.feature_type, Xval_s)
+    features_test = make_features(spec.feature_type, Xte_s)
     return (y_val, y_test, predictions_val, predictions_test, features_val, features_test)
 end
 
@@ -1026,8 +1019,8 @@ function before_rxinfer(spec::ExperimentSpecifier{Multivariate})
         spec.selected_quantiles,
     )
 
-    features_val = make_features(Xval_s)
-    features_test = make_features(Xte_s)
+    features_val = make_features(spec.feature_type, Xval_s)
+    features_test = make_features(spec.feature_type, Xte_s)
     return (y_val, y_test, predictions_val, predictions_test, features_val, features_test)
 end
 
