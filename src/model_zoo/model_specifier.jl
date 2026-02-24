@@ -28,6 +28,7 @@ struct ExperimentSpecifier{P,M,D}
     save_predictions::Bool
     subsample_size::Union{Int,Nothing}
     subsample_percentage::Union{Float64,Nothing}
+    repeat_batch::Union{Int, Nothing}
 end
 
 # ---------------------------------------------------------------------------
@@ -44,6 +45,7 @@ function parse_model_type(s::String)
     s == "static" && return Static()
     s == "dynamic" && return Dynamic()
     s == "hierarchical" && return Hierarchical()
+    s == "dynamic_noisy_observations" && return DynamicNoisyObservations()
     s == "deep" && return Deep()
     error("Unknown model_type: $s")
 end
@@ -118,6 +120,7 @@ function _parse_spec(config)
     save_predictions = get(p, "save_predictions", false)
     subsample_size = get(p, "subsample_size", nothing)
     subsample_percentage = get(p, "subsample_percentage", nothing)
+    repeat_batch = get(p, "repeat_batch", nothing)
     return ExperimentSpecifier(
         prediction_type,
         model_type,
@@ -134,6 +137,7 @@ function _parse_spec(config)
         save_predictions,
         subsample_size,
         subsample_percentage,
+        repeat_batch
     )
 end
 
@@ -177,6 +181,7 @@ function _parse_saved_model_type(s::AbstractString)
     occursin("Static", s) && return Static()
     occursin("Dynamic", s) && return Dynamic()
     occursin("Hierarchical", s) && return Hierarchical()
+    occursin("DynamicNoisyObservations", s) && return DynamicNoisyObservations()
     occursin("Deep", s) && return Deep()
     error("Unknown saved model_type: $s")
 end
@@ -237,6 +242,7 @@ function _spec_for_prediction_from_saved(saved, prediction_iterations::Int)
             false,
             nothing,
             nothing,
+            nothing
         )
     end
 
@@ -259,6 +265,7 @@ function _spec_for_prediction_from_saved(saved, prediction_iterations::Int)
                 false,
                 nothing,
                 nothing,
+                nothing
             )
         catch err
             @warn "Failed to parse raw_spec, falling back to saved spec fields" error =
@@ -299,6 +306,15 @@ function extract_prediction_priors(::Hierarchical, saved, alpha)
         :τ => saved["τ_posteriors"],
         :ρ => saved["ρ_posteriors"],
         :α => alpha,
+    )
+end
+
+function extract_prediction_priors(::DynamicNoisyObservations, saved, alpha)
+    return Dict{Symbol,Any}(
+        :w => saved["w_posteriors"],
+        :τ => saved["τ_posteriors"],
+        :β => saved["β_posteriors"],
+        :κ => saved["κ_posterior"],
     )
 end
 
@@ -412,6 +428,38 @@ function predict_with_model(
         ),
         constraints = multivariate_dynamic_ensemble_constraints(priors, true),
         initialization = multivariate_dynamic_ensemble_init(priors),
+        iterations = prediction_iterations,
+        free_energy = false,
+        showprogress = true,
+    )
+end
+
+# --- DynamicNoisyObservations ---
+
+function predict_with_model(
+    ::Univariate,
+    ::DynamicNoisyObservations,
+    priors;
+    n_forecasters,
+    n_steps,
+    prediction_array,
+    predictions_test,
+    features_test,
+    prediction_iterations,
+)
+    return infer(
+        model = univariate_dynamic_noisy_ensemble(
+            n_forecasters = n_forecasters,
+            n_obs = n_steps,
+            priors = priors,
+        ),
+        data = (
+            y = prediction_array,
+            features = features_test,
+            predictions = predictions_test,
+        ),
+        constraints = univariate_dynamic_noisy_ensemble_constraints(priors, true),
+        initialization = univariate_dynamic_noisy_ensemble_init(priors),
         iterations = prediction_iterations,
         free_energy = false,
         showprogress = true,
@@ -626,6 +674,10 @@ end
 
 function run_experiment(spec::ExperimentSpecifier{Multivariate,Dynamic})
     return run_dynamic_multivariate(spec)
+end
+
+function run_experiment(spec::ExperimentSpecifier{Univariate,DynamicNoisyObservations})
+    return run_dynamic_noisy_observations_univariate(spec)
 end
 
 function run_experiment(spec::ExperimentSpecifier{Univariate,Hierarchical})
@@ -981,7 +1033,8 @@ end
 
 function run_training_rxinfer(spec, subsampled_data::Int, model, data; kwargs...)
     @show "Use subsampled data with sample size $(subsampled_data)"
-    subsampled = (; (k => SubsampledData(v, subsampled_data) for (k, v) in pairs(data))...)
+    @info "Repeat each batch $(spec.repeat_batch) times"
+    subsampled = (; (k => SubsampledData(v, subsampled_data, spec.repeat_batch) for (k, v) in pairs(data))...)
     return infer(;
         model = model,
         data = subsampled,
@@ -994,15 +1047,8 @@ end
 function run_training_rxinfer(spec, subsample_percentage::Float64, model, data; kwargs...)
     @show "Use subsampled data with sample percentage $(subsample_percentage)"
     subsampled_data = round(Int, length(data.y)*subsample_percentage)
-    @info subsampled_data
-    subsampled = (; (k => SubsampledData(v, subsampled_data) for (k, v) in pairs(data))...)
-    return infer(;
-        model = model,
-        data = subsampled,
-        iterations = spec.inference_iterations,
-        free_energy = true,
-        kwargs...,
-    )
+    @info "Equivalent to size of batch" subsampled_data
+    return run_training_rxinfer(spec, subsampled_data, model, data; kwargs...)
 end
 
 function run_training_rxinfer(spec, ::Nothing, model, data; kwargs...)
@@ -1264,6 +1310,126 @@ function run_dynamic_univariate(spec::ExperimentSpecifier{Univariate,Dynamic})
         w_posteriors = w_posteriors,
         τ_posteriors = τ_posteriors,
         β_posteriors = β_posteriors,
+        γ_test = γ_means_test,
+        free_energy = free_energy,
+        ensemble_mean = ensemble_mean,
+        ensemble_std = ensemble_std,
+        ensemble_metrics = ensemble_metrics,
+        predictions_test = predictions_test,
+        y_test = y_test,
+        spec = (
+            prediction_type = string(typeof(spec.prediction_type)),
+            model_type = string(typeof(spec.model_type)),
+            column = spec.column,
+            horizon = spec.horizon,
+            dataset = typeof(spec.dataset).parameters[1],
+            dataset_path = spec.dataset_path,
+            experts = spec.experts,
+            selected_quantiles = spec.selected_quantiles,
+            number_of_quantiles = spec.number_of_quantiles,
+        ),
+    )
+
+    return results
+end
+
+# ---------------------------------------------------------------------------
+# DynamicNoisyObservations Univariate pipeline
+# ---------------------------------------------------------------------------
+
+function run_dynamic_noisy_observations_univariate(spec::ExperimentSpecifier{Univariate,DynamicNoisyObservations})
+    y_val, y_test, predictions_val, predictions_test, features_val, features_test =
+        before_rxinfer(spec)
+    n_forecasters = size(predictions_val, 1)
+    n_val = length(y_val)
+    n_test = length(y_test)
+
+    if !isnothing(spec.subsample_percentage)
+        n_obs = round(Int, n_val*spec.subsample_percentage)
+    else
+        n_obs = something(spec.subsample_size, n_val)
+    end
+    @info n_obs
+
+    model = univariate_dynamic_noisy_ensemble(
+        n_forecasters = n_forecasters,
+        n_obs = n_obs,
+        priors = spec.priors,
+    )
+    constraints = univariate_dynamic_noisy_ensemble_constraints(spec.priors, false)
+    init = univariate_dynamic_noisy_ensemble_init(spec.priors)
+    data = (y = y_val, features = features_val, predictions = predictions_val)
+
+    @info "Fitting dynamic noisy observations ensemble on validation data" n_forecasters n_val
+    result = run_training_rxinfer(
+        spec,
+        model,
+        data;
+        constraints = constraints,
+        initialization = init,
+        showprogress = true,
+    )
+
+    free_energy = result.free_energy
+    w_posteriors = result.posteriors[:w][end]
+    τ_posteriors = result.posteriors[:τ][end]
+    β_posteriors = result.posteriors[:β][end]
+    κ_posterior = result.posteriors[:κ][end]
+    γ_posteriors = result.posteriors[:γ][end]
+
+    γ_means_val = mean.(γ_posteriors)
+
+    @info "Learned dynamic noisy observations weights on validation"
+    for i = 1:n_forecasters
+        mse_i = mse(predictions_val[i, :], y_val)
+        avg_γ = mean(γ_means_val[i, :])
+        @info "Expert $i" avg_E_γ = round(avg_γ; digits = 4) val_MSE =
+            round(mse_i; digits = 6)
+    end
+    @info "Observation noise precision κ" E_κ = round(mean(κ_posterior); digits = 4)
+
+    # Ensemble predictions on test
+    @info "Generating dynamic noisy observations ensemble predictions on test"
+    posterior_priors = Dict{Symbol,Any}(
+        :w => deepcopy(w_posteriors),
+        :τ => deepcopy(τ_posteriors),
+        :β => deepcopy(β_posteriors),
+        :κ => deepcopy(κ_posterior),
+    )
+    prediction_array = [missing for _ = 1:n_test]
+
+    infer_test = infer(
+        model = univariate_dynamic_noisy_ensemble(
+            n_forecasters = n_forecasters,
+            n_obs = n_test,
+            priors = posterior_priors,
+        ),
+        data = (
+            y = prediction_array,
+            features = features_test,
+            predictions = predictions_test,
+        ),
+        constraints = univariate_dynamic_noisy_ensemble_constraints(posterior_priors, true),
+        initialization = univariate_dynamic_noisy_ensemble_init(posterior_priors),
+        iterations = spec.prediction_iterations,
+        free_energy = false,
+        showprogress = true,
+    )
+
+    ensemble_preds = infer_test.predictions[:y][end]
+    (; ensemble_mean, ensemble_std, ensemble_metrics) =
+        compute_ensemble_metrics(spec.prediction_type, ensemble_preds, y_test)
+
+    γ_test_posteriors = infer_test.posteriors[:γ][end]
+    γ_means_test = mean.(γ_test_posteriors)
+
+    @info "Ensemble test metrics" ensemble_metrics...
+
+    results = (
+        w_posteriors = w_posteriors,
+        τ_posteriors = τ_posteriors,
+        β_posteriors = β_posteriors,
+        κ_posterior = κ_posterior,
         γ_test = γ_means_test,
         free_energy = free_energy,
         ensemble_mean = ensemble_mean,

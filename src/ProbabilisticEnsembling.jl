@@ -17,6 +17,7 @@ include("low_rank_softdot.jl")
 include("model_zoo/univariate_y/static_ensemble.jl")
 include("model_zoo/univariate_y/dynamic.jl")
 include("model_zoo/univariate_y/hierarchial.jl")
+include("model_zoo/univariate_y/dynamic_noisy_observations.jl")
 include("model_zoo/univariate_y/deep.jl")
 
 # model zoo multivariate_y

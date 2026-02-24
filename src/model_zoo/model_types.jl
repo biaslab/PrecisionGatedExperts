@@ -101,6 +101,27 @@ function parse_priors(::Hierarchical, cfg::Dict, n_forecasters::Int)
     return priors
 end
 
+struct DynamicNoisyObservations end
+
+function parse_priors(::DynamicNoisyObservations, cfg::Dict, n_forecasters::Int)
+    priors = Dict{Symbol,Any}()
+
+    τ_cfg = cfg["τ"]
+    priors[:τ] = [GammaShapeRate(τ_cfg["shape"], τ_cfg["rate"]) for _ = 1:n_forecasters]
+
+    β_cfg = cfg["β"]
+    priors[:β] = [GammaShapeRate(β_cfg["shape"], β_cfg["rate"]) for _ = 1:n_forecasters]
+
+    κ_cfg = cfg["κ"]
+    priors[:κ] = GammaShapeRate(κ_cfg["shape"], κ_cfg["rate"])
+
+    w_cfg = cfg["w"]
+    priors[:w] =
+        parse_mvn_mean_scale_precision_priors(w_cfg, n_forecasters; prior_name = "w")
+
+    return priors
+end
+
 struct Deep end
 
 function parse_priors(::Deep, cfg::Dict, n_forecasters::Int)
