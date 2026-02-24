@@ -6,7 +6,7 @@ using BayesBase: cov
 using Distributions
 using StableRNGs
 
-saved = JLD2.load("final_results/ETTh1_h96_OT_probabilisticensembling.dynamicnoisyobservations_3434154274742706879.jld2")
+saved = JLD2.load("final_results/exchange_rate_h192_multivariate_probabilisticensembling.dynamic_1167445073669573639.jld2")
 spec_saved = saved["spec"]
 
 prediction_type = ProbabilisticEnsembling._parse_saved_prediction_type(string(spec_saved.prediction_type))
@@ -60,11 +60,11 @@ train_results, train_ensemble_preds, train_influence = begin
         features_test = features_test,
         prediction_iterations = prediction_iterations,
     )
-    
+
     influence = infer_test.posteriors[:γ][end]
-    
+
     @info [mean(posterior) for posterior in infer_test.posteriors[:γ][end]][1:5]
-    
+
     ensemble_preds = infer_test.predictions[:y][end];
 
     Y_for_metrics = ProbabilisticEnsembling.prepare_y_for_metrics(prediction_type, y_test);
@@ -178,7 +178,7 @@ forecaster_labels = forecaster_labels[1:n_f]
 
 # --- Create combined plot ---
 begin
-    y_true = Y_for_metrics
+    y_true = Y_for_metrics[dim,:]
     t = 1:length(y_true)
 
     # Top subplot: predictions comparison

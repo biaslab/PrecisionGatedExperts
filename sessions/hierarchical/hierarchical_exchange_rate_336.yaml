@@ -25,6 +25,6 @@ params:
       value: 1.0
     w:
       type: "MvNormalMeanScalePrecision"
-      n_features: 25
+      n_features: 57
       scale: 0.1
   subsample_percentage: 0.01
