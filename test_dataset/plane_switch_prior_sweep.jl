@@ -1,5 +1,7 @@
 #!/usr/bin/env julia
 
+include("generate_plane_switch_dataset.jl")
+
 using ProbabilisticEnsembling
 using DataFrames
 using CSV
@@ -30,49 +32,18 @@ Outputs:
   - test_dataset/plane_switch_prior_sweep_summary.csv
 """
 
-function generate_plane_switch_data(
-    rng;
-    n::Int = 1600,
-    line::NTuple{3,Float64} = (1.0, -0.7, 0.1), # a*x1 + b*x2 + c = 0
-    regime_noise::Float64 = 0.35,
-    obs_noise::Float64 = 0.08,
-)
+function build_probe_features(line::NTuple{3,Float64}; distances = range(-2.5, 2.5; length = 161))
     a, b, c = line
-    x1 = rand(rng, n) .* 4 .- 2
-    x2 = rand(rng, n) .* 4 .- 2
+    nrm = sqrt(a^2 + b^2)
+    nvec = [a, b] ./ nrm
+    x0 = -c .* [a, b] ./ (a^2 + b^2) # one point on the boundary
 
-    signed = a .* x1 .+ b .* x2 .+ c
-    signed_noisy = signed .+ regime_noise .* randn(rng, n)
-    regime = ifelse.(signed_noisy .< 0.0, 1, 2)
-
-    f1 = 1.2 .* x1 .- 0.9 .* x2 .+ 0.35 .* sin.(1.8 .* x1)
-    f2 = -0.8 .* x1 .+ 1.1 .* x2 .+ 0.30 .* cos.(1.4 .* x2)
-    y = [regime[i] == 1 ? f1[i] : f2[i] for i in 1:n] .+ obs_noise .* randn(rng, n)
-
-    # Expert A: good in regime 1, biased/noisy in regime 2.
-    pred_a = [
-        regime[i] == 1 ?
-        (f1[i] + 0.06 * randn(rng)) :
-        (0.35 * f1[i] + 0.55 + 0.16 * randn(rng)) for i in 1:n
-    ]
-
-    # Expert B: good in regime 2, biased/noisy in regime 1.
-    pred_b = [
-        regime[i] == 2 ?
-        (f2[i] + 0.06 * randn(rng)) :
-        (0.35 * f2[i] - 0.55 + 0.16 * randn(rng)) for i in 1:n
-    ]
-
-    dist = signed ./ sqrt(a^2 + b^2)
-    return DataFrame(;
-        x1 = x1,
-        x2 = x2,
-        dist_to_line = dist,
-        regime = regime,
-        OT = y,
-        pred_a = pred_a,
-        pred_b = pred_b,
-    )
+    feats = Vector{Vector{Float64}}(undef, length(distances))
+    for (k, d) in enumerate(distances)
+        x = x0 .+ d .* nvec
+        feats[k] = [1.0, x[1], x[2]]
+    end
+    return collect(distances), feats
 end
 
 function normalized_gamma_probs(γ)
@@ -89,20 +60,6 @@ function normalized_gamma_probs(γ)
         top_share[j] = max(p1, p2)
     end
     return probs_a, top_share
-end
-
-function build_probe_features(line::NTuple{3,Float64}; distances = range(-2.5, 2.5; length = 161))
-    a, b, c = line
-    nrm = sqrt(a^2 + b^2)
-    nvec = [a, b] ./ nrm
-    x0 = -c .* [a, b] ./ (a^2 + b^2) # one point on the boundary
-
-    feats = Vector{Vector{Float64}}(undef, length(distances))
-    for (k, d) in enumerate(distances)
-        x = x0 .+ d .* nvec
-        feats[k] = [1.0, x[1], x[2]]
-    end
-    return collect(distances), feats
 end
 
 function run_single_setting(df_train, scale, beta_rate, inference_iterations)
