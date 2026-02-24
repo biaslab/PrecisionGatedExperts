@@ -961,8 +961,8 @@ function before_rxinfer(spec::ExperimentSpecifier{Univariate})
         spec.selected_quantiles,
     )
 
-    features_val = make_features(spec.feature_type, Xval_s)
-    features_test = make_features(spec.feature_type, Xte_s)
+    features_val = make_features(spec.feature_type, Xval_s, col_idx)
+    features_test = make_features(spec.feature_type, Xte_s, col_idx)
     return (y_val, y_test, predictions_val, predictions_test, features_val, features_test)
 end
 

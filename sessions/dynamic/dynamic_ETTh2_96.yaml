@@ -4,6 +4,7 @@ params:
   model_type: "dynamic"
   dataset: "ETTh2"
   dataset_path: "data/ETTh2.csv"
+  feature_type: "uniwindow"
   horizon: 96
   inference_iterations: 100
   prediction_iterations: 1
@@ -24,6 +25,6 @@ params:
       rate: 0.01
     w:
       type: "MvNormalMeanScalePrecision"
-      n_features: 50
+      n_features: 10
       scale: 0.01
   subsample_percentage: 0.01

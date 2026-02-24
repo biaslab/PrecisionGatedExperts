@@ -4,6 +4,10 @@ using Statistics
 # feature_type: simple | fft
 struct SimpleFeatures end
 
+struct WindowFeatures end
+
+struct UniWindowFeatures end
+
 struct FFTFeatures
     n_harmonics::Int
 end
@@ -12,7 +16,9 @@ FFTFeatures() = FFTFeatures(3)
 function parse_feature_type(s::String)
     s == "simple" && return SimpleFeatures()
     if s == "window"
-        retunr WindowFeatures()
+        return WindowFeatures()
+    elseif s == "uniwindow"
+        return UniWindowFeatures()
     elseif s == "simple"
         return SimpleFeatures()
     else
@@ -64,6 +70,43 @@ function make_features(::WindowFeatures, X_scaled)
             x_fifth_last,
             t_six_last,
             t_seventh_last
+        )
+    end
+    return feats
+end
+
+function make_features(::UniWindowFeatures, X_scaled, col_idx)
+    _, W, n = size(X_scaled)
+    feats = Vector{Vector{Float64}}(undef, n)
+    for j = 1:n
+        x_last = Float64.(X_scaled[col_idx, end, j])
+        t_penultimate = max(1, W - 10)
+        t_third_last = max(1, W - 20)
+        t_fourth_last = max(1, W - 30)
+        t_fifth_last = max(1, W - 40)
+        t_six_last = max(1, W - 50)
+        t_seventh_last = max(1, W - 60)
+        t_eight_last = max(1, W - 70)
+        t_nine_last = max(1, W - 80)
+        x_penultimate = Float64.(X_scaled[col_idx, t_penultimate, j])
+        x_third_last = Float64.(X_scaled[col_idx, t_third_last, j])
+        x_fourth_last = Float64.(X_scaled[col_idx, t_fourth_last, j])
+        x_fifth_last = Float64.(X_scaled[col_idx, t_fifth_last, j])
+        t_six_last = Float64.(X_scaled[col_idx, t_six_last, j])
+        t_seventh_last = Float64.(X_scaled[col_idx, t_seventh_last, j])
+        t_eight_last = Float64.(X_scaled[col_idx, t_eight_last, j])
+        t_nine_last = Float64.(X_scaled[col_idx, t_nine_last, j])
+        feats[j] = vcat(
+            1.0,
+            x_last,
+            x_penultimate,
+            x_third_last,
+            x_fourth_last,
+            x_fifth_last,
+            t_six_last,
+            t_seventh_last,
+            t_eight_last,
+            t_nine_last
         )
     end
     return feats
