@@ -38,3 +38,4 @@ data/exchange_rate.csv
 test_dataset/hard_switch_univariate.csv
 test_dataset/xor_dataset.csv
 test_dataset/plane_switch_dataset.csv
+test_dataset/viz/*.png
