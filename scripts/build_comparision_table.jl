@@ -1,7 +1,7 @@
 using JLD2
 using Printf
 
-const RESULTS_DIR = joinpath(@__DIR__, "..", "paper", "results", "static")
+const RESULTS_DIR = joinpath(@__DIR__, "..", "paper", "results")
 const HORIZONS = [96, 192, 336, 720]
 const MODEL_TYPES = ["static", "dynamic", "hierarchical"]
 const MODEL_LABELS = Dict(
@@ -31,7 +31,7 @@ end
 
 function load_metrics(dataset::String, horizon::Int, pred_type::Symbol, model_type::String)
     fname = result_filename(dataset, horizon, pred_type, model_type)
-    fpath = joinpath(RESULTS_DIR, fname)
+    fpath = joinpath(RESULTS_DIR, model_type, fname)
     if !isfile(fpath)
         return nothing
     end
