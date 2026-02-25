@@ -6,6 +6,7 @@ params:
   horizon: 720
   inference_iterations: 500
   prediction_iterations: 1
+  feature_type: "window"
   experts:
     - "models/exchange_rate_h720_s96_CNN_enzyme.jld2"
     - "models/exchange_rate_h720_s96_MLP_enzyme.jld2"
@@ -24,5 +25,5 @@ params:
     w:
       type: "MvNormalMeanScalePrecision"
       n_features: 57
-      scale: 0.7
+      scale: 0.6
   subsample_percentage: 0.01

@@ -4,9 +4,9 @@ params:
   dataset: "exchange_rate"
   dataset_path: "data/exchange_rate.csv"
   horizon: 96
-  inference_iterations: 500
-  prediction_iterations: 2
-  feature_type: "fft"
+  inference_iterations: 1000
+  prediction_iterations: 1
+  feature_type: "window"
   experts:
     - "models/exchange_rate_h96_s96_CNN_enzyme.jld2"
     - "models/exchange_rate_h96_s96_MLP_enzyme.jld2"
@@ -17,13 +17,13 @@ params:
     β:
       type: "GammaShapeRate"
       shape: 1.0
-      rate: 1.0
+      rate: 1e6
     τ:
       type: "GammaShapeRate"
       shape: 1.0
-      rate: 1.0
+      rate: 1e-2
     w:
       type: "MvNormalMeanScalePrecision"
-      n_features: 25
-      scale: 1.0
-  subsample_percentage: 0.01
+      n_features: 57
+      scale: 0.6
+  subsample_percentage: 0.02
