@@ -1,9 +1,16 @@
 using Lux
+using Random
 
 export TimeSeriesLSTM,
     TimeSeriesLSTMOneStep,
     TimeSeriesCNN,
     TimeSeriesMLP,
+    TimeSeriesAutoEncoder,
+    encode_latent,
+    TimeSeriesVAE,
+    encode_vae,
+    vae_forward,
+    vae_kl_loss,
     TimeSeriesNLinear,
     TimeSeriesNConv,
     TimeSeriesDLinear,
@@ -144,6 +151,241 @@ function (m::TimeSeriesMLP)(x::AbstractArray{T,3}, ps::NamedTuple, st::NamedTupl
     y, st_head = m.head(x2, ps.head, st.head)
     st = merge(st, (head = st_head,))
     return y, st
+end
+
+struct TimeSeriesAutoEncoder{C1,C2,EP,DP,C3,C4} <:
+       Lux.AbstractLuxContainerLayer{(
+    :enc_conv1,
+    :enc_conv2,
+    :enc_proj,
+    :dec_proj,
+    :dec_conv1,
+    :dec_conv2,
+)}
+    enc_conv1::C1
+    enc_conv2::C2
+    enc_proj::EP
+    dec_proj::DP
+    dec_conv1::C3
+    dec_conv2::C4
+    in_dims::Int
+    seq_len::Int
+    channels::Int
+    hidden_dims::Int
+    latent_dim::Int
+    kernel_size::Int
+end
+
+function TimeSeriesAutoEncoder(
+    in_dims::Int,
+    seq_len::Int;
+    channels::Int = 64,
+    hidden_dims::Int = 256,
+    latent_dim::Int = 64,
+    kernel_size::Int = 7,
+)
+    channels >= 1 || error("channels must be >= 1")
+    hidden_dims >= 1 || error("hidden_dims must be >= 1")
+    latent_dim >= 1 || error("latent_dim must be >= 1")
+    kernel_size >= 1 || error("kernel_size must be >= 1")
+    isodd(kernel_size) || error("kernel_size must be odd, got $(kernel_size)")
+    pad = (kernel_size ÷ 2,)
+
+    return TimeSeriesAutoEncoder(
+        Conv((kernel_size,), in_dims => channels, relu; pad = pad),
+        Conv((kernel_size,), channels => channels, relu; pad = pad),
+        Chain(
+            Dense(channels * seq_len => hidden_dims, relu),
+            Dense(hidden_dims => latent_dim),
+        ),
+        Chain(
+            Dense(latent_dim => hidden_dims, relu),
+            Dense(hidden_dims => channels * seq_len, relu),
+        ),
+        Conv((kernel_size,), channels => channels, relu; pad = pad),
+        Conv((kernel_size,), channels => in_dims; pad = pad),
+        in_dims,
+        seq_len,
+        channels,
+        hidden_dims,
+        latent_dim,
+        kernel_size,
+    )
+end
+
+function encode_latent(
+    m::TimeSeriesAutoEncoder,
+    x::AbstractArray{T,3},
+    ps::NamedTuple,
+    st::NamedTuple,
+) where {T}
+    size(x, 1) == m.in_dims || error("Expected in_dims=$(m.in_dims), got $(size(x, 1)).")
+    size(x, 2) == m.seq_len || error("Expected seq_len=$(m.seq_len), got $(size(x, 2)).")
+
+    xt = permutedims(x, (2, 1, 3))
+    h1, st_enc1 = m.enc_conv1(xt, ps.enc_conv1, st.enc_conv1)
+    h2, st_enc2 = m.enc_conv2(h1, ps.enc_conv2, st.enc_conv2)
+
+    bsz = size(x, 3)
+    h2_flat = reshape(h2, m.channels * m.seq_len, bsz)
+    z, st_enc_proj = m.enc_proj(h2_flat, ps.enc_proj, st.enc_proj)
+    st_out = merge(st, (enc_conv1 = st_enc1, enc_conv2 = st_enc2, enc_proj = st_enc_proj))
+    return z, st_out
+end
+
+function (m::TimeSeriesAutoEncoder)(
+    x::AbstractArray{T,3},
+    ps::NamedTuple,
+    st::NamedTuple,
+) where {T}
+    z, st_enc = encode_latent(m, x, ps, st)
+
+    bsz = size(x, 3)
+    d_flat, st_dec_proj = m.dec_proj(z, ps.dec_proj, st.dec_proj)
+    d = reshape(d_flat, m.seq_len, m.channels, bsz)
+    d1, st_dec1 = m.dec_conv1(d, ps.dec_conv1, st.dec_conv1)
+    yt, st_dec2 = m.dec_conv2(d1, ps.dec_conv2, st.dec_conv2)
+    y = permutedims(yt, (2, 1, 3))
+
+    st_out = merge(
+        st_enc,
+        (dec_proj = st_dec_proj, dec_conv1 = st_dec1, dec_conv2 = st_dec2),
+    )
+    return y, st_out
+end
+
+struct TimeSeriesVAE{C1,C2,EP,MP,LP,DP,C3,C4} <:
+       Lux.AbstractLuxContainerLayer{(
+    :enc_conv1,
+    :enc_conv2,
+    :enc_proj,
+    :mu_head,
+    :logvar_head,
+    :dec_proj,
+    :dec_conv1,
+    :dec_conv2,
+)}
+    enc_conv1::C1
+    enc_conv2::C2
+    enc_proj::EP
+    mu_head::MP
+    logvar_head::LP
+    dec_proj::DP
+    dec_conv1::C3
+    dec_conv2::C4
+    in_dims::Int
+    seq_len::Int
+    channels::Int
+    hidden_dims::Int
+    latent_dim::Int
+    kernel_size::Int
+end
+
+function TimeSeriesVAE(
+    in_dims::Int,
+    seq_len::Int;
+    channels::Int = 64,
+    hidden_dims::Int = 256,
+    latent_dim::Int = 64,
+    kernel_size::Int = 7,
+)
+    channels >= 1 || error("channels must be >= 1")
+    hidden_dims >= 1 || error("hidden_dims must be >= 1")
+    latent_dim >= 1 || error("latent_dim must be >= 1")
+    kernel_size >= 1 || error("kernel_size must be >= 1")
+    isodd(kernel_size) || error("kernel_size must be odd, got $(kernel_size)")
+    pad = (kernel_size ÷ 2,)
+
+    return TimeSeriesVAE(
+        Conv((kernel_size,), in_dims => channels, relu; pad = pad),
+        Conv((kernel_size,), channels => channels, relu; pad = pad),
+        Chain(Dense(channels * seq_len => hidden_dims, relu)),
+        Dense(hidden_dims => latent_dim),
+        Dense(hidden_dims => latent_dim),
+        Chain(
+            Dense(latent_dim => hidden_dims, relu),
+            Dense(hidden_dims => channels * seq_len, relu),
+        ),
+        Conv((kernel_size,), channels => channels, relu; pad = pad),
+        Conv((kernel_size,), channels => in_dims; pad = pad),
+        in_dims,
+        seq_len,
+        channels,
+        hidden_dims,
+        latent_dim,
+        kernel_size,
+    )
+end
+
+function encode_vae(
+    m::TimeSeriesVAE,
+    x::AbstractArray{T,3},
+    ps::NamedTuple,
+    st::NamedTuple,
+) where {T}
+    size(x, 1) == m.in_dims || error("Expected in_dims=$(m.in_dims), got $(size(x, 1)).")
+    size(x, 2) == m.seq_len || error("Expected seq_len=$(m.seq_len), got $(size(x, 2)).")
+
+    xt = permutedims(x, (2, 1, 3))
+    h1, st_enc1 = m.enc_conv1(xt, ps.enc_conv1, st.enc_conv1)
+    h2, st_enc2 = m.enc_conv2(h1, ps.enc_conv2, st.enc_conv2)
+
+    bsz = size(x, 3)
+    h2_flat = reshape(h2, m.channels * m.seq_len, bsz)
+    h, st_enc_proj = m.enc_proj(h2_flat, ps.enc_proj, st.enc_proj)
+    μ, st_mu = m.mu_head(h, ps.mu_head, st.mu_head)
+    logvar, st_logvar = m.logvar_head(h, ps.logvar_head, st.logvar_head)
+
+    st_out = merge(
+        st,
+        (
+            enc_conv1 = st_enc1,
+            enc_conv2 = st_enc2,
+            enc_proj = st_enc_proj,
+            mu_head = st_mu,
+            logvar_head = st_logvar,
+        ),
+    )
+    return μ, logvar, st_out
+end
+
+function vae_forward(
+    m::TimeSeriesVAE,
+    x::AbstractArray{T,3},
+    ps::NamedTuple,
+    st::NamedTuple;
+    sample::Bool = true,
+    rng = Random.default_rng(),
+) where {T}
+    μ, logvar, st_enc = encode_vae(m, x, ps, st)
+    z = if sample
+        ϵ = randn(rng, eltype(μ), size(μ))
+        μ .+ exp.(0.5f0 .* logvar) .* ϵ
+    else
+        μ
+    end
+
+    bsz = size(x, 3)
+    d_flat, st_dec_proj = m.dec_proj(z, ps.dec_proj, st.dec_proj)
+    d = reshape(d_flat, m.seq_len, m.channels, bsz)
+    d1, st_dec1 = m.dec_conv1(d, ps.dec_conv1, st.dec_conv1)
+    yt, st_dec2 = m.dec_conv2(d1, ps.dec_conv2, st.dec_conv2)
+    y = permutedims(yt, (2, 1, 3))
+
+    st_out = merge(
+        st_enc,
+        (dec_proj = st_dec_proj, dec_conv1 = st_dec1, dec_conv2 = st_dec2),
+    )
+    return y, μ, logvar, st_out
+end
+
+function (m::TimeSeriesVAE)(x::AbstractArray{T,3}, ps::NamedTuple, st::NamedTuple) where {T}
+    y, _, _, st_out = vae_forward(m, x, ps, st; sample = true)
+    return y, st_out
+end
+
+function vae_kl_loss(μ, logvar)
+    return 0.5f0 * mean(exp.(logvar) .+ μ .* μ .- 1.0f0 .- logvar)
 end
 
 struct TimeSeriesNLinear{H} <: Lux.AbstractLuxContainerLayer{(:head,)}
@@ -667,6 +909,32 @@ function build_model(model_type::Symbol, config)
             config.out_dim;
             hidden_dims = hidden_dims,
             depth = depth,
+        )
+    elseif model_type == :TimeSeriesAutoEncoder
+        channels = get(config, :channels, 64)
+        hidden_dims = get(config, :hidden_dim, 256)
+        latent_dim = get(config, :latent_dim, 64)
+        kernel_size = get(config, :kernel_size, 7)
+        return TimeSeriesAutoEncoder(
+            config.input_dim,
+            config.seq_len;
+            channels = channels,
+            hidden_dims = hidden_dims,
+            latent_dim = latent_dim,
+            kernel_size = kernel_size,
+        )
+    elseif model_type == :TimeSeriesVAE
+        channels = get(config, :channels, 64)
+        hidden_dims = get(config, :hidden_dim, 256)
+        latent_dim = get(config, :latent_dim, 64)
+        kernel_size = get(config, :kernel_size, 7)
+        return TimeSeriesVAE(
+            config.input_dim,
+            config.seq_len;
+            channels = channels,
+            hidden_dims = hidden_dims,
+            latent_dim = latent_dim,
+            kernel_size = kernel_size,
         )
     elseif model_type == :TimeSeriesNLinear
         bias = get(config, :bias, true)
