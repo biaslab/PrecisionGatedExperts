@@ -1,5 +1,6 @@
 using FFTW
 using Statistics
+using Lux
 
 # feature_type: simple | fft
 struct SimpleFeatures end
@@ -8,10 +9,58 @@ struct WindowFeatures end
 
 struct UniWindowFeatures end
 
+struct AEFeatures end
+
+struct VAEFeatures end
+
 struct FFTFeatures
     n_harmonics::Int
 end
 FFTFeatures() = FFTFeatures(3)
+
+const _LATENT_FEATURE_MODEL_CACHE = Dict{String,NamedTuple}()
+
+_dataset_name(dataset) = dataset isa Val ? string(typeof(dataset).parameters[1]) : string(dataset)
+
+function _find_latent_model_path(dataset, seq_len::Int, tag::String)
+    models_dir = "models"
+    isdir(models_dir) || error("Models directory not found: $(models_dir)")
+    ds = _dataset_name(dataset)
+    exact = joinpath(models_dir, "$(ds)_s$(seq_len)_$(tag)_enzyme.jld2")
+    if isfile(exact)
+        return exact
+    end
+
+    candidates = filter(
+        f ->
+            startswith(f, "$(ds)_s$(seq_len)_") &&
+            occursin(tag, f) &&
+            endswith(f, ".jld2"),
+        readdir(models_dir),
+    )
+    isempty(candidates) && error(
+        "No $(tag) model found for dataset=$(ds), seq_len=$(seq_len). " *
+        "Expected $(exact) or similar name in $(models_dir).",
+    )
+    sort!(candidates)
+    return joinpath(models_dir, last(candidates))
+end
+
+function _load_latent_model(kind::Symbol, dataset, seq_len::Int)
+    key = string(kind, "|", _dataset_name(dataset), "|", seq_len)
+    if haskey(_LATENT_FEATURE_MODEL_CACHE, key)
+        return _LATENT_FEATURE_MODEL_CACHE[key]
+    end
+
+    tag = kind == :ae ? "AutoEncoder" : "VAE"
+    path = _find_latent_model_path(dataset, seq_len, tag)
+    saved = load_jld2_model(path)
+    model = build_model(saved.model_type, saved.config)
+    st = Lux.testmode(saved.states)
+    loaded = (model = model, ps = saved.parameters, st = st, path = path)
+    _LATENT_FEATURE_MODEL_CACHE[key] = loaded
+    return loaded
+end
 
 function parse_feature_type(s::String)
     s == "simple" && return SimpleFeatures()
@@ -21,6 +70,10 @@ function parse_feature_type(s::String)
         return UniWindowFeatures()
     elseif s == "simple"
         return SimpleFeatures()
+    elseif s == "ae"
+        return AEFeatures()
+    elseif s == "vae"
+        return VAEFeatures()
     else
         startswith(s, "fft") || error("Unknown feature_type: $s")
     # "fft" or "fft:5" (number of harmonics)
@@ -112,6 +165,42 @@ function make_features(::UniWindowFeatures, X_scaled, col_idx)
     return feats
 end
 
+
+function make_features(::VAEFeatures, X_scaled, dataset)
+    seq_len = size(X_scaled, 2)
+    loaded = _load_latent_model(:vae, dataset, seq_len)
+    μ, _, _ = encode_vae(
+        loaded.model,
+        Float32.(X_scaled),
+        loaded.ps,
+        loaded.st,
+    )
+
+    n = size(X_scaled, 3)
+    feats = Vector{Vector{Float64}}(undef, n)
+    for j = 1:n
+        feats[j] = vcat(1.0, Float64.(Array(@view μ[:, j])))
+    end
+    return feats
+end
+
+function make_features(::AEFeatures, X_scaled, dataset)
+    seq_len = size(X_scaled, 2)
+    loaded = _load_latent_model(:ae, dataset, seq_len)
+    z, _ = encode_latent(
+        loaded.model,
+        Float32.(X_scaled),
+        loaded.ps,
+        loaded.st,
+    )
+
+    n = size(X_scaled, 3)
+    feats = Vector{Vector{Float64}}(undef, n)
+    for j = 1:n
+        feats[j] = vcat(1.0, Float64.(Array(@view z[:, j])))
+    end
+    return feats
+end
 
 
 function make_features(ft::FFTFeatures, X_scaled)

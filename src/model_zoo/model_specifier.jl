@@ -960,9 +960,13 @@ function before_rxinfer(spec::ExperimentSpecifier{Univariate})
         col_idx,
         spec.selected_quantiles,
     )
-
-    features_val = make_features(spec.feature_type, Xval_s, col_idx)
-    features_test = make_features(spec.feature_type, Xte_s, col_idx)
+    if spec.feature_type == "uniwindow"
+        features_val = make_features(spec.feature_type, Xval_s, col_idx)
+        features_test = make_features(spec.feature_type, Xte_s, col_idx)
+    else
+        features_val = make_features(spec.feature_type, Xval_s, spec.dataset)
+        features_test = make_features(spec.feature_type, Xte_s, spec.dataset)
+    end
     return (y_val, y_test, predictions_val, predictions_test, features_val, features_test)
 end
 
@@ -1019,8 +1023,8 @@ function before_rxinfer(spec::ExperimentSpecifier{Multivariate})
         spec.selected_quantiles,
     )
 
-    features_val = make_features(spec.feature_type, Xval_s)
-    features_test = make_features(spec.feature_type, Xte_s)
+    features_val = make_features(spec.feature_type, Xval_s, spec.dataset)
+    features_test = make_features(spec.feature_type, Xte_s, spec.dataset)
     return (y_val, y_test, predictions_val, predictions_test, features_val, features_test)
 end
 
