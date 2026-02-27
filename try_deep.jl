@@ -17,7 +17,7 @@ const TAU_SOFTDOT = 200.0
 
     for j = 1:n_obs
         # Level 1: top routing score.
-        h[j, 1] ~ softdot(features[j], V_SPLIT, TAU_SOFTDOT)
+        h[j, 1] ~ softdot(features[j], -V_SPLIT, TAU_SOFTDOT)
 
         # Level 2: two opposite softdot routers driven by h.
         right_switch[j, 1] ~ softdot(h[j, 1], 1.0, TAU_SOFTDOT)
@@ -43,7 +43,7 @@ const TAU_SOFTDOT = 200.0
 
     for j = 1:n_obs
         # Level 1: top routing score.
-        h[j, 2] ~ softdot(features[j], -V_SPLIT, TAU_SOFTDOT)
+        h[j, 2] ~ softdot(features[j], V_SPLIT, TAU_SOFTDOT)
 
         # Level 2: two opposite softdot routers driven by h.
         right_switch[j, 2] ~ softdot(h[j, 2], 1.0, TAU_SOFTDOT)
@@ -117,7 +117,7 @@ function xor_dataset()
         Float64[1.0, 0.0, 1.0],
         Float64[1.0, 1.0, 1.0],
     ]
-    targets = [0 0 0 0; 1 1 1 1]
+    targets = Int64[0, 1, 1, 0]
     return features, targets
 end
 
@@ -140,31 +140,32 @@ function run_xor_demo()
     )
 
     y_post = result.predictions[:y][end]
-    @show map(mean, y_post)
-    @show map(var, y_post)
-    # y_mean = mean.(y_post)
-    # y_class = Int.(y_mean .>= 0.5)
-    # target_class = Int.(targets)
-    # acc = mean(y_class .== target_class)
+    y_mean = mean.(y_post)
+    y_var = var.(y_post)
+    y_class = Int.(y_mean .>= 0.5)
+    acc_direct = mean(y_class .== targets)
+    acc_inverted = mean((1 .- y_class) .== targets)
 
-    # kappa_mean = mean.(result.posteriors[:kappa][end])
-    # right_switch_mean = mean.(result.posteriors[:right_switch][end])
-    # left_switch_mean = mean.(result.posteriors[:left_switch][end])
-    # z_mean = mean.(result.posteriors[:z][end])
+    h_mean = map(mean, result.posteriors[:h][end])
+    right_switch_mean = map(mean, result.posteriors[:right_switch][end])
+    left_switch_mean = map(mean, result.posteriors[:left_switch][end])
+    kappa_mean = map(mean, result.posteriors[:kappa][end])
+    z_mean = map(mean, result.posteriors[:z][end])
+    m_mean = map(mean, result.posteriors[:m][end])
+    gamma_mean = map(mean, result.posteriors[:γ][end])
 
-    # println("XOR capability check (no learning, kappa inferred):")
-    # println("right_switch mean = ", round.(right_switch_mean, digits = 4))
-    # println("left_switch mean  = ", round.(left_switch_mean, digits = 4))
-    # println("kappa mean matrix:")
-    # println(round.(kappa_mean, digits = 4))
-    # println("z mean matrix:")
-    # println(round.(z_mean, digits = 4))
-    # for j = 1:length(features)
-    #     x1 = Int(features[j][1])
-    #     x2 = Int(features[j][2])
-    #     println(
-    #         "  x=[$x1,$x2] target=$(target_class[j]) pred_mean=$(round(y_mean[j], digits = 4)) class=$(y_class[j])",
-    #     )
-    # end
-    # println("Classification accuracy: ", round(acc, digits = 4))
+    println("XOR capability check (no learning, kappa inferred):")
+    for j = 1:length(features)
+        x1 = Int(features[j][1])
+        x2 = Int(features[j][2])
+        println("x=[$x1,$x2] target=$(targets[j]) pred=$(round(y_mean[j], digits = 4)) var=$(round(y_var[j], digits = 4)) class=$(y_class[j])")
+        println("  h=$(round.(h_mean[j, :], digits = 4))")
+        println("  right_switch=$(round.(right_switch_mean[j, :], digits = 4))")
+        println("  left_switch=$(round.(left_switch_mean[j, :], digits = 4))")
+        println("  kappa[:,:,branch1/2]=$(round.(kappa_mean[j, :, :], digits = 4))")
+        println("  z[:,:,branch1/2]=$(round.(z_mean[j, :, :], digits = 4))")
+        println("  m=$(round.(m_mean[j, :], digits = 4))")
+        println("  gamma=$(round.(gamma_mean[j, :], digits = 4))")
+    end
+    println("Classification accuracy (direct): ", round(acc_direct, digits = 4))
 end
