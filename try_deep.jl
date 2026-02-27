@@ -12,59 +12,34 @@ const W_LEFT = [0.0, 10.0, 0.0]      # lower expert 1: predicts x2
 const W_RIGHT = [0.0, -10.0, 10.0]    # lower expert 2: predicts 1 - x2
 const TAU_SOFTDOT = 200.0
 
-@model function deep_model_xor_genuine(n_obs, features, y, predictors)
+@model function deep_model_xor_genuine(n_obs, n_forecasters, features, y, predictors)
     local h, right_switch, left_switch, z, kappa, γ
+    for i in 1:n_forecasters
+        for j = 1:n_obs
+            # Level 1: top routing score.
+            h[j, i] ~ softdot(features[j], V_SPLIT, TAU_SOFTDOT)
 
-    for j = 1:n_obs
-        # Level 1: top routing score.
-        h[j, 1] ~ softdot(features[j], -V_SPLIT, TAU_SOFTDOT)
+            # Level 2: two opposite softdot routers driven by h.
+            right_switch[j, i] ~ softdot(h[j, i], 1.0, TAU_SOFTDOT)
+            left_switch[j, i] ~ softdot(h[j, i], -1.0, TAU_SOFTDOT)
 
-        # Level 2: two opposite softdot routers driven by h.
-        right_switch[j, 1] ~ softdot(h[j, 1], 1.0, TAU_SOFTDOT)
-        left_switch[j, 1] ~ softdot(h[j, 1], -1.0, TAU_SOFTDOT)
+            # Active branch has switch near -7 -> smaller residual -> larger inferred precision.
+            kappa[j, 1, i] ~ GammaShapeRate(1.0, 1.0)
+            kappa[j, 2, i] ~ GammaShapeRate(1.0, 1.0)
+            right_switch[j, i] ~ Log(kappa[j, 1, i])
+            left_switch[j, i] ~ Log(kappa[j, 2, i])
 
-        # Active branch has switch near -7 -> smaller residual -> larger inferred precision.
-        kappa[j, 1, 1] ~ GammaShapeRate(1.0, 1.0)
-        kappa[j, 2, 1] ~ GammaShapeRate(1.0, 1.0)
-        right_switch[j, 1] ~ Log(kappa[j, 1, 1])
-        left_switch[j, 1] ~ Log(kappa[j, 2, 1])
+            # Two lower experts.
+            z[j, 1, i] ~ softdot(features[j], W_LEFT, TAU_SOFTDOT)
+            z[j, 2, i] ~ softdot(features[j], W_RIGHT, TAU_SOFTDOT)
 
-        # Two lower experts.
-        z[j, 1, 1] ~ softdot(features[j], W_LEFT, TAU_SOFTDOT)
-        z[j, 2, 1] ~ softdot(features[j], W_RIGHT, TAU_SOFTDOT)
-
-        # Product of normals: inferred kappa decides which expert dominates.
-        m[j, 1] ~ NormalMeanPrecision(z[j, 1, 1], kappa[j, 1, 1])
-        m[j, 1] ~ NormalMeanPrecision(z[j, 2, 1], kappa[j, 2, 1])
-        γ[j, 1] ~ GammaShapeRate(1.0, 1.0)
-        m[j, 1] ~ Log(γ[j, 1])
-        y[j] ~ NormalMeanPrecision(predictors[1, j], γ[j, 1])
-    end
-
-    for j = 1:n_obs
-        # Level 1: top routing score.
-        h[j, 2] ~ softdot(features[j], V_SPLIT, TAU_SOFTDOT)
-
-        # Level 2: two opposite softdot routers driven by h.
-        right_switch[j, 2] ~ softdot(h[j, 2], 1.0, TAU_SOFTDOT)
-        left_switch[j, 2] ~ softdot(h[j, 2], -1.0, TAU_SOFTDOT)
-
-        # Active branch has switch near -7 -> smaller residual -> larger inferred precision.
-        kappa[j, 1, 2] ~ GammaShapeRate(1.0, 1.0)
-        kappa[j, 2, 2] ~ GammaShapeRate(1.0, 1.0)
-        right_switch[j, 2] ~ Log(kappa[j, 1, 2])
-        left_switch[j, 2] ~ Log(kappa[j, 2, 2])
-
-        # Two lower experts.
-        z[j, 1, 2] ~ softdot(features[j], W_LEFT, TAU_SOFTDOT)
-        z[j, 2, 2] ~ softdot(features[j], W_RIGHT, TAU_SOFTDOT)
-
-        # Product of normals: inferred kappa decides which expert dominates.
-        m[j, 2] ~ NormalMeanPrecision(z[j, 1, 2], kappa[j, 1, 2])
-        m[j, 2] ~ NormalMeanPrecision(z[j, 2, 2], kappa[j, 2, 2])
-        γ[j, 2] ~ GammaShapeRate(1.0, 1.0)
-        m[j, 2] ~ Log(γ[j, 2])
-        y[j] ~ NormalMeanPrecision(predictors[2, j], γ[j, 2])
+            # Product of normals: inferred kappa decides which expert dominates.
+            m[j, i] ~ NormalMeanPrecision(z[j, 1, i], kappa[j, 1, i])
+            m[j, i] ~ NormalMeanPrecision(z[j, 2, i], kappa[j, 2, i])
+            γ[j, i] ~ GammaShapeRate(1.0, 1.0)
+            m[j, i] ~ Log(γ[j, i])
+            y[j] ~ NormalMeanPrecision(predictors[i, j], γ[j, i])
+        end
     end
 end
 
