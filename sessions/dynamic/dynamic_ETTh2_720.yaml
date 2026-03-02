@@ -5,15 +5,15 @@ params:
   dataset: "ETTh2"
   dataset_path: "data/ETTh2.csv"
   horizon: 720
-  feature_type: "vae"
+  feature_type: "ae"
   inference_iterations: 500
   prediction_iterations: 1
   experts:
-    - "models/ETTh2_h96_s96_CNN_enzyme.jld2"
-    - "models/ETTh2_h96_s96_MLP_enzyme.jld2"
-    - "models/ETTh2_h96_s96_LSTM_enzyme.jld2"
-    - "models/ETTh2_h96_s96_DLinear_enzyme.jld2"
-    - "models/ETTh2_h96_s96_NConv_enzyme.jld2"
+    - "models/ETTh2_h720_s96_CNN_enzyme.jld2"
+    - "models/ETTh2_h720_s96_MLP_enzyme.jld2"
+    - "models/ETTh2_h720_s96_LSTM_enzyme.jld2"
+    - "models/ETTh2_h720_s96_DLinear_enzyme.jld2"
+    - "models/ETTh2_h720_s96_NConv_enzyme.jld2"
   priors:
     β:
       type: "GammaShapeRate"
