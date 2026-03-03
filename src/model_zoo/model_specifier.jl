@@ -960,7 +960,7 @@ function before_rxinfer(spec::ExperimentSpecifier{Univariate})
         col_idx,
         spec.selected_quantiles,
     )
-    if spec.feature_type == "uniwindow"
+    if spec.feature_type isa UniWindowFeatures
         features_val = make_features(spec.feature_type, Xval_s, col_idx)
         features_test = make_features(spec.feature_type, Xte_s, col_idx)
     else
