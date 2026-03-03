@@ -97,6 +97,10 @@ function make_features(::SimpleFeatures, X_scaled)
     return feats
 end
 
+function make_features(::WindowFeatures, X_scaled, _)
+    return make_features(WindowFeatures(), X_scaled)
+end 
+
 function make_features(::WindowFeatures, X_scaled)
     _, W, n = size(X_scaled)
     feats = Vector{Vector{Float64}}(undef, n)
