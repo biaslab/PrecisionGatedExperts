@@ -5,10 +5,9 @@ params:
   dataset: "ETTh2"
   dataset_path: "data/ETTh2.csv"
   horizon: 720
-  feature_type: "ae"
+  feature_type: "uniwindow"
   inference_iterations: 5
   prediction_iterations: 1
-  selected_quantiles: [10, 90]
   experts:
     - "models/ETTh2_h720_s96_CNN_enzyme.jld2"
     - "models/ETTh2_h720_s96_MLP_enzyme.jld2"
