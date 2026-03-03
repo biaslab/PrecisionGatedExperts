@@ -6,8 +6,8 @@ params:
   dataset_path: "data/ETTh1.csv"
   horizon: 720
   feature_type: "ae"
-  inference_iterations: 500
-  prediction_iterations: 1
+  inference_iterations: 5
+  prediction_iterations: 2
   selected_quantiles: [10, 90]
   experts:
     - "models/ETTh1_h720_s96_CNN_enzyme.jld2"
@@ -28,4 +28,3 @@ params:
       type: "MvNormalMeanScalePrecision"
       n_features: 33
       scale: 0.01
-  subsample_percentage: 0.01

@@ -4,9 +4,10 @@ params:
   dataset: "exchange_rate"
   dataset_path: "data/exchange_rate.csv"
   horizon: 96
-  inference_iterations: 500
-  prediction_iterations: 1
+  inference_iterations: 5
+  prediction_iterations: 2
   feature_type: "ae"
+  selected_quantiles: [10, 90]
   experts:
     - "models/exchange_rate_h96_s96_CNN_enzyme.jld2"
     - "models/exchange_rate_h96_s96_MLP_enzyme.jld2"
@@ -26,4 +27,3 @@ params:
       type: "MvNormalMeanScalePrecision"
       n_features: 33
       scale: 1.7
-  subsample_percentage: 0.01
