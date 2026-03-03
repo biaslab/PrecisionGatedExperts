@@ -153,8 +153,7 @@ function (m::TimeSeriesMLP)(x::AbstractArray{T,3}, ps::NamedTuple, st::NamedTupl
     return y, st
 end
 
-struct TimeSeriesAutoEncoder{C1,C2,EP,DP,C3,C4} <:
-       Lux.AbstractLuxContainerLayer{(
+struct TimeSeriesAutoEncoder{C1,C2,EP,DP,C3,C4} <: Lux.AbstractLuxContainerLayer{(
     :enc_conv1,
     :enc_conv2,
     :enc_proj,
@@ -247,15 +246,12 @@ function (m::TimeSeriesAutoEncoder)(
     yt, st_dec2 = m.dec_conv2(d1, ps.dec_conv2, st.dec_conv2)
     y = permutedims(yt, (2, 1, 3))
 
-    st_out = merge(
-        st_enc,
-        (dec_proj = st_dec_proj, dec_conv1 = st_dec1, dec_conv2 = st_dec2),
-    )
+    st_out =
+        merge(st_enc, (dec_proj = st_dec_proj, dec_conv1 = st_dec1, dec_conv2 = st_dec2))
     return y, st_out
 end
 
-struct TimeSeriesVAE{C1,C2,EP,MP,LP,DP,C3,C4} <:
-       Lux.AbstractLuxContainerLayer{(
+struct TimeSeriesVAE{C1,C2,EP,MP,LP,DP,C3,C4} <: Lux.AbstractLuxContainerLayer{(
     :enc_conv1,
     :enc_conv2,
     :enc_proj,
@@ -372,10 +368,8 @@ function vae_forward(
     yt, st_dec2 = m.dec_conv2(d1, ps.dec_conv2, st.dec_conv2)
     y = permutedims(yt, (2, 1, 3))
 
-    st_out = merge(
-        st_enc,
-        (dec_proj = st_dec_proj, dec_conv1 = st_dec1, dec_conv2 = st_dec2),
-    )
+    st_out =
+        merge(st_enc, (dec_proj = st_dec_proj, dec_conv1 = st_dec1, dec_conv2 = st_dec2))
     return y, μ, logvar, st_out
 end
 

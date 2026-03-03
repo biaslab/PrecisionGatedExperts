@@ -20,7 +20,8 @@ FFTFeatures() = FFTFeatures(3)
 
 const _LATENT_FEATURE_MODEL_CACHE = Dict{String,NamedTuple}()
 
-_dataset_name(dataset) = dataset isa Val ? string(typeof(dataset).parameters[1]) : string(dataset)
+_dataset_name(dataset) =
+    dataset isa Val ? string(typeof(dataset).parameters[1]) : string(dataset)
 
 function _find_latent_model_path(dataset, seq_len::Int, tag::String)
     models_dir = "models"
@@ -33,9 +34,7 @@ function _find_latent_model_path(dataset, seq_len::Int, tag::String)
 
     candidates = filter(
         f ->
-            startswith(f, "$(ds)_s$(seq_len)_") &&
-            occursin(tag, f) &&
-            endswith(f, ".jld2"),
+            startswith(f, "$(ds)_s$(seq_len)_") && occursin(tag, f) && endswith(f, ".jld2"),
         readdir(models_dir),
     )
     isempty(candidates) && error(
@@ -76,7 +75,7 @@ function parse_feature_type(s::String)
         return VAEFeatures()
     else
         startswith(s, "fft") || error("Unknown feature_type: $s")
-    # "fft" or "fft:5" (number of harmonics)
+        # "fft" or "fft:5" (number of harmonics)
         parts = split(s, ':')
         length(parts) == 1 && return FFTFeatures()
         n_harmonics = parse(Int, parts[2])
@@ -126,7 +125,7 @@ function make_features(::WindowFeatures, X_scaled)
             x_fourth_last,
             x_fifth_last,
             t_six_last,
-            t_seventh_last
+            t_seventh_last,
         )
     end
     return feats
@@ -147,12 +146,7 @@ end
 function make_features(::VAEFeatures, X_scaled, dataset)
     seq_len = size(X_scaled, 2)
     loaded = _load_latent_model(:vae, dataset, seq_len)
-    μ, _, _ = encode_vae(
-        loaded.model,
-        Float32.(X_scaled),
-        loaded.ps,
-        loaded.st,
-    )
+    μ, _, _ = encode_vae(loaded.model, Float32.(X_scaled), loaded.ps, loaded.st)
 
     n = size(X_scaled, 3)
     feats = Vector{Vector{Float64}}(undef, n)
@@ -165,12 +159,7 @@ end
 function make_features(::AEFeatures, X_scaled, dataset)
     seq_len = size(X_scaled, 2)
     loaded = _load_latent_model(:ae, dataset, seq_len)
-    z, _ = encode_latent(
-        loaded.model,
-        Float32.(X_scaled),
-        loaded.ps,
-        loaded.st,
-    )
+    z, _ = encode_latent(loaded.model, Float32.(X_scaled), loaded.ps, loaded.st)
 
     n = size(X_scaled, 3)
     feats = Vector{Vector{Float64}}(undef, n)

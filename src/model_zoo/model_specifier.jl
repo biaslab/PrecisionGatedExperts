@@ -28,7 +28,7 @@ struct ExperimentSpecifier{P,M,D,F}
     save_predictions::Bool
     subsample_size::Union{Int,Nothing}
     subsample_percentage::Union{Float64,Nothing}
-    repeat_batch::Union{Int, Nothing}
+    repeat_batch::Union{Int,Nothing}
     feature_type::F
 end
 
@@ -919,6 +919,23 @@ function generate_expert_predictions(
     return predictions_val, predictions_test
 end
 
+function _before_rxinfer_features(_, feature_type::UniWindowFeatures, X, col_idx)
+    return make_features(feature_type, X, col_idx)
+end
+
+function _before_rxinfer_features(spec, feature_type, X, _)
+    return make_features(feature_type, X, spec.dataset)
+end
+
+function _before_rxinfer_features(
+    ::ExperimentSpecifier{T,Static},
+    feature_type,
+    X,
+    _,
+) where {T}
+    return nothing
+end
+
 function before_rxinfer(spec::ExperimentSpecifier{Univariate})
     @info "Loading expert models" n = length(spec.experts)
     experts = map(load_jld2_model, spec.experts)
@@ -960,13 +977,10 @@ function before_rxinfer(spec::ExperimentSpecifier{Univariate})
         col_idx,
         spec.selected_quantiles,
     )
-    if spec.feature_type isa UniWindowFeatures
-        features_val = make_features(spec.feature_type, Xval_s, col_idx)
-        features_test = make_features(spec.feature_type, Xte_s, col_idx)
-    else
-        features_val = make_features(spec.feature_type, Xval_s, spec.dataset)
-        features_test = make_features(spec.feature_type, Xte_s, spec.dataset)
-    end
+
+    features_val = _before_rxinfer_features(spec, spec.feature_type, Xval_s, col_idx)
+    features_test = _before_rxinfer_features(spec, spec.feature_type, Xte_s, col_idx)
+
     return (y_val, y_test, predictions_val, predictions_test, features_val, features_test)
 end
 
@@ -1023,15 +1037,20 @@ function before_rxinfer(spec::ExperimentSpecifier{Multivariate})
         spec.selected_quantiles,
     )
 
-    features_val = make_features(spec.feature_type, Xval_s, spec.dataset)
-    features_test = make_features(spec.feature_type, Xte_s, spec.dataset)
+    features_val = _before_rxinfer_features(spec, spec.feature_type, Xval_s, nothing)
+    features_test = _before_rxinfer_features(spec, spec.feature_type, Xte_s, nothing)
     return (y_val, y_test, predictions_val, predictions_test, features_val, features_test)
 end
 
 function run_training_rxinfer(spec, subsampled_data::Int, model, data; kwargs...)
     @show "Use subsampled data with sample size $(subsampled_data)"
     @info "Repeat each batch $(spec.repeat_batch) times"
-    subsampled = (; (k => SubsampledData(v, subsampled_data, spec.repeat_batch) for (k, v) in pairs(data))...)
+    subsampled = (;
+        (
+            k => SubsampledData(v, subsampled_data, spec.repeat_batch) for
+            (k, v) in pairs(data)
+        )...
+    )
     return infer(;
         model = model,
         data = subsampled,
@@ -1270,8 +1289,11 @@ function run_dynamic_univariate(spec::ExperimentSpecifier{Univariate,Dynamic})
     # 6. Ensemble predictions on test
     @info "Generating dynamic ensemble predictions on test"
     # deepcopy posteriors to prevent in-place mutation by LowRank product rules
-    posterior_priors =
-        Dict{Symbol,Any}(:w => deepcopy(w_posteriors), :τ => deepcopy(τ_posteriors), :β => deepcopy(β_posteriors))
+    posterior_priors = Dict{Symbol,Any}(
+        :w => deepcopy(w_posteriors),
+        :τ => deepcopy(τ_posteriors),
+        :β => deepcopy(β_posteriors),
+    )
     prediction_array = [missing for _ = 1:n_test]
 
     infer_test = infer(
@@ -1334,7 +1356,9 @@ end
 # DynamicNoisyObservations Univariate pipeline
 # ---------------------------------------------------------------------------
 
-function run_dynamic_noisy_observations_univariate(spec::ExperimentSpecifier{Univariate,DynamicNoisyObservations})
+function run_dynamic_noisy_observations_univariate(
+    spec::ExperimentSpecifier{Univariate,DynamicNoisyObservations},
+)
     y_val, y_test, predictions_val, predictions_test, features_val, features_test =
         before_rxinfer(spec)
     n_forecasters = size(predictions_val, 1)
@@ -1509,8 +1533,11 @@ function run_dynamic_multivariate(spec::ExperimentSpecifier{Multivariate,Dynamic
     # Ensemble predictions on test
     @info "Generating dynamic ensemble predictions on test"
     # deepcopy posteriors to prevent in-place mutation by LowRank product rules
-    posterior_priors =
-        Dict{Symbol,Any}(:w => deepcopy(w_posteriors), :τ => deepcopy(τ_posteriors), :β => deepcopy(β_posteriors))
+    posterior_priors = Dict{Symbol,Any}(
+        :w => deepcopy(w_posteriors),
+        :τ => deepcopy(τ_posteriors),
+        :β => deepcopy(β_posteriors),
+    )
 
     infer_test = predict_with_model(
         spec.prediction_type,

@@ -39,22 +39,43 @@ struct SubsampledData{R,T}
     cached_data::Base.RefValue{Any}
 end
 
-function SubsampledData(original_data::T, subsample_size::Int, repeat_batch::Int = 1) where {T}
+function SubsampledData(
+    original_data::T,
+    subsample_size::Int,
+    repeat_batch::Int = 1,
+) where {T}
     rng = StableRNGs.StableRNG(subsample_size)
     sampled_ids = zeros(Int, subsample_size)
-    return SubsampledData(original_data, subsample_size, rng, sampled_ids, repeat_batch, Ref(0), Ref{Any}(nothing))
+    return SubsampledData(
+        original_data,
+        subsample_size,
+        rng,
+        sampled_ids,
+        repeat_batch,
+        Ref(0),
+        Ref{Any}(nothing),
+    )
 end
 
 function SubsampledData(original_data::T, subsample_size::Int, ::Nothing) where {T}
     rng = StableRNGs.StableRNG(subsample_size)
     sampled_ids = zeros(Int, subsample_size)
-    return SubsampledData(original_data, subsample_size, rng, sampled_ids, 1, Ref(0), Ref{Any}(nothing))
+    return SubsampledData(
+        original_data,
+        subsample_size,
+        rng,
+        sampled_ids,
+        1,
+        Ref(0),
+        Ref{Any}(nothing),
+    )
 end
 
 function RxInfer.get_data(d::SubsampledData)
     d.call_count[] += 1
     if d.call_count[] == 1 || d.call_count[] > d.repeat_batch
-        d.cached_data[] = subsample_data(d.rng, d.sampled_ids, d.original_data, d.subsample_size)
+        d.cached_data[] =
+            subsample_data(d.rng, d.sampled_ids, d.original_data, d.subsample_size)
         d.call_count[] = 1
     end
     return d.cached_data[]

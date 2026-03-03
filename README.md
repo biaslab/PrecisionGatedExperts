@@ -77,3 +77,45 @@ The training/inference scripts auto-detect these CSVs from `data/`. Trained mode
 
 Notes
 - Splits are chronological: the first block is used for training, the next for validation, and the final for testing.
+
+## Comparing trained models
+
+Use `scripts/compare_models.jl` to visually compare dynamic and static ensemble predictions side by side. The script loads saved results from `paper/results/`, runs inference with the trained posteriors, and produces a combined plot.
+
+```bash
+julia --project scripts/compare_models.jl <dataset> <horizon> [--dim <d>]
+```
+
+**Arguments:**
+
+| Argument | Description |
+|----------|-------------|
+| `dataset` | Dataset name: `ETTh1`, `ETTh2`, `exchange_rate`, `electricity`, `traffic` |
+| `horizon` | Prediction horizon: `96`, `192`, `336`, `720` |
+| `--dim d` | Which dimension to plot for multivariate datasets (default: `1`). Ignored for univariate datasets. |
+| `--show-val` | Prepend validation ground truth to the predictions panel with a dashed vertical boundary line. Useful for seeing what the dynamic model learned from. |
+
+**Examples:**
+
+```bash
+# Univariate — no --dim needed
+julia --project scripts/compare_models.jl ETTh1 96
+julia --project scripts/compare_models.jl ETTh2 336
+
+# Multivariate — pick a dimension to visualise
+julia --project scripts/compare_models.jl exchange_rate 192 --dim 3
+julia --project scripts/compare_models.jl electricity 96 --dim 1
+julia --project scripts/compare_models.jl traffic 720 --dim 5
+
+# Show validation set ground truth before test predictions
+julia --project scripts/compare_models.jl exchange_rate 192 --dim 3 --show-val
+```
+
+The output plot (`compare_<dataset>_h<horizon>_dim<dim>.png`) contains:
+
+- **Predictions panel** — ground truth vs dynamic (blue) and static (red) ensemble means with 95% confidence bands. MSE and MAE are shown in the legend.
+- **Dynamic influence panel** — time-varying normalised expert weights (γ) with 95% credible intervals.
+- **Dynamic TopShare panel** — dominance of the strongest expert over time (`max γᵢ / Σγ`).
+- **Static influence panel** — bar chart of normalised expert weights.
+
+If only one model type is available for a dataset/horizon pair, the script still runs with whatever is present.
