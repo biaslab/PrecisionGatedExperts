@@ -5,7 +5,7 @@ params:
   dataset: "ETTh2"
   dataset_path: "data/ETTh2.csv"
   horizon: 96
-  feature_type: "vae"
+  feature_type: "ae"
   inference_iterations: 500
   prediction_iterations: 1
   experts:

@@ -10,11 +10,11 @@ params:
   prediction_iterations: 1
   selected_quantiles: [10, 90]
   experts:
-    - "models/ETTh1_h96_s96_CNN_enzyme.jld2"
-    - "models/ETTh1_h96_s96_MLP_enzyme.jld2"
-    - "models/ETTh1_h96_s96_LSTM_enzyme.jld2"
-    - "models/ETTh1_h96_s96_DLinear_enzyme.jld2"
-    - "models/ETTh1_h96_s96_NConv_enzyme.jld2"
+    - "models/ETTh1_h720_s96_CNN_enzyme.jld2"
+    - "models/ETTh1_h720_s96_MLP_enzyme.jld2"
+    - "models/ETTh1_h720_s96_LSTM_enzyme.jld2"
+    - "models/ETTh1_h720_s96_DLinear_enzyme.jld2"
+    - "models/ETTh1_h720_s96_NConv_enzyme.jld2"
   priors:
     β:
       type: "GammaShapeRate"
