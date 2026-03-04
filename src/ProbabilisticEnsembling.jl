@@ -32,8 +32,17 @@ include("model_zoo/model_types.jl")
 # feature extraction
 include("model_zoo/features.jl")
 
-# model running
+# shared pipeline utilities (must precede model_specifier and neural ensemble)
+include("model_zoo/shared_pipeline.jl")
+
+# model running (RxInfer pipeline)
 include("model_zoo/model_specifier.jl")
+
+# neural ensemble pipeline (Adaptive Mixture of Local Experts)
+include("neural_ensemble/neural_ensemble_types.jl")
+include("neural_ensemble/gating.jl")
+include("neural_ensemble/neural_pipeline.jl")
+include("neural_ensemble/neural_ensemble_specifier.jl")
 
 # viz utils
 include("dist_normalized_weights.jl")
