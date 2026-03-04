@@ -78,6 +78,75 @@ The training/inference scripts auto-detect these CSVs from `data/`. Trained mode
 Notes
 - Splits are chronological: the first block is used for training, the next for validation, and the final for testing.
 
+## Neural ensemble (Adaptive Mixture of Local Experts)
+
+A separate pipeline implements the softmax gating network from Jacobs, Jordan, Nowlan & Hinton (1991). Instead of Bayesian inference it trains a Lux neural network via MLE to learn context-dependent expert weights.
+
+### Running
+
+```bash
+julia --project=. -e 'using ProbabilisticEnsembling; run_neural_ensemble_experiment("sessions/neural_ensemble/neural_ensemble_ETTh1_96.yaml")'
+```
+
+Session files live under `sessions/neural_ensemble/`. Example (`neural_ensemble_ETTh1_96.yaml`):
+
+```yaml
+params:
+  pipeline: "neural_ensemble"
+  prediction_type: "univariate"
+  column: "OT"
+  dataset: "ETTh1"
+  dataset_path: "data/ETTh1.csv"
+  experts:
+    - "models/ETTh1_h96_s96_CNN_enzyme.jld2"
+    - "models/ETTh1_h96_s96_MLP_enzyme.jld2"
+    - "models/ETTh1_h96_s96_LSTM_enzyme.jld2"
+    - "models/ETTh1_h96_s96_DLinear_enzyme.jld2"
+    - "models/ETTh1_h96_s96_NConv_enzyme.jld2"
+  train_set: true
+  feature_type: "simple"
+  quantiles: [10, 90]
+  gating:
+    layers: 1
+    hidden_dim: 64
+    n_epochs: 100
+    patience: 50
+    min_delta: 1.0e-6
+    learning_rate: 1.0e-3
+  save_dir: "saved_neural_ensemble_models"
+```
+
+### Configuration fields
+
+| Field | Description |
+|-------|-------------|
+| `prediction_type` | `"univariate"` (single column) or `"multivariate"` (all columns) |
+| `column` | Target column name, required for univariate (e.g. `"OT"`) |
+| `train_set` | `true`: train gating on train split, monitor val. `false`: train on val, monitor train |
+| `feature_type` | `"simple"`, `"window"`, `"uniwindow"`, `"fft"`, `"fft:5"`, `"ae"`, `"vae"` |
+| `quantiles` | Quantile baselines added as extra constant experts, in percent (e.g. `[10, 90]`) |
+| `gating.layers` | `1` for linear gating, `>1` for MLP |
+| `gating.hidden_dim` | Hidden layer size for MLP gating |
+| `gating.n_epochs` | Maximum training epochs |
+| `gating.patience` | Early stopping patience |
+| `gating.min_delta` | Minimum improvement for early stopping |
+| `gating.learning_rate` | Adam optimizer learning rate |
+| `save_dir` | Directory for saved trained models |
+
+The `horizon` is inferred from the first expert model's metadata.
+
+### Predicting from a saved model
+
+Trained models are saved to `saved_neural_ensemble_models/` as JLD2 files. To re-run predictions on the test set from a saved model:
+
+```bash
+julia --project=. -e '
+using ProbabilisticEnsembling
+results = predict_from_trained_neural_ensemble("saved_neural_ensemble_models/ETTh1_h96_neural_ensemble_09f181e9.jld2")
+println(results.ensemble_metrics)
+'
+```
+
 ## Comparing trained models
 
 Use `scripts/compare_models.jl` to visually compare dynamic and static ensemble predictions side by side. The script loads saved results from `paper/results/`, runs inference with the trained posteriors, and produces a combined plot.
