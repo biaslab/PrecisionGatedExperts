@@ -242,6 +242,14 @@ end
 # Evaluate on test set
 # ---------------------------------------------------------------------------
 
+function create_normal_prediction(::Univariate, gating, ps, st, predictions, features)
+    logits, _ = gating(Float32.(features), ps, st)
+    precisions = map(exp, logits)
+    normals = [NormalMeanPrecision(pred, precision) for (pred, precision) in zip(predictions, precisions)]
+    normal_prediction = reduce((x, y) -> prod(BayesBase.GenericProd(), x, y), normals)
+    return normal_prediction
+end
+
 function evaluate_neural_ensemble(
     ::Univariate, gating, ps, st,
     predictions_test_vec, features_test,
@@ -251,17 +259,26 @@ function evaluate_neural_ensemble(
 
     ensemble_mean = hcat([moe_predict(predictions_test_vec[:, j], gating, ps, st, features_test[j]) for j in 1:n_test]...)
     ensemble_std = sqrt.(hcat([moe_var(predictions_test_vec[:, j], gating, ps, st, features_test[j]) for j in 1:n_test]...))
+    normal_predictions = [
+        create_normal_prediction(
+            Univariate(), gating, ps, st,
+            [predictions_test_vec[i, j][col_idx] for i in 1:size(predictions_test_vec, 1)],
+            features_test[j],
+        ) for j in 1:n_test
+    ]
     gating_weights = hcat([gating_probs(gating, ps, st, features_test[j]) for j in 1:n_test]...)
-
+    @info "Mean comparison" mean(normal_predictions[1]), ensemble_mean[col_idx, 1]
     # Evaluate on target column only
     y_eval = y_test_mat[col_idx:col_idx, :]
     ensemble_eval = ensemble_mean[col_idx:col_idx, :]
-    ensemble_std_eval = ensemble_std[col_idx:col_idx, :]
+    y_test = [y_test_mat[col_idx, j] for j in 1:n_test]
 
     ensemble_metrics = (
         mse = mse_mv(ensemble_eval, y_eval),
         mae = mae_mv(ensemble_eval, y_eval),
-        mean_std = mean(ensemble_std_eval),
+        nll = mean(
+            map((y_dist) -> logpdf(y_dist[2], y_dist[1]), zip(y_test, normal_predictions)),
+        ),
     )
 
     return (
