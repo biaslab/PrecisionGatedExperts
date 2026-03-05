@@ -242,6 +242,22 @@ end
 # Evaluate on test set
 # ---------------------------------------------------------------------------
 
+function create_normal_prediction(::Univariate, gating, ps, st, predictions, features)
+    logits, _ = gating(Float32.(features), ps, st)
+    precisions = map(exp, logits)
+    normals = [NormalMeanPrecision(pred, precision) for (pred, precision) in zip(predictions, precisions)]
+    normal_prediction = reduce((x, y) -> prod(BayesBase.GenericProd(), x, y), normals)
+    return normal_prediction
+end
+
+function create_normal_prediction(::Multivariate, gating, ps, st, predictions, features)
+    logits, _ = gating(Float32.(features), ps, st)
+    precisions = map(exp, logits)
+    normals = [MvNormalMeanScalePrecision(pred, prec) for (pred, prec) in zip(predictions, precisions)]
+    normal_prediction = reduce((x, y) -> prod(BayesBase.GenericProd(), x, y), normals)
+    return normal_prediction
+end
+
 function evaluate_neural_ensemble(
     ::Univariate, gating, ps, st,
     predictions_test_vec, features_test,
@@ -251,17 +267,44 @@ function evaluate_neural_ensemble(
 
     ensemble_mean = hcat([moe_predict(predictions_test_vec[:, j], gating, ps, st, features_test[j]) for j in 1:n_test]...)
     ensemble_std = sqrt.(hcat([moe_var(predictions_test_vec[:, j], gating, ps, st, features_test[j]) for j in 1:n_test]...))
+    normal_predictions = [
+        create_normal_prediction(
+            Univariate(), gating, ps, st,
+            [predictions_test_vec[i, j][col_idx] for i in 1:size(predictions_test_vec, 1)],
+            features_test[j],
+        ) for j in 1:n_test
+    ]
     gating_weights = hcat([gating_probs(gating, ps, st, features_test[j]) for j in 1:n_test]...)
 
     # Evaluate on target column only
     y_eval = y_test_mat[col_idx:col_idx, :]
     ensemble_eval = ensemble_mean[col_idx:col_idx, :]
-    ensemble_std_eval = ensemble_std[col_idx:col_idx, :]
+    y_test = [y_test_mat[col_idx, j] for j in 1:n_test]
+
+    # CI95 from Bayesian product-of-experts posterior
+    ci95_lower = [mean(normal_predictions[j]) - ZSCORE_95 * std(normal_predictions[j]) for j in 1:n_test]
+    ci95_upper = [mean(normal_predictions[j]) + ZSCORE_95 * std(normal_predictions[j]) for j in 1:n_test]
+    ci95_target_overlap = mean((y_test .>= ci95_lower) .& (y_test .<= ci95_upper))
+    ci95_avg_width = mean(ci95_upper .- ci95_lower)
+    ci95_interval_score = mean(
+        (ci95_upper .- ci95_lower) .+
+        (2 / ALPHA_95) .* ((ci95_lower .- y_test) .* (y_test .< ci95_lower)) .+
+        (2 / ALPHA_95) .* ((y_test .- ci95_upper) .* (y_test .> ci95_upper)),
+    )
 
     ensemble_metrics = (
         mse = mse_mv(ensemble_eval, y_eval),
         mae = mae_mv(ensemble_eval, y_eval),
-        mean_std = mean(ensemble_std_eval),
+        rmse = rmse_mv(ensemble_eval, y_eval),
+        r2 = r2_mv(ensemble_eval, y_eval),
+        mape = mape_mv(ensemble_eval, y_eval),
+        smape = smape_mv(ensemble_eval, y_eval),
+        nll = mean(
+            map((y_dist) -> logpdf(y_dist[2], y_dist[1]), zip(y_test, normal_predictions)),
+        ),
+        ci95_target_overlap = ci95_target_overlap,
+        ci95_avg_width = ci95_avg_width,
+        ci95_interval_score = ci95_interval_score,
     )
 
     return (
@@ -281,12 +324,42 @@ function evaluate_neural_ensemble(
 
     ensemble_mean = hcat([moe_predict(predictions_test_vec[:, j], gating, ps, st, features_test[j]) for j in 1:n_test]...)
     ensemble_std = sqrt.(hcat([moe_var(predictions_test_vec[:, j], gating, ps, st, features_test[j]) for j in 1:n_test]...))
+    normal_predictions = [
+        create_normal_prediction(
+            Multivariate(), gating, ps, st,
+            predictions_test_vec[:, j],
+            features_test[j],
+        ) for j in 1:n_test
+    ]
     gating_weights = hcat([gating_probs(gating, ps, st, features_test[j]) for j in 1:n_test]...)
+
+    # NLL from MvNormal product-of-experts posterior
+    nll = mean([logpdf(normal_predictions[j], y_test_mat[:, j]) for j in 1:n_test])
+
+    # CI95 from Bayesian product-of-experts posterior
+    posterior_mean = reduce(hcat, map(mean, normal_predictions))
+    posterior_std = reduce(hcat, map(_marginal_std, normal_predictions))
+    ci95_lower = posterior_mean .- ZSCORE_95 .* posterior_std
+    ci95_upper = posterior_mean .+ ZSCORE_95 .* posterior_std
+    ci95_target_overlap = mean((y_test_mat .>= ci95_lower) .& (y_test_mat .<= ci95_upper))
+    ci95_avg_width = mean(ci95_upper .- ci95_lower)
+    ci95_interval_score = mean(
+        (ci95_upper .- ci95_lower) .+
+        (2 / ALPHA_95) .* ((ci95_lower .- y_test_mat) .* (y_test_mat .< ci95_lower)) .+
+        (2 / ALPHA_95) .* ((y_test_mat .- ci95_upper) .* (y_test_mat .> ci95_upper)),
+    )
 
     ensemble_metrics = (
         mse = mse_mv(ensemble_mean, y_test_mat),
         mae = mae_mv(ensemble_mean, y_test_mat),
-        mean_std = mean(ensemble_std),
+        rmse = rmse_mv(ensemble_mean, y_test_mat),
+        r2 = r2_mv(ensemble_mean, y_test_mat),
+        mape = mape_mv(ensemble_mean, y_test_mat),
+        smape = smape_mv(ensemble_mean, y_test_mat),
+        nll = nll,
+        ci95_target_overlap = ci95_target_overlap,
+        ci95_avg_width = ci95_avg_width,
+        ci95_interval_score = ci95_interval_score,
     )
 
     return (

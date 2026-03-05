@@ -5,11 +5,11 @@ params:
   dataset: "ETTh1"
   dataset_path: "data/ETTh1.csv"
   experts:
-    - "models/ETTh1_h96_s96_CNN_enzyme.jld2"
-    - "models/ETTh1_h96_s96_MLP_enzyme.jld2"
-    - "models/ETTh1_h96_s96_LSTM_enzyme.jld2"
-    - "models/ETTh1_h96_s96_DLinear_enzyme.jld2"
-    - "models/ETTh1_h96_s96_NConv_enzyme.jld2"
+    - "models/ETTh1_h336_s96_CNN_enzyme.jld2"
+    - "models/ETTh1_h336_s96_MLP_enzyme.jld2"
+    - "models/ETTh1_h336_s96_LSTM_enzyme.jld2"
+    - "models/ETTh1_h336_s96_DLinear_enzyme.jld2"
+    - "models/ETTh1_h336_s96_NConv_enzyme.jld2"
   train_set: false
   feature_type: "simple"
   quantiles: [10, 90]
