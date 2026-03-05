@@ -3,10 +3,11 @@ using Printf
 
 const RESULTS_DIR = joinpath(@__DIR__, "..", "paper", "results")
 const HORIZONS = [96, 192, 336, 720]
-const ENSEMBLE_MODEL_TYPES = ["static", "dynamic"]
+const ENSEMBLE_MODEL_TYPES = ["static", "dynamic", "neural_ensemble"]
 const ENSEMBLE_MODEL_LABELS = Dict(
     "static" => "Static",
     "dynamic" => "Dyn.",
+    "neural_ensemble" => "MoE",
 )
 const BASELINE_MODELS = ["CNN", "DLinear", "LSTM", "MLP", "NConv"]
 
@@ -63,11 +64,26 @@ function result_filename(dataset::String, horizon::Int, pred_type::Symbol, model
 end
 
 function load_metrics(dataset::String, horizon::Int, pred_type::Symbol, model_type::String)
+    if model_type == "neural_ensemble"
+        return load_neural_ensemble_metrics(dataset, horizon, pred_type)
+    end
     fname = result_filename(dataset, horizon, pred_type, model_type)
     fpath = joinpath(RESULTS_DIR, model_type, fname)
     if !isfile(fpath)
         return nothing
     end
+    data = JLD2.load(fpath)
+    metrics = data["ensemble_metrics"]
+    return (mse = metrics.mse, mae = metrics.mae, nll = -metrics.nll)
+end
+
+function load_neural_ensemble_metrics(dataset::String, horizon::Int, pred_type::Symbol)
+    dir = joinpath(RESULTS_DIR, "neural_ensemble")
+    !isdir(dir) && return nothing
+    prefix = "$(dataset)_h$(horizon)_neural_ensemble"
+    matches = filter(f -> startswith(f, prefix) && endswith(f, ".jld2"), readdir(dir))
+    isempty(matches) && return nothing
+    fpath = joinpath(dir, first(matches))
     data = JLD2.load(fpath)
     metrics = data["ensemble_metrics"]
     return (mse = metrics.mse, mae = metrics.mae, nll = -metrics.nll)
@@ -143,7 +159,7 @@ function build_latex_table()
     push!(lines, "\\centering")
     push!(lines, "\\scriptsize")
     push!(lines, "\\setlength{\\tabcolsep}{2.5pt}")
-    push!(lines, "\\caption{MSE / MAE / NLL for Static and Dynamic (Dyn.) ensembles, compared against the best baseline model selected by lowest baseline MSE for each dataset and horizon.}")
+    push!(lines, "\\caption{MSE / MAE / NLL for Static, Dynamic (Dyn.), and Mixture of Experts (MoE) ensembles, compared against the best baseline model selected by lowest baseline MSE for each dataset and horizon.}")
     push!(lines, "\\label{tab:ensemble_comparison}")
     push!(lines, "\\begin{tabular}{$col_spec}")
     push!(lines, "\\toprule")
