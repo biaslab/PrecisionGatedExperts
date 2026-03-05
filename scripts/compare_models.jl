@@ -1,6 +1,6 @@
 #!/usr/bin/env julia
 #
-# Compare dynamic vs static model predictions from paper/results/
+# Compare dynamic, static, and neural ensemble (MoE) predictions from paper/results/
 #
 # Usage:
 #   julia --project scripts/compare_models.jl <dataset> <horizon> [--dim <d>]
@@ -73,6 +73,19 @@ function find_result_file(dataset::String, horizon::Int, model_type::String)
         endswith(f, ".jld2") || continue
         # Match pattern: dataset_h{horizon}_{suffix}_{model_type}.jld2
         if startswith(f, "$(dataset)_h$(horizon)_") && endswith(f, "_$(model_type).jld2")
+            return joinpath(dir, f)
+        end
+    end
+    return nothing
+end
+
+function find_neural_result_file(dataset::String, horizon::Int)
+    dir = joinpath(RESULTS_DIR, "neural_ensemble")
+    isdir(dir) || return nothing
+
+    for f in readdir(dir)
+        endswith(f, ".jld2") || continue
+        if startswith(f, "$(dataset)_h$(horizon)_neural_ensemble_")
             return joinpath(dir, f)
         end
     end
@@ -156,6 +169,13 @@ function run_prediction(path::String)
         selected_quantiles,
         n_forecasters,
     )
+end
+
+# ── Run neural ensemble prediction from a saved .jld2 ─────────────────────
+
+function run_neural_prediction(path::String)
+    @info "Running neural ensemble prediction for $(basename(path))..."
+    return predict_from_trained_neural_ensemble(path)
 end
 
 # ── Plotting helpers ─────────────────────────────────────────────────────────
@@ -266,11 +286,12 @@ function main()
 
     dynamic_path = find_result_file(dataset, horizon, "dynamic")
     static_path = find_result_file(dataset, horizon, "static")
+    neural_path = find_neural_result_file(dataset, horizon)
 
-    if isnothing(dynamic_path) && isnothing(static_path)
+    if isnothing(dynamic_path) && isnothing(static_path) && isnothing(neural_path)
         println(stderr, "No result files found for dataset=$dataset horizon=$horizon")
         println(stderr, "Available files in paper/results/:")
-        for d in ["dynamic", "static"]
+        for d in ["dynamic", "static", "neural_ensemble"]
             dir = joinpath(RESULTS_DIR, d)
             isdir(dir) && for f in readdir(dir)
                 println(stderr, "  $d/$f")
@@ -279,7 +300,7 @@ function main()
         exit(1)
     end
 
-    # Run predictions
+    # Run predictions for dynamic/static (RxInfer-based)
     results = Dict{String,Any}()
     if !isnothing(dynamic_path)
         @info "Loading dynamic model: $(basename(dynamic_path))"
@@ -290,10 +311,30 @@ function main()
         results["Static"] = run_prediction(static_path)
     end
 
-    # Use the first available result for ground truth and prediction type
-    first_result = first(values(results))
-    prediction_type = first_result.prediction_type
-    Y_for_metrics = first_result.Y_for_metrics
+    # Run neural ensemble prediction (separate because data shape differs)
+    neural_result = nothing
+    if !isnothing(neural_path)
+        @info "Loading neural ensemble: $(basename(neural_path))"
+        neural_result = run_neural_prediction(neural_path)
+    end
+
+    # Determine prediction type and ground truth
+    if !isempty(results)
+        first_result = first(values(results))
+        prediction_type = first_result.prediction_type
+        Y_for_metrics = first_result.Y_for_metrics
+    elseif !isnothing(neural_result)
+        prediction_type = neural_result.prediction_type
+        if is_multivariate(prediction_type)
+            Y_for_metrics = neural_result.y_test_mat
+        else
+            ci = neural_result.col_idx
+            Y_for_metrics = vec(neural_result.y_test_mat[ci, :])
+        end
+    else
+        println(stderr, "No results available")
+        exit(1)
+    end
 
     is_mv = is_multivariate(prediction_type)
     if is_mv
@@ -312,10 +353,26 @@ function main()
     n_test = length(y_true)
 
     if show_val
-        y_val = get_y_true(first_result.Y_val_for_metrics, prediction_type, dim)
-        n_val = length(y_val)
-        y_plot = vcat(y_val, y_true)
-        t_test = (n_val+1):(n_val+n_test)
+        # Validation ground truth is only available from dynamic/static results
+        val_result = nothing
+        for (_, res) in results
+            if hasproperty(res, :Y_val_for_metrics) && res.Y_val_for_metrics !== nothing
+                val_result = res
+                break
+            end
+        end
+        if !isnothing(val_result)
+            y_val = get_y_true(val_result.Y_val_for_metrics, prediction_type, dim)
+            n_val = length(y_val)
+            y_plot = vcat(y_val, y_true)
+            t_test = (n_val+1):(n_val+n_test)
+        else
+            @warn "--show-val requested but validation ground truth not available; disabling"
+            show_val = false
+            y_plot = y_true
+            n_val = 0
+            t_test = 1:n_test
+        end
     else
         y_plot = y_true
         n_val = 0
@@ -342,6 +399,17 @@ function main()
             color=c, linewidth=1.5)
         plot!(p1, t_test, μ .+ 1.96 .* σ, fillrange=μ .- 1.96 .* σ,
             fillalpha=0.15, linealpha=0, label="", color=c)
+    end
+
+    # Add neural ensemble (MoE) predictions using Bayesian posterior normal_predictions
+    if !isnothing(neural_result)
+        μ_n, σ_n = get_mean_std(neural_result.normal_predictions, neural_result.prediction_type, dim)
+        m = neural_result.ensemble_metrics
+        plot!(p1, t_test, μ_n,
+            label="MoE (MSE=$(round(m.mse, digits=4)), MAE=$(round(m.mae, digits=4)))",
+            color=:green, linewidth=1.5)
+        plot!(p1, t_test, μ_n .+ 1.96 .* σ_n, fillrange=μ_n .- 1.96 .* σ_n,
+            fillalpha=0.15, linealpha=0, label="", color=:green)
     end
 
     # ── Bottom plots: influence per model ────────────────────────────────
@@ -375,6 +443,24 @@ function main()
         end
     end
 
+    # Add neural ensemble gating weights subplot
+    if !isnothing(neural_result)
+        gw = neural_result.gating_weights  # n_experts × n_test (already softmax-normalized)
+        n_f = neural_result.n_forecasters
+        n_t = size(gw, 2)
+        labels = build_forecaster_labels(neural_result.experts, neural_result.selected_quantiles, n_f)
+        expert_colors = distinguishable_colors(n_f, [RGB(1,1,1), RGB(0,0,0)], dropseed=true)
+
+        p_gating = plot(title="MoE — Gating Weights",
+            ylabel="Softmax prob.", xlabel="Time Step",
+            legend=:topright, legendfontsize=8)
+        for i in 1:n_f
+            plot!(p_gating, 1:n_t, gw[i, :],
+                label=labels[i], color=expert_colors[i], linewidth=1.5)
+        end
+        push!(subplots, p_gating)
+    end
+
     # ── Layout ───────────────────────────────────────────────────────────
     n_sub = length(subplots)
     if n_sub == 1
@@ -383,18 +469,17 @@ function main()
         l = @layout [a; b]
         p = plot(subplots..., layout=l, size=(2400, 1400), margin=6Plots.mm, dpi=600)
     elseif n_sub == 3
-        has_dynamic = haskey(results, "Dynamic")
-        if has_dynamic
-            l = @layout [a; b; c]
-            p = plot(subplots..., layout=l, size=(2400, 1800), margin=6Plots.mm, dpi=600)
-        else
-            l = @layout [a; b c]
-            p = plot(subplots..., layout=l, size=(2400, 1400), margin=6Plots.mm, dpi=600)
-        end
-    else
-        # Both models: predictions | dynamic gammas (full width) | topshare + static bar
+        l = @layout [a; b; c]
+        p = plot(subplots..., layout=l, size=(2400, 1800), margin=6Plots.mm, dpi=600)
+    elseif n_sub == 4
         l = @layout [a; b; c d]
         p = plot(subplots..., layout=l, size=(2400, 1800), margin=6Plots.mm, dpi=600)
+    elseif n_sub == 5
+        l = @layout [a; b; c d; e]
+        p = plot(subplots..., layout=l, size=(2400, 2200), margin=6Plots.mm, dpi=600)
+    else
+        l = @layout [a; b; c d; e f]
+        p = plot(subplots..., layout=l, size=(2400, 2400), margin=6Plots.mm, dpi=600)
     end
 
     outfile = "compare_$(dataset)_h$(horizon)_dim$(dim).png"
