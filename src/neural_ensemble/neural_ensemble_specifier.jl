@@ -142,5 +142,12 @@ function predict_from_trained_neural_ensemble(path_to_jld2::String)
         ensemble_std = results.ensemble_std,
         ensemble_metrics = results.ensemble_metrics,
         gating_weights = results.gating_weights,
+        normal_predictions = results.normal_predictions,
+        prediction_type = spec.prediction_type,
+        experts = spec.experts,
+        selected_quantiles = spec.selected_quantiles,
+        n_forecasters = data.n_total,
+        y_test_mat = data.y_test_mat,
+        col_idx = data.col_idx,
     )
 end

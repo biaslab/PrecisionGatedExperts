@@ -312,6 +312,7 @@ function evaluate_neural_ensemble(
         ensemble_std = ensemble_std,
         ensemble_metrics = ensemble_metrics,
         gating_weights = gating_weights,
+        normal_predictions = normal_predictions,
     )
 end
 
@@ -367,6 +368,7 @@ function evaluate_neural_ensemble(
         ensemble_std = ensemble_std,
         ensemble_metrics = ensemble_metrics,
         gating_weights = gating_weights,
+        normal_predictions = normal_predictions,
     )
 end
 
