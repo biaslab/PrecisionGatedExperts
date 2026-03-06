@@ -175,3 +175,54 @@ Label(fig[0, 1:2],
 outpath = joinpath(@__DIR__, "..", "fe_vs_metrics.png")
 save(outpath, fig; px_per_unit = 2)
 @info "Saved" outpath
+
+# ── Free Energy vs Iterations plot ───────────────────────────────────────────
+
+fig2 = Figure(size = (700, 500), fontsize = 13)
+ax_fe = Axis(fig2[1, 1]; title = "Free Energy vs Iterations",
+             xlabel = "Iterations", ylabel = "Free Energy")
+
+for ds in datasets
+    for h in horizons
+        subset = filter(r -> r.dataset == ds && r.horizon == h, runs)
+        isempty(subset) && continue
+
+        xs = [r.iterations for r in subset]
+        ys = [r.fe_final   for r in subset]
+
+        scatter!(ax_fe, xs, ys;
+            color  = dataset_colors[ds],
+            marker = horizon_markers[h],
+            markersize = 14,
+            strokewidth = 0.5,
+            strokecolor = :black,
+        )
+
+        order = sortperm(xs)
+        lines!(ax_fe, xs[order], ys[order];
+            color     = (dataset_colors[ds], 0.3),
+            linewidth = 1.0,
+        )
+    end
+end
+
+# Legend
+dataset_elems2 = [MarkerElement(; color = dataset_colors[ds], marker = :circle,
+                                 markersize = 12) for ds in datasets]
+horizon_elems2 = [MarkerElement(; color = :gray50, marker = horizon_markers[h],
+                                 markersize = 12) for h in horizons]
+
+Legend(fig2[2, 1],
+    [dataset_elems2..., horizon_elems2...],
+    [datasets..., ["h=$h" for h in horizons]...];
+    orientation = :horizontal,
+    tellheight  = true,
+    tellwidth   = false,
+    framevisible = false,
+    nbanks = 1,
+    labelsize = 12,
+)
+
+outpath2 = joinpath(@__DIR__, "..", "fe_vs_iterations.png")
+save(outpath2, fig2; px_per_unit = 2)
+@info "Saved" outpath2
