@@ -324,7 +324,7 @@ function main()
     models_dir = joinpath("models")
     mkpath(models_dir)
 
-    datasets = let ds = get(ENV, "DATASETS", "ETTh2, ETTh1, exchange_rate")
+    datasets = let ds = get(ENV, "DATASETS", "traffic , electricity")
         split(ds, [',', ';', ' ']; keepempty = false)
     end
 
@@ -334,11 +334,11 @@ function main()
     lr = parse(Float32, get(ENV, "LR", "0.001"))
     patience = parse(Int, get(ENV, "PATIENCE", "20"))
 
-    ae_channels = parse(Int, get(ENV, "AE_CHANNELS", "32"))
-    ae_hidden = parse(Int, get(ENV, "AE_HIDDEN", "64"))
-    ae_latent = parse(Int, get(ENV, "AE_LATENT", "32"))
-    ae_kernel = parse(Int, get(ENV, "AE_KERNEL", "5"))
-    model_kind = Symbol(lowercase(get(ENV, "MODEL_KIND", "vae")))
+    ae_channels = parse(Int, get(ENV, "AE_CHANNELS", "64"))
+    ae_hidden = parse(Int, get(ENV, "AE_HIDDEN", "128"))
+    ae_latent = parse(Int, get(ENV, "AE_LATENT", "64"))
+    ae_kernel = parse(Int, get(ENV, "AE_KERNEL", "7"))
+    model_kind = Symbol(lowercase(get(ENV, "MODEL_KIND", "ae")))
     model_kind in (:ae, :vae) || error("MODEL_KIND must be one of: ae, vae")
     vae_beta = parse(Float32, get(ENV, "VAE_BETA", "0.001"))
 
