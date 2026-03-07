@@ -32,6 +32,11 @@ include("model_zoo/univariate_y/dynamic/dynamic.jl")
 include("model_zoo/multivariate_y/dynamic/dynamic.jl")
 include("model_zoo/univariate_y/dynamic/pipeline.jl")
 
+# noisy experts
+include("model_zoo/univariate_y/noisy_experts/model_type.jl")
+include("model_zoo/univariate_y/noisy_experts/noisy_experts.jl")
+include("model_zoo/univariate_y/noisy_experts/pipeline.jl")
+
 # neural ensemble pipeline (Adaptive Mixture of Local Experts)
 include("neural_ensemble/neural_ensemble_types.jl")
 include("neural_ensemble/gating.jl")
