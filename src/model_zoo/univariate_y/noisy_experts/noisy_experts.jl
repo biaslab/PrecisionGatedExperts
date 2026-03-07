@@ -3,7 +3,7 @@
 # E_q[-log Uninformative(x)] = 0 since log(const) = 0.
 # ---------------------------------------------------------------------------
 
-@average_energy Uninformative (q_out::Any,) = begin
+@average_energy Uninformative (q_out::PointMass,) = begin
     return 0.0
 end
 

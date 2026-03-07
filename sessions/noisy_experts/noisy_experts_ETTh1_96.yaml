@@ -6,7 +6,7 @@ params:
   dataset_path: "data/ETTh1.csv"
   horizon: 96
   feature_type: "uniwindow"
-  inference_iterations: 5
+  inference_iterations: 1
   prediction_iterations: 3
   selected_quantiles: [10, 90]
   experts:
