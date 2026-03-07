@@ -13,30 +13,24 @@ include("low_rank_normal.jl")
 # low rank softdot
 include("low_rank_softdot.jl")
 
-# model zoo univariate_y
-include("model_zoo/univariate_y/static_ensemble.jl")
-include("model_zoo/univariate_y/dynamic.jl")
-include("model_zoo/univariate_y/hierarchial.jl")
-include("model_zoo/univariate_y/dynamic_noisy_observations.jl")
-include("model_zoo/univariate_y/deep.jl")
-
-# model zoo multivariate_y
-include("model_zoo/multivariate_y/static_ensemble.jl")
-include("model_zoo/multivariate_y/dynamic.jl")
-include("model_zoo/multivariate_y/hierarchial.jl")
-include("model_zoo/multivariate_y/deep.jl")
-
-# model types & prior parsing
+# shared infrastructure (must precede model files)
 include("model_zoo/model_types.jl")
-
-# feature extraction
 include("model_zoo/features.jl")
-
-# shared pipeline utilities (must precede model_specifier and neural ensemble)
 include("model_zoo/shared_pipeline.jl")
-
-# model running (RxInfer pipeline)
 include("model_zoo/model_specifier.jl")
+
+# model implementations
+# static
+include("model_zoo/univariate_y/static/model_type.jl")
+include("model_zoo/univariate_y/static/static.jl")
+include("model_zoo/multivariate_y/static/static.jl")
+include("model_zoo/univariate_y/static/pipeline.jl")
+
+# dynamic
+include("model_zoo/univariate_y/dynamic/model_type.jl")
+include("model_zoo/univariate_y/dynamic/dynamic.jl")
+include("model_zoo/multivariate_y/dynamic/dynamic.jl")
+include("model_zoo/univariate_y/dynamic/pipeline.jl")
 
 # neural ensemble pipeline (Adaptive Mixture of Local Experts)
 include("neural_ensemble/neural_ensemble_types.jl")

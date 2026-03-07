@@ -32,15 +32,6 @@ end
 # YAML → ExperimentSpecifier
 # ---------------------------------------------------------------------------
 
-function parse_model_type(s::String)
-    s == "static" && return Static()
-    s == "dynamic" && return Dynamic()
-    s == "hierarchical" && return Hierarchical()
-    s == "dynamic_noisy_observations" && return DynamicNoisyObservations()
-    s == "deep" && return Deep()
-    error("Unknown model_type: $s")
-end
-
 function _normalize_selected_quantiles(raw_quantiles)
     quantiles_vec = Float64.(raw_quantiles)
     isempty(quantiles_vec) && return Float64[]
@@ -87,8 +78,8 @@ end
 
 function _parse_spec(config)
     p = config["params"]
-    prediction_type = parse_prediction_type(p["prediction_type"])
-    model_type = parse_model_type(p["model_type"])
+    prediction_type = _parse_prediction_type(p["prediction_type"])
+    model_type = _parse_model_type(p["model_type"])
     column = get(p, "column", nothing)
     horizon = p["horizon"]
     dataset = Val(Symbol(p["dataset"]))
@@ -142,7 +133,7 @@ function run_experiment(path_to_yaml::String)
     results_dir = "final_results"
     mkpath(results_dir)
     ds_name = typeof(spec.dataset).parameters[1]
-    model_name = lowercase(string(typeof(spec.model_type)))
+    model_name = model_type_name(spec.model_type)
 
     if spec.prediction_type isa Univariate
         fname = "$(ds_name)_h$(spec.horizon)_$(spec.column)_$(model_name)_$(hash(config)).jld2"
@@ -164,20 +155,204 @@ function run_experiment(path_to_yaml::String)
     return results_with_raw_spec
 end
 
-function _parse_saved_prediction_type(s::AbstractString)
-    occursin("Univariate", s) && return Univariate()
-    occursin("Multivariate", s) && return Multivariate()
-    error("Unknown saved prediction_type: $s")
+# ---------------------------------------------------------------------------
+# Spec serialization helper (used by all pipeline functions)
+# ---------------------------------------------------------------------------
+
+function _save_spec(spec::ExperimentSpecifier; column = spec.column)
+    return (
+        prediction_type = model_prediction_name(spec.prediction_type),
+        model_type = model_type_name(spec.model_type),
+        column = column,
+        horizon = spec.horizon,
+        dataset = typeof(spec.dataset).parameters[1],
+        dataset_path = spec.dataset_path,
+        experts = spec.experts,
+        selected_quantiles = spec.selected_quantiles,
+        number_of_quantiles = spec.number_of_quantiles,
+    )
 end
 
-function _parse_saved_model_type(s::AbstractString)
-    occursin("Static", s) && return Static()
-    occursin("Dynamic", s) && return Dynamic()
-    occursin("Hierarchical", s) && return Hierarchical()
-    occursin("DynamicNoisyObservations", s) && return DynamicNoisyObservations()
-    occursin("Deep", s) && return Deep()
-    error("Unknown saved model_type: $s")
+# ---------------------------------------------------------------------------
+# Generic pipeline hooks — defaults (models override in their pipeline.jl)
+# ---------------------------------------------------------------------------
+
+# build_rxinfer_model(pt, mt, n_forecasters, n_obs, priors) — required, no default
+
+build_rxinfer_constraints(::Any, ::Any, _, _) = nothing
+build_rxinfer_init(::Any, ::Any, _) = nothing
+build_training_data(::Any, ::Any, y, features, predictions) =
+    (y = y, features = features, predictions = predictions)
+training_posterior_keys(::ModelType) = (:γ,)
+prediction_prior_keys(mt::ModelType) =
+    Tuple(k for k in training_posterior_keys(mt) if k !== :γ)
+
+# model_results(pt, mt, training_posteriors, test_posteriors) — required, no default
+
+function _compute_n_obs(spec, n_val)
+    if !isnothing(spec.subsample_percentage)
+        return round(Int, n_val * spec.subsample_percentage)
+    else
+        return something(spec.subsample_size, n_val)
+    end
 end
+
+function _build_infer_kwargs(pt, mt, priors, prediction::Bool)
+    kwargs = Dict{Symbol,Any}(:showprogress => true)
+    c = build_rxinfer_constraints(pt, mt, priors, prediction)
+    isnothing(c) || (kwargs[:constraints] = c)
+    i = build_rxinfer_init(pt, mt, priors)
+    isnothing(i) || (kwargs[:initialization] = i)
+    return kwargs
+end
+
+function _expert_mse(::Univariate, predictions_val, y_val, i)
+    return mse(predictions_val[i, :], y_val)
+end
+
+function _expert_mse(::Multivariate, predictions_val, y_val, i)
+    pred_mat_i = reduce(hcat, predictions_val[i, :])
+    Yval_mat = reduce(hcat, y_val)
+    return mse_mv(pred_mat_i, Yval_mat)
+end
+
+function _log_validation_metrics(pt, mt, posteriors, predictions_val, y_val)
+    n_forecasters = size(predictions_val, 1)
+    γ = posteriors[:γ]
+    γ_means = mean.(γ)
+    is_matrix = ndims(γ_means) == 2
+
+    model_name = model_type_name(mt)
+    @info "Learned $(model_name) weights on validation"
+    for i = 1:n_forecasters
+        mse_i = _expert_mse(pt, predictions_val, y_val, i)
+        if is_matrix
+            avg_γ = mean(γ_means[i, :])
+            @info "Expert $i" avg_E_γ = round(avg_γ; digits = 4) val_MSE =
+                round(mse_i; digits = 6)
+        else
+            @info "Expert $i" E_γ = round(γ_means[i]; digits = 4) val_MSE =
+                round(mse_i; digits = 6)
+        end
+    end
+end
+
+function _save_spec_column(::Univariate, spec)
+    return spec.column
+end
+
+function _save_spec_column(::Multivariate, _)
+    return nothing
+end
+
+# ---------------------------------------------------------------------------
+# Generic run_experiment — dispatches to model hooks
+# ---------------------------------------------------------------------------
+
+function run_experiment(spec::ExperimentSpecifier)
+    pt, mt = spec.prediction_type, spec.model_type
+    y_val, y_test, predictions_val, predictions_test, features_val, features_test =
+        before_rxinfer(spec)
+    n_forecasters = size(predictions_val, 1)
+    n_val = length(y_val)
+    n_test = length(y_test)
+    n_obs = _compute_n_obs(spec, n_val)
+    @info n_obs
+
+    # Build model + train
+    model = build_rxinfer_model(pt, mt, n_forecasters, n_obs, spec.priors)
+    data = build_training_data(pt, mt, y_val, features_val, predictions_val)
+    train_kwargs = _build_infer_kwargs(pt, mt, spec.priors, false)
+
+    @info "Fitting $(model_type_name(mt)) ensemble on validation data" n_forecasters n_val
+    result = run_training_rxinfer(spec, model, data; train_kwargs...)
+
+    # Extract posteriors
+    posteriors =
+        Dict{Symbol,Any}(k => result.posteriors[k][end] for k in training_posterior_keys(mt))
+    free_energy = result.free_energy
+
+    _log_validation_metrics(pt, mt, posteriors, predictions_val, y_val)
+
+    # Prediction on test
+    prediction_priors = Dict{Symbol,Any}(
+        k => deepcopy(posteriors[k]) for k in prediction_prior_keys(mt)
+    )
+
+    @info "Generating $(model_type_name(mt)) ensemble predictions on test"
+    prediction_array = [missing for _ = 1:n_test]
+    infer_test = predict_with_model(
+        pt,
+        mt,
+        prediction_priors;
+        n_forecasters = n_forecasters,
+        n_steps = n_test,
+        prediction_array = prediction_array,
+        predictions_test = predictions_test,
+        features_test = features_test,
+        prediction_iterations = spec.prediction_iterations,
+    )
+
+    # Metrics
+    ensemble_preds = infer_test.predictions[:y][end]
+    y_metrics = prepare_y_for_metrics(pt, y_test)
+    (; ensemble_mean, ensemble_std, ensemble_metrics) =
+        compute_ensemble_metrics(pt, ensemble_preds, y_metrics)
+    @info "Ensemble test metrics" ensemble_metrics...
+
+    # Build results: model-specific fields + common fields
+    test_posteriors = Dict{Symbol,Any}()
+    for k in training_posterior_keys(mt)
+        if haskey(infer_test.posteriors, k)
+            test_posteriors[k] = infer_test.posteriors[k][end]
+        end
+    end
+    model_fields = model_results(pt, mt, posteriors, test_posteriors)
+
+    return merge(
+        model_fields,
+        (
+            free_energy = free_energy,
+            ensemble_mean = ensemble_mean,
+            ensemble_std = ensemble_std,
+            ensemble_metrics = ensemble_metrics,
+            predictions_test = predictions_test,
+            y_test = y_metrics,
+            spec = _save_spec(spec; column = _save_spec_column(pt, spec)),
+        ),
+    )
+end
+
+# ---------------------------------------------------------------------------
+# Generic predict_with_model — dispatches to model hooks
+# ---------------------------------------------------------------------------
+
+function predict_with_model(
+    pt,
+    mt,
+    priors;
+    n_forecasters,
+    n_steps,
+    prediction_array,
+    predictions_test,
+    features_test,
+    prediction_iterations,
+)
+    model = build_rxinfer_model(pt, mt, n_forecasters, n_steps, priors)
+    data = build_training_data(pt, mt, prediction_array, features_test, predictions_test)
+    kwargs = _build_infer_kwargs(pt, mt, priors, true)
+    return infer(;
+        model = model,
+        data = data,
+        iterations = prediction_iterations,
+        free_energy = false,
+        kwargs...,
+    )
+end
+
+# ---------------------------------------------------------------------------
+# Load saved results → re-predict
+# ---------------------------------------------------------------------------
 
 function _dataset_val(x)
     return x isa Symbol ? Val(x) : Val(Symbol(x))
@@ -211,8 +386,8 @@ function _spec_for_prediction_from_saved(saved, prediction_iterations::Int)
     spec_saved = saved["spec"]
 
     function _from_saved_fields()
-        prediction_type = _parse_saved_prediction_type(string(spec_saved.prediction_type))
-        model_type = _parse_saved_model_type(string(spec_saved.model_type))
+        prediction_type = _parse_prediction_type(string(spec_saved.prediction_type))
+        model_type = _parse_model_type(string(spec_saved.model_type))
         column = isnothing(spec_saved.column) ? nothing : String(spec_saved.column)
         dataset = _dataset_val(spec_saved.dataset)
         dataset_path = String(spec_saved.dataset_path)
@@ -272,313 +447,11 @@ function _spec_for_prediction_from_saved(saved, prediction_iterations::Int)
     return _from_saved_fields()
 end
 
-# ---------------------------------------------------------------------------
-# Prediction dispatch: extract_prediction_priors + predict_with_model
-# ---------------------------------------------------------------------------
-
 prepare_y_test(::Univariate, y_test_all, n_steps) = Float64.(y_test_all)
 
 function prepare_y_test(::Multivariate, y_test_all, n_steps)
     return y_test_all isa AbstractMatrix ? [Float64.(y_test_all[:, j]) for j = 1:n_steps] :
            y_test_all
-end
-
-function extract_prediction_priors(::Static, saved, alpha)
-    return Dict{Symbol,Any}(:γ => saved["γ_posteriors"])
-end
-
-function extract_prediction_priors(::Dynamic, saved, alpha)
-    return Dict{Symbol,Any}(
-        :w => saved["w_posteriors"],
-        :τ => saved["τ_posteriors"],
-        :β => saved["β_posteriors"],
-    )
-end
-
-function extract_prediction_priors(::Hierarchical, saved, alpha)
-    return Dict{Symbol,Any}(
-        :w => saved["w_posteriors"],
-        :τ => saved["τ_posteriors"],
-        :ρ => saved["ρ_posteriors"],
-        :α => alpha,
-    )
-end
-
-function extract_prediction_priors(::DynamicNoisyObservations, saved, alpha)
-    return Dict{Symbol,Any}(
-        :w => saved["w_posteriors"],
-        :τ => saved["τ_posteriors"],
-        :β => saved["β_posteriors"],
-        :κ => saved["κ_posterior"],
-    )
-end
-
-function extract_prediction_priors(::Deep, saved, alpha)
-    return Dict{Symbol,Any}(
-        :w => saved["w_posteriors"],
-        :v => saved["v_posteriors"],
-        :τ => saved["τ_posteriors"],
-        :ρ => saved["ρ_posteriors"],
-        :α => alpha,
-    )
-end
-
-# --- Static ---
-
-function predict_with_model(
-    ::Univariate,
-    ::Static,
-    priors;
-    n_forecasters,
-    n_steps,
-    prediction_array,
-    predictions_test,
-    features_test,
-    prediction_iterations,
-)
-    return infer(
-        model = univariate_ensemble_precision_model(
-            n_forecasters = n_forecasters,
-            priors = priors,
-        ),
-        data = (y = prediction_array, X = predictions_test),
-        iterations = prediction_iterations,
-    )
-end
-
-function predict_with_model(
-    ::Multivariate,
-    ::Static,
-    priors;
-    n_forecasters,
-    n_steps,
-    prediction_array,
-    predictions_test,
-    features_test,
-    prediction_iterations,
-)
-    return infer(
-        model = multivariate_ensemble_precision_model(
-            n_forecasters = n_forecasters,
-            priors = priors,
-        ),
-        data = (y = prediction_array, X = predictions_test),
-        iterations = prediction_iterations,
-    )
-end
-
-# --- Dynamic ---
-
-function predict_with_model(
-    ::Univariate,
-    ::Dynamic,
-    priors;
-    n_forecasters,
-    n_steps,
-    prediction_array,
-    predictions_test,
-    features_test,
-    prediction_iterations,
-)
-    return infer(
-        model = univariate_dynamic_ensemble(
-            n_forecasters = n_forecasters,
-            n_obs = n_steps,
-            priors = priors,
-        ),
-        data = (
-            y = prediction_array,
-            features = features_test,
-            predictions = predictions_test,
-        ),
-        constraints = univariate_dynamic_ensemble_constraints(priors, true),
-        initialization = univariate_dynamic_ensemble_init(priors),
-        iterations = prediction_iterations,
-        free_energy = false,
-        showprogress = true,
-    )
-end
-
-function predict_with_model(
-    ::Multivariate,
-    ::Dynamic,
-    priors;
-    n_forecasters,
-    n_steps,
-    prediction_array,
-    predictions_test,
-    features_test,
-    prediction_iterations,
-)
-    return infer(
-        model = multivariate_dynamic_ensemble(
-            n_forecasters = n_forecasters,
-            n_obs = n_steps,
-            priors = priors,
-        ),
-        data = (
-            y = prediction_array,
-            features = features_test,
-            predictions = predictions_test,
-        ),
-        constraints = multivariate_dynamic_ensemble_constraints(priors, true),
-        initialization = multivariate_dynamic_ensemble_init(priors),
-        iterations = prediction_iterations,
-        free_energy = false,
-        showprogress = true,
-    )
-end
-
-# --- DynamicNoisyObservations ---
-
-function predict_with_model(
-    ::Univariate,
-    ::DynamicNoisyObservations,
-    priors;
-    n_forecasters,
-    n_steps,
-    prediction_array,
-    predictions_test,
-    features_test,
-    prediction_iterations,
-)
-    return infer(
-        model = univariate_dynamic_noisy_ensemble(
-            n_forecasters = n_forecasters,
-            n_obs = n_steps,
-            priors = priors,
-        ),
-        data = (
-            y = prediction_array,
-            features = features_test,
-            predictions = predictions_test,
-        ),
-        constraints = univariate_dynamic_noisy_ensemble_constraints(priors, true),
-        initialization = univariate_dynamic_noisy_ensemble_init(priors),
-        iterations = prediction_iterations,
-        free_energy = false,
-        showprogress = true,
-    )
-end
-
-# --- Hierarchical ---
-
-function predict_with_model(
-    ::Univariate,
-    ::Hierarchical,
-    priors;
-    n_forecasters,
-    n_steps,
-    prediction_array,
-    predictions_test,
-    features_test,
-    prediction_iterations,
-)
-    return infer(
-        model = hierarchical_model(
-            n_forecasters = n_forecasters,
-            n_obs = n_steps,
-            priors = priors,
-        ),
-        data = (
-            y = prediction_array,
-            features = features_test,
-            predictions = predictions_test,
-        ),
-        constraints = hierarchical_constraints(priors, true),
-        initialization = hierarchical_init(priors),
-        iterations = prediction_iterations,
-        free_energy = false,
-        showprogress = true,
-    )
-end
-
-function predict_with_model(
-    ::Multivariate,
-    ::Hierarchical,
-    priors;
-    n_forecasters,
-    n_steps,
-    prediction_array,
-    predictions_test,
-    features_test,
-    prediction_iterations,
-)
-    return infer(
-        model = multivariate_hierarchical_model(
-            n_forecasters = n_forecasters,
-            n_obs = n_steps,
-            priors = priors,
-        ),
-        data = (
-            y = prediction_array,
-            features = features_test,
-            predictions = predictions_test,
-        ),
-        constraints = multivariate_hierarchical_constraints(priors, true),
-        initialization = multivariate_hierarchical_init(priors),
-        iterations = prediction_iterations,
-        free_energy = false,
-        showprogress = true,
-    )
-end
-
-# --- Deep ---
-
-function predict_with_model(
-    ::Univariate,
-    ::Deep,
-    priors;
-    n_forecasters,
-    n_steps,
-    prediction_array,
-    predictions_test,
-    features_test,
-    prediction_iterations,
-)
-    return infer(
-        model = deep_model(n_forecasters = n_forecasters, n_obs = n_steps, priors = priors),
-        data = (
-            y = prediction_array,
-            features = features_test,
-            predictions = predictions_test,
-        ),
-        constraints = deep_constraints(),
-        initialization = deep_init(priors),
-        iterations = prediction_iterations,
-        free_energy = false,
-        showprogress = true,
-    )
-end
-
-function predict_with_model(
-    ::Multivariate,
-    ::Deep,
-    priors;
-    n_forecasters,
-    n_steps,
-    prediction_array,
-    predictions_test,
-    features_test,
-    prediction_iterations,
-)
-    return infer(
-        model = multivariate_deep_model(
-            n_forecasters = n_forecasters,
-            n_obs = n_steps,
-            priors = priors,
-        ),
-        data = (
-            y = prediction_array,
-            features = features_test,
-            predictions = predictions_test,
-        ),
-        constraints = multivariate_deep_constraints(),
-        initialization = multivariate_deep_init(priors),
-        iterations = prediction_iterations,
-        free_energy = false,
-        showprogress = true,
-    )
 end
 
 function prepare_y_for_metrics(::Univariate, y_test)
@@ -588,7 +461,6 @@ end
 function prepare_y_for_metrics(::Multivariate, y_test)
     return reduce(hcat, y_test)
 end
-
 
 """
     predict_from_trained_ensemble(path_to_jld2; prediction_iterations=20, alpha=1.0)
@@ -611,6 +483,9 @@ function predict_from_trained_ensemble(
         before_rxinfer(spec_for_data)
     n_steps = length(y_test_all)
 
+    prediction_type = spec_for_data.prediction_type
+    model_type = spec_for_data.model_type
+
     y_test = prepare_y_test(prediction_type, y_test_all, n_steps)
     predictions_test = predictions_test_all
     features_test = features_test_all
@@ -618,7 +493,7 @@ function predict_from_trained_ensemble(
     n_forecasters = size(predictions_test, 1)
     prediction_array = [missing for _ = 1:n_steps]
 
-    priors = extract_prediction_priors(model_type, saved, alpha)
+    priors = extract_prediction_priors(model_type, saved)
     @info "Prediction start"
     infer_test = predict_with_model(
         prediction_type,
@@ -652,44 +527,8 @@ function predict_from_trained_ensemble(
 end
 
 # ---------------------------------------------------------------------------
-# Dispatch: ExperimentSpecifier → concrete pipeline
+# Feature helpers
 # ---------------------------------------------------------------------------
-
-function run_experiment(spec::ExperimentSpecifier{Univariate,Static})
-    return run_static_univariate(spec)
-end
-
-function run_experiment(spec::ExperimentSpecifier{Multivariate,Static})
-    return run_static_multivariate(spec)
-end
-
-function run_experiment(spec::ExperimentSpecifier{Univariate,Dynamic})
-    return run_dynamic_univariate(spec)
-end
-
-function run_experiment(spec::ExperimentSpecifier{Multivariate,Dynamic})
-    return run_dynamic_multivariate(spec)
-end
-
-function run_experiment(spec::ExperimentSpecifier{Univariate,DynamicNoisyObservations})
-    return run_dynamic_noisy_observations_univariate(spec)
-end
-
-function run_experiment(spec::ExperimentSpecifier{Univariate,Hierarchical})
-    return run_hierarchical_univariate(spec)
-end
-
-function run_experiment(spec::ExperimentSpecifier{Multivariate,Hierarchical})
-    return run_hierarchical_multivariate(spec)
-end
-
-function run_experiment(spec::ExperimentSpecifier{Univariate,Deep})
-    return run_deep_univariate(spec)
-end
-
-function run_experiment(spec::ExperimentSpecifier{Multivariate,Deep})
-    return run_deep_multivariate(spec)
-end
 
 function _before_rxinfer_features(_, feature_type::UniWindowFeatures, X, col_idx)
     return make_features(feature_type, X, col_idx)
@@ -699,14 +538,9 @@ function _before_rxinfer_features(spec, feature_type, X, _)
     return make_features(feature_type, X, spec.dataset)
 end
 
-function _before_rxinfer_features(
-    ::ExperimentSpecifier{T,Static},
-    feature_type,
-    X,
-    _,
-) where {T}
-    return nothing
-end
+# ---------------------------------------------------------------------------
+# Data loading
+# ---------------------------------------------------------------------------
 
 function before_rxinfer(spec::ExperimentSpecifier{Univariate})
     @info "Loading expert models" n = length(spec.experts)
@@ -814,6 +648,10 @@ function before_rxinfer(spec::ExperimentSpecifier{Multivariate})
     return (y_val, y_test, predictions_val, predictions_test, features_val, features_test)
 end
 
+# ---------------------------------------------------------------------------
+# Training dispatcher
+# ---------------------------------------------------------------------------
+
 function run_training_rxinfer(spec, subsampled_data::Int, model, data; kwargs...)
     @show "Use subsampled data with sample size $(subsampled_data)"
     @info "Repeat each batch $(spec.repeat_batch) times"
@@ -858,989 +696,4 @@ function run_training_rxinfer(spec, model, data; kwargs...)
     else
         return run_training_rxinfer(spec, nothing, model, data; kwargs...)
     end
-end
-
-# ---------------------------------------------------------------------------
-# Static Univariate pipeline
-# ---------------------------------------------------------------------------
-
-function run_static_univariate(spec::ExperimentSpecifier{Univariate,Static})
-    y_val, y_test, predictions_val, predictions_test, _, _ = before_rxinfer(spec)
-    n_forecasters = size(predictions_val, 1)
-
-    model = univariate_ensemble_precision_model(
-        n_forecasters = n_forecasters,
-        priors = spec.priors,
-    )
-    data = (y = y_val, X = predictions_val)
-
-    @info "Fitting static ensemble on validation data"
-    result = run_training_rxinfer(spec, model, data)
-
-    free_energy = result.free_energy
-    γ_posteriors = result.posteriors[:γ][end]
-    γ_means = map(mean, γ_posteriors)
-    weights = γ_means ./ sum(γ_means)
-
-    @info "Learned precision weights"
-    for i = 1:n_forecasters
-        mse_i = mse(predictions_val[i, :], y_val)
-        @info "Expert $i" E_γ = round(γ_means[i]; digits = 4) val_MSE =
-            round(mse_i; digits = 6) weight = round(weights[i]; digits = 4)
-    end
-
-    @info "Generating ensemble predictions on test"
-    posterior_priors = Dict{Symbol,Any}(:γ => γ_posteriors)
-    prediction_array = [missing for _ = 1:length(y_test)]
-    infer_test = infer(
-        model = univariate_ensemble_precision_model(
-            n_forecasters = n_forecasters,
-            priors = posterior_priors,
-        ),
-        data = (y = prediction_array, X = predictions_test),
-        iterations = spec.prediction_iterations,
-    )
-
-    ensemble_preds = infer_test.predictions[:y][end]
-    (; ensemble_mean, ensemble_std, ensemble_metrics) =
-        compute_ensemble_metrics(spec.prediction_type, ensemble_preds, y_test)
-
-    results = (
-        γ_posteriors = γ_posteriors,
-        weights = weights,
-        free_energy = free_energy,
-        ensemble_mean = ensemble_mean,
-        ensemble_std = ensemble_std,
-        ensemble_metrics = ensemble_metrics,
-        predictions_test = predictions_test,
-        y_test = y_test,
-        spec = (
-            prediction_type = string(typeof(spec.prediction_type)),
-            model_type = string(typeof(spec.model_type)),
-            column = spec.column,
-            horizon = spec.horizon,
-            dataset = typeof(spec.dataset).parameters[1],
-            dataset_path = spec.dataset_path,
-            experts = spec.experts,
-            selected_quantiles = spec.selected_quantiles,
-            number_of_quantiles = spec.number_of_quantiles,
-        ),
-    )
-
-    return results
-end
-
-# ---------------------------------------------------------------------------
-# Static Multivariate pipeline
-# ---------------------------------------------------------------------------
-function run_static_multivariate(spec::ExperimentSpecifier{Multivariate,Static})
-    y_val, y_test, predictions_val, predictions_test, _, _ = before_rxinfer(spec)
-    n_forecasters = size(predictions_val, 1)
-    n_test = length(y_test)
-    d = length(y_val[1])
-
-    model = multivariate_ensemble_precision_model(
-        n_forecasters = n_forecasters,
-        priors = spec.priors,
-    )
-    data = (y = y_val, X = predictions_val)
-
-    @info "Fitting static multivariate ensemble on validation data" d n_forecasters
-    result = run_training_rxinfer(spec, model, data; showprogress = true)
-
-    free_energy = result.free_energy
-    γ_posteriors = result.posteriors[:γ][end]
-    γ_means = map(mean, γ_posteriors)
-    weights = γ_means ./ sum(γ_means)
-
-    # Per-expert validation MSE (multivariate)
-    Yval_mat = reduce(hcat, y_val)
-    @info "Learned precision weights"
-    for i = 1:n_forecasters
-        pred_mat_i = reduce(hcat, predictions_val[i, :])  # (d, n_val)
-        mse_i = mse_mv(pred_mat_i, Yval_mat)
-        @info "Expert $i" E_γ = round(γ_means[i]; digits = 4) val_MSE =
-            round(mse_i; digits = 6) weight = round(weights[i]; digits = 4)
-    end
-
-    # 5. Ensemble predictions on test
-    @info "Generating ensemble predictions on test"
-    posterior_priors = Dict{Symbol,Any}(:γ => γ_posteriors)
-    prediction_array = [missing for _ = 1:n_test]
-    infer_test = infer(
-        model = multivariate_ensemble_precision_model(
-            n_forecasters = n_forecasters,
-            priors = posterior_priors,
-        ),
-        data = (y = prediction_array, X = predictions_test),
-        iterations = spec.prediction_iterations,
-    )
-
-    ensemble_preds = infer_test.predictions[:y][end]
-    Yte_mat = reduce(hcat, y_test)
-    (; ensemble_mean, ensemble_std, ensemble_metrics) =
-        compute_ensemble_metrics(spec.prediction_type, ensemble_preds, Yte_mat)
-
-    @info "Ensemble test metrics (multivariate)" ensemble_metrics...
-
-    # 7. Save results
-    results = (
-        γ_posteriors = γ_posteriors,
-        weights = weights,
-        free_energy = free_energy,
-        ensemble_mean = ensemble_mean,
-        ensemble_std = ensemble_std,
-        ensemble_metrics = ensemble_metrics,
-        predictions_test = predictions_test,
-        y_test = Yte_mat,
-        spec = (
-            prediction_type = string(typeof(spec.prediction_type)),
-            model_type = string(typeof(spec.model_type)),
-            column = nothing,
-            horizon = spec.horizon,
-            dataset = typeof(spec.dataset).parameters[1],
-            dataset_path = spec.dataset_path,
-            experts = spec.experts,
-            selected_quantiles = spec.selected_quantiles,
-            number_of_quantiles = spec.number_of_quantiles,
-        ),
-    )
-
-    return results
-end
-
-function run_dynamic_univariate(spec::ExperimentSpecifier{Univariate,Dynamic})
-    y_val, y_test, predictions_val, predictions_test, features_val, features_test =
-        before_rxinfer(spec)
-    n_forecasters = size(predictions_val, 1)
-    n_val = length(y_val)
-    n_test = length(y_test)
-
-    if !isnothing(spec.subsample_percentage)
-        n_obs = round(Int, n_val*spec.subsample_percentage)
-    else
-        n_obs = something(spec.subsample_size, n_val)
-    end
-    @info n_obs
-
-    model = univariate_dynamic_ensemble(
-        n_forecasters = n_forecasters,
-        n_obs = n_obs,
-        priors = spec.priors,
-    )
-    constraints = univariate_dynamic_ensemble_constraints(spec.priors, false)
-    init = univariate_dynamic_ensemble_init(spec.priors)
-    data = (y = y_val, features = features_val, predictions = predictions_val)
-
-    @info "Fitting dynamic ensemble on validation data" n_forecasters n_val
-    result = run_training_rxinfer(
-        spec,
-        model,
-        data;
-        constraints = constraints,
-        initialization = init,
-        showprogress = true,
-    )
-
-    free_energy = result.free_energy
-    w_posteriors = result.posteriors[:w][end]
-    τ_posteriors = result.posteriors[:τ][end]
-    β_posteriors = result.posteriors[:β][end]
-    γ_posteriors = result.posteriors[:γ][end]  # (n_forecasters, n_val)
-
-    γ_means_val = mean.(γ_posteriors)
-
-    @info "Learned dynamic weights on validation"
-    for i = 1:n_forecasters
-        mse_i = mse(predictions_val[i, :], y_val)
-        avg_γ = mean(γ_means_val[i, :])
-        @info "Expert $i" avg_E_γ = round(avg_γ; digits = 4) val_MSE =
-            round(mse_i; digits = 6)
-    end
-
-    # 6. Ensemble predictions on test
-    @info "Generating dynamic ensemble predictions on test"
-    # deepcopy posteriors to prevent in-place mutation by LowRank product rules
-    posterior_priors = Dict{Symbol,Any}(
-        :w => deepcopy(w_posteriors),
-        :τ => deepcopy(τ_posteriors),
-        :β => deepcopy(β_posteriors),
-    )
-    prediction_array = [missing for _ = 1:n_test]
-
-    infer_test = infer(
-        model = univariate_dynamic_ensemble(
-            n_forecasters = n_forecasters,
-            n_obs = n_test,
-            priors = posterior_priors,
-        ),
-        data = (
-            y = prediction_array,
-            features = features_test,
-            predictions = predictions_test,
-        ),
-        constraints = univariate_dynamic_ensemble_constraints(posterior_priors, true),
-        initialization = univariate_dynamic_ensemble_init(posterior_priors),
-        iterations = spec.prediction_iterations,
-        free_energy = false,
-        showprogress = true,
-    )
-
-    ensemble_preds = infer_test.predictions[:y][end]
-    (; ensemble_mean, ensemble_std, ensemble_metrics) =
-        compute_ensemble_metrics(spec.prediction_type, ensemble_preds, y_test)
-
-    # Extract dynamic precision weights on test
-    γ_test_posteriors = infer_test.posteriors[:γ][end]
-    γ_means_test = mean.(γ_test_posteriors)
-
-    @info "Ensemble test metrics" ensemble_metrics...
-
-    # 8. Save results
-    results = (
-        w_posteriors = w_posteriors,
-        τ_posteriors = τ_posteriors,
-        β_posteriors = β_posteriors,
-        γ_test = γ_means_test,
-        free_energy = free_energy,
-        ensemble_mean = ensemble_mean,
-        ensemble_std = ensemble_std,
-        ensemble_metrics = ensemble_metrics,
-        predictions_test = predictions_test,
-        y_test = y_test,
-        spec = (
-            prediction_type = string(typeof(spec.prediction_type)),
-            model_type = string(typeof(spec.model_type)),
-            column = spec.column,
-            horizon = spec.horizon,
-            dataset = typeof(spec.dataset).parameters[1],
-            dataset_path = spec.dataset_path,
-            experts = spec.experts,
-            selected_quantiles = spec.selected_quantiles,
-            number_of_quantiles = spec.number_of_quantiles,
-        ),
-    )
-
-    return results
-end
-
-# ---------------------------------------------------------------------------
-# DynamicNoisyObservations Univariate pipeline
-# ---------------------------------------------------------------------------
-
-function run_dynamic_noisy_observations_univariate(
-    spec::ExperimentSpecifier{Univariate,DynamicNoisyObservations},
-)
-    y_val, y_test, predictions_val, predictions_test, features_val, features_test =
-        before_rxinfer(spec)
-    n_forecasters = size(predictions_val, 1)
-    n_val = length(y_val)
-    n_test = length(y_test)
-
-    if !isnothing(spec.subsample_percentage)
-        n_obs = round(Int, n_val*spec.subsample_percentage)
-    else
-        n_obs = something(spec.subsample_size, n_val)
-    end
-    @info n_obs
-
-    model = univariate_dynamic_noisy_ensemble(
-        n_forecasters = n_forecasters,
-        n_obs = n_obs,
-        priors = spec.priors,
-    )
-    constraints = univariate_dynamic_noisy_ensemble_constraints(spec.priors, false)
-    init = univariate_dynamic_noisy_ensemble_init(spec.priors)
-    data = (y = y_val, features = features_val, predictions = predictions_val)
-
-    @info "Fitting dynamic noisy observations ensemble on validation data" n_forecasters n_val
-    result = run_training_rxinfer(
-        spec,
-        model,
-        data;
-        constraints = constraints,
-        initialization = init,
-        showprogress = true,
-    )
-
-    free_energy = result.free_energy
-    w_posteriors = result.posteriors[:w][end]
-    τ_posteriors = result.posteriors[:τ][end]
-    β_posteriors = result.posteriors[:β][end]
-    κ_posterior = result.posteriors[:κ][end]
-    γ_posteriors = result.posteriors[:γ][end]
-
-    γ_means_val = mean.(γ_posteriors)
-
-    @info "Learned dynamic noisy observations weights on validation"
-    for i = 1:n_forecasters
-        mse_i = mse(predictions_val[i, :], y_val)
-        avg_γ = mean(γ_means_val[i, :])
-        @info "Expert $i" avg_E_γ = round(avg_γ; digits = 4) val_MSE =
-            round(mse_i; digits = 6)
-    end
-    @info "Observation noise precision κ" E_κ = round(mean(κ_posterior); digits = 4)
-
-    # Ensemble predictions on test
-    @info "Generating dynamic noisy observations ensemble predictions on test"
-    posterior_priors = Dict{Symbol,Any}(
-        :w => deepcopy(w_posteriors),
-        :τ => deepcopy(τ_posteriors),
-        :β => deepcopy(β_posteriors),
-        :κ => deepcopy(κ_posterior),
-    )
-    prediction_array = [missing for _ = 1:n_test]
-
-    infer_test = infer(
-        model = univariate_dynamic_noisy_ensemble(
-            n_forecasters = n_forecasters,
-            n_obs = n_test,
-            priors = posterior_priors,
-        ),
-        data = (
-            y = prediction_array,
-            features = features_test,
-            predictions = predictions_test,
-        ),
-        constraints = univariate_dynamic_noisy_ensemble_constraints(posterior_priors, true),
-        initialization = univariate_dynamic_noisy_ensemble_init(posterior_priors),
-        iterations = spec.prediction_iterations,
-        free_energy = false,
-        showprogress = true,
-    )
-
-    ensemble_preds = infer_test.predictions[:y][end]
-    (; ensemble_mean, ensemble_std, ensemble_metrics) =
-        compute_ensemble_metrics(spec.prediction_type, ensemble_preds, y_test)
-
-    γ_test_posteriors = infer_test.posteriors[:γ][end]
-    γ_means_test = mean.(γ_test_posteriors)
-
-    @info "Ensemble test metrics" ensemble_metrics...
-
-    results = (
-        w_posteriors = w_posteriors,
-        τ_posteriors = τ_posteriors,
-        β_posteriors = β_posteriors,
-        κ_posterior = κ_posterior,
-        γ_test = γ_means_test,
-        free_energy = free_energy,
-        ensemble_mean = ensemble_mean,
-        ensemble_std = ensemble_std,
-        ensemble_metrics = ensemble_metrics,
-        predictions_test = predictions_test,
-        y_test = y_test,
-        spec = (
-            prediction_type = string(typeof(spec.prediction_type)),
-            model_type = string(typeof(spec.model_type)),
-            column = spec.column,
-            horizon = spec.horizon,
-            dataset = typeof(spec.dataset).parameters[1],
-            dataset_path = spec.dataset_path,
-            experts = spec.experts,
-            selected_quantiles = spec.selected_quantiles,
-            number_of_quantiles = spec.number_of_quantiles,
-        ),
-    )
-
-    return results
-end
-
-# ---------------------------------------------------------------------------
-# Dynamic Multivariate pipeline
-# ---------------------------------------------------------------------------
-
-function run_dynamic_multivariate(spec::ExperimentSpecifier{Multivariate,Dynamic})
-    y_val, y_test, predictions_val, predictions_test, features_val, features_test =
-        before_rxinfer(spec)
-    n_forecasters = size(predictions_val, 1)
-    n_val = length(y_val)
-    n_test = length(y_test)
-    d = length(y_val[1])
-
-    if !isnothing(spec.subsample_percentage)
-        n_obs = round(Int, n_val*spec.subsample_percentage)
-    else
-        n_obs = something(spec.subsample_size, n_val)
-    end
-    @info n_obs
-
-    model = multivariate_dynamic_ensemble(
-        n_forecasters = n_forecasters,
-        n_obs = n_obs,
-        priors = spec.priors,
-    )
-    constraints = multivariate_dynamic_ensemble_constraints(spec.priors, false)
-    init = multivariate_dynamic_ensemble_init(spec.priors)
-    data = (y = y_val, features = features_val, predictions = predictions_val)
-
-    @info "Fitting dynamic multivariate ensemble on validation data" d n_forecasters n_val
-    result = run_training_rxinfer(
-        spec,
-        model,
-        data;
-        constraints = constraints,
-        initialization = init,
-        showprogress = true,
-    )
-
-    free_energy = result.free_energy
-    w_posteriors = result.posteriors[:w][end]
-    τ_posteriors = result.posteriors[:τ][end]
-    β_posteriors = result.posteriors[:β][end]
-    γ_posteriors = result.posteriors[:γ][end]
-
-    γ_means_val = mean.(γ_posteriors)
-
-    Yval_mat = reduce(hcat, y_val)
-    @info "Learned dynamic weights on validation"
-    for i = 1:n_forecasters
-        pred_mat_i = reduce(hcat, predictions_val[i, :])  # (d, n_val)
-        mse_i = mse_mv(pred_mat_i, Yval_mat)
-        avg_γ = mean(γ_means_val[i, :])
-        @info "Expert $i" avg_E_γ = round(avg_γ; digits = 4) val_MSE =
-            round(mse_i; digits = 6)
-    end
-
-    # Ensemble predictions on test
-    @info "Generating dynamic ensemble predictions on test"
-    # deepcopy posteriors to prevent in-place mutation by LowRank product rules
-    posterior_priors = Dict{Symbol,Any}(
-        :w => deepcopy(w_posteriors),
-        :τ => deepcopy(τ_posteriors),
-        :β => deepcopy(β_posteriors),
-    )
-
-    infer_test = predict_with_model(
-        spec.prediction_type,
-        spec.model_type,
-        posterior_priors;
-        n_forecasters = n_forecasters,
-        n_steps = n_test,
-        prediction_array = [missing for _ = 1:n_test],
-        predictions_test = predictions_test,
-        features_test = features_test,
-        prediction_iterations = spec.prediction_iterations,
-    )
-
-    ensemble_preds = infer_test.predictions[:y][end]
-    Yte_mat = reduce(hcat, y_test)
-    (; ensemble_mean, ensemble_std, ensemble_metrics) =
-        compute_ensemble_metrics(spec.prediction_type, ensemble_preds, Yte_mat)
-
-    # Extract dynamic precision weights on test
-    γ_test_posteriors = infer_test.posteriors[:γ][end]
-    γ_means_test = mean.(γ_test_posteriors)
-
-    @info "Ensemble test metrics (multivariate)" ensemble_metrics...
-
-    # Save results
-    results = (
-        w_posteriors = w_posteriors,
-        τ_posteriors = τ_posteriors,
-        β_posteriors = β_posteriors,
-        γ_test = γ_means_test,
-        free_energy = free_energy,
-        ensemble_mean = ensemble_mean,
-        ensemble_std = ensemble_std,
-        ensemble_metrics = ensemble_metrics,
-        predictions_test = predictions_test,
-        y_test = Yte_mat,
-        spec = (
-            prediction_type = string(typeof(spec.prediction_type)),
-            model_type = string(typeof(spec.model_type)),
-            column = nothing,
-            horizon = spec.horizon,
-            dataset = typeof(spec.dataset).parameters[1],
-            dataset_path = spec.dataset_path,
-            experts = spec.experts,
-            selected_quantiles = spec.selected_quantiles,
-            number_of_quantiles = spec.number_of_quantiles,
-        ),
-    )
-
-    return results
-end
-
-# ---------------------------------------------------------------------------
-# Hierarchical Univariate pipeline
-# ---------------------------------------------------------------------------
-
-function run_hierarchical_univariate(spec::ExperimentSpecifier{Univariate,Hierarchical})
-    y_val, y_test, predictions_val, predictions_test, features_val, features_test =
-        before_rxinfer(spec)
-    n_forecasters = size(predictions_val, 1)
-    n_val = length(y_val)
-    n_test = length(y_test)
-
-    if !isnothing(spec.subsample_percentage)
-        n_obs = round(Int, n_val*spec.subsample_percentage)
-    else
-        n_obs = something(spec.subsample_size, n_val)
-    end
-    @info n_obs
-
-    model = hierarchical_model(
-        n_forecasters = n_forecasters,
-        n_obs = n_obs,
-        priors = spec.priors,
-    )
-    constraints = hierarchical_constraints(spec.priors, false)
-    init = hierarchical_init(spec.priors)
-    data = (y = y_val, features = features_val, predictions = predictions_val)
-
-    @info "Fitting hierarchical ensemble on validation data" n_forecasters n_val
-    result = run_training_rxinfer(
-        spec,
-        model,
-        data;
-        constraints = constraints,
-        initialization = init,
-        showprogress = true,
-    )
-
-    free_energy = result.free_energy
-    w_posteriors = result.posteriors[:w][end]
-    τ_posteriors = result.posteriors[:τ][end]
-    ρ_posteriors = result.posteriors[:ρ][end]
-    γ_posteriors = result.posteriors[:γ][end]  # (n_forecasters, n_val)
-
-    γ_means_val = mean.(γ_posteriors)
-
-    @info "Learned hierarchical weights on validation"
-    for i = 1:n_forecasters
-        mse_i = mse(predictions_val[i, :], y_val)
-        avg_γ = mean(γ_means_val[i, :])
-        @info "Expert $i" avg_E_γ = round(avg_γ; digits = 4) val_MSE =
-            round(mse_i; digits = 6)
-    end
-
-    # 6. Ensemble predictions on test
-    @info "Generating hierarchical ensemble predictions on test"
-    # deepcopy posteriors to prevent in-place mutation by LowRank product rules
-    posterior_priors = Dict{Symbol,Any}(
-        :w => deepcopy(w_posteriors),
-        :τ => deepcopy(τ_posteriors),
-        :ρ => deepcopy(ρ_posteriors),
-        :α => spec.priors[:α],
-    )
-    prediction_array = [missing for _ = 1:n_test]
-
-    infer_test = infer(
-        model = hierarchical_model(
-            n_forecasters = n_forecasters,
-            n_obs = n_test,
-            priors = posterior_priors,
-        ),
-        data = (
-            y = prediction_array,
-            features = features_test,
-            predictions = predictions_test,
-        ),
-        constraints = hierarchical_constraints(posterior_priors, true),
-        initialization = hierarchical_init(posterior_priors),
-        iterations = spec.prediction_iterations,
-        free_energy = false,
-        showprogress = true,
-    )
-
-    ensemble_preds = infer_test.predictions[:y][end]
-    (; ensemble_mean, ensemble_std, ensemble_metrics) =
-        compute_ensemble_metrics(spec.prediction_type, ensemble_preds, y_test)
-
-    # Extract precision weights on test
-    γ_test_posteriors = infer_test.posteriors[:γ][end]
-    γ_means_test = mean.(γ_test_posteriors)
-
-    @info "Ensemble test metrics" ensemble_metrics...
-
-    # 8. Save results
-    results = (
-        w_posteriors = w_posteriors,
-        τ_posteriors = τ_posteriors,
-        ρ_posteriors = ρ_posteriors,
-        γ_test = γ_means_test,
-        free_energy = free_energy,
-        ensemble_mean = ensemble_mean,
-        ensemble_std = ensemble_std,
-        ensemble_metrics = ensemble_metrics,
-        predictions_test = predictions_test,
-        y_test = y_test,
-        spec = (
-            prediction_type = string(typeof(spec.prediction_type)),
-            model_type = string(typeof(spec.model_type)),
-            column = spec.column,
-            horizon = spec.horizon,
-            dataset = typeof(spec.dataset).parameters[1],
-            dataset_path = spec.dataset_path,
-            experts = spec.experts,
-            selected_quantiles = spec.selected_quantiles,
-            number_of_quantiles = spec.number_of_quantiles,
-        ),
-    )
-
-    return results
-end
-
-# ---------------------------------------------------------------------------
-# Hierarchical Multivariate pipeline
-# ---------------------------------------------------------------------------
-
-function run_hierarchical_multivariate(spec::ExperimentSpecifier{Multivariate,Hierarchical})
-    y_val, y_test, predictions_val, predictions_test, features_val, features_test =
-        before_rxinfer(spec)
-    n_forecasters = size(predictions_val, 1)
-    n_val = length(y_val)
-    n_test = length(y_test)
-    d = length(y_val[1])
-
-    if !isnothing(spec.subsample_percentage)
-        n_obs = round(Int, n_val*spec.subsample_percentage)
-    else
-        n_obs = something(spec.subsample_size, n_val)
-    end
-    @info n_obs
-
-    model = multivariate_hierarchical_model(
-        n_forecasters = n_forecasters,
-        n_obs = n_obs,
-        priors = spec.priors,
-    )
-    constraints = multivariate_hierarchical_constraints(spec.priors, false)
-    init = multivariate_hierarchical_init(spec.priors)
-    data = (y = y_val, features = features_val, predictions = predictions_val)
-
-    @info "Fitting hierarchical multivariate ensemble on validation data" d n_forecasters n_val
-    result = run_training_rxinfer(
-        spec,
-        model,
-        data;
-        constraints = constraints,
-        initialization = init,
-        showprogress = true,
-    )
-
-    free_energy = result.free_energy
-    w_posteriors = result.posteriors[:w][end]
-    τ_posteriors = result.posteriors[:τ][end]
-    ρ_posteriors = result.posteriors[:ρ][end]
-    γ_posteriors = result.posteriors[:γ][end]
-
-    γ_means_val = mean.(γ_posteriors)
-    Yval_mat = reduce(hcat, y_val)
-    @info "Learned hierarchical weights on validation"
-    for i = 1:n_forecasters
-        pred_mat_i = reduce(hcat, predictions_val[i, :])
-        mse_i = mse_mv(pred_mat_i, Yval_mat)
-        avg_γ = mean(γ_means_val[i, :])
-        @info "Expert $i" avg_E_γ = round(avg_γ; digits = 4) val_MSE =
-            round(mse_i; digits = 6)
-    end
-
-    @info "Generating hierarchical ensemble predictions on test"
-    # deepcopy posteriors to prevent in-place mutation by LowRank product rules
-    posterior_priors = Dict{Symbol,Any}(
-        :w => deepcopy(w_posteriors),
-        :τ => deepcopy(τ_posteriors),
-        :ρ => deepcopy(ρ_posteriors),
-        :α => spec.priors[:α],
-    )
-    prediction_array = [missing for _ = 1:n_test]
-
-    infer_test = infer(
-        model = multivariate_hierarchical_model(
-            n_forecasters = n_forecasters,
-            n_obs = n_test,
-            priors = posterior_priors,
-        ),
-        data = (
-            y = prediction_array,
-            features = features_test,
-            predictions = predictions_test,
-        ),
-        constraints = multivariate_hierarchical_constraints(posterior_priors, true),
-        initialization = multivariate_hierarchical_init(posterior_priors),
-        iterations = spec.prediction_iterations,
-        free_energy = false,
-        showprogress = true,
-    )
-
-    ensemble_preds = infer_test.predictions[:y][end]
-    Yte_mat = reduce(hcat, y_test)
-    (; ensemble_mean, ensemble_std, ensemble_metrics) =
-        compute_ensemble_metrics(spec.prediction_type, ensemble_preds, Yte_mat)
-
-    # Extract precision weights on test
-    γ_test_posteriors = infer_test.posteriors[:γ][end]
-    γ_means_test = mean.(γ_test_posteriors)
-
-    @info "Ensemble test metrics (multivariate)" ensemble_metrics...
-
-    # Save results
-    results = (
-        w_posteriors = w_posteriors,
-        τ_posteriors = τ_posteriors,
-        ρ_posteriors = ρ_posteriors,
-        γ_test = γ_means_test,
-        free_energy = free_energy,
-        ensemble_mean = ensemble_mean,
-        ensemble_std = ensemble_std,
-        ensemble_metrics = ensemble_metrics,
-        predictions_test = predictions_test,
-        y_test = Yte_mat,
-        spec = (
-            prediction_type = string(typeof(spec.prediction_type)),
-            model_type = string(typeof(spec.model_type)),
-            column = nothing,
-            horizon = spec.horizon,
-            dataset = typeof(spec.dataset).parameters[1],
-            dataset_path = spec.dataset_path,
-            experts = spec.experts,
-            selected_quantiles = spec.selected_quantiles,
-            number_of_quantiles = spec.number_of_quantiles,
-        ),
-    )
-
-    return results
-end
-
-function run_deep_multivariate(spec::ExperimentSpecifier{Multivariate,Deep})
-    y_val, y_test, predictions_val, predictions_test, features_val, features_test =
-        before_rxinfer(spec)
-    n_forecasters = size(predictions_val, 1)
-    n_val = length(y_val)
-    n_test = length(y_test)
-    d = length(y_val[1])
-
-    if !isnothing(spec.subsample_percentage)
-        n_obs = round(Int, n_val*spec.subsample_percentage)
-    else
-        n_obs = something(spec.subsample_size, n_val)
-    end
-    @info n_obs
-
-    model = multivariate_deep_model(
-        n_forecasters = n_forecasters,
-        n_obs = n_obs,
-        priors = spec.priors,
-    )
-    constraints = multivariate_deep_constraints()
-    init = multivariate_deep_init(spec.priors)
-    data = (y = y_val, features = features_val, predictions = predictions_val)
-
-    @info "Fitting deep multivariate ensemble on validation data" d n_forecasters n_val
-    result = run_training_rxinfer(
-        spec,
-        model,
-        data;
-        constraints = constraints,
-        initialization = init,
-        showprogress = true,
-    )
-
-    free_energy = result.free_energy
-    w_posteriors = result.posteriors[:w][end]
-    v_posteriors = result.posteriors[:v][end]
-    τ_posteriors = result.posteriors[:τ][end]
-    ρ_posteriors = result.posteriors[:ρ][end]
-    γ_posteriors = result.posteriors[:γ][end]
-
-    γ_means_val = mean.(γ_posteriors)
-
-    Yval_mat = reduce(hcat, y_val)
-    @info "Learned deep weights on validation"
-    for i = 1:n_forecasters
-        pred_mat_i = reduce(hcat, predictions_val[i, :])
-        mse_i = mse_mv(pred_mat_i, Yval_mat)
-        avg_γ = mean(γ_means_val[i, :])
-        @info "Expert $i" avg_E_γ = round(avg_γ; digits = 4) val_MSE =
-            round(mse_i; digits = 6)
-    end
-
-    # Ensemble predictions on test
-    @info "Generating deep ensemble predictions on test"
-    # deepcopy posteriors to prevent in-place mutation by LowRank product rules
-    posterior_priors = Dict{Symbol,Any}(
-        :w => deepcopy(w_posteriors),
-        :v => deepcopy(v_posteriors),
-        :τ => deepcopy(τ_posteriors),
-        :ρ => deepcopy(ρ_posteriors),
-        :α => spec.priors[:α],
-    )
-    prediction_array = [missing for _ = 1:n_test]
-
-    infer_test = infer(
-        model = multivariate_deep_model(
-            n_forecasters = n_forecasters,
-            n_obs = n_test,
-            priors = posterior_priors,
-        ),
-        data = (
-            y = prediction_array,
-            features = features_test,
-            predictions = predictions_test,
-        ),
-        constraints = multivariate_deep_constraints(),
-        initialization = multivariate_deep_init(posterior_priors),
-        iterations = spec.prediction_iterations,
-        free_energy = false,
-        showprogress = true,
-    )
-
-    ensemble_preds = infer_test.predictions[:y][end]
-    Yte_mat = reduce(hcat, y_test)
-    (; ensemble_mean, ensemble_std, ensemble_metrics) =
-        compute_ensemble_metrics(spec.prediction_type, ensemble_preds, Yte_mat)
-
-    γ_test_posteriors = infer_test.posteriors[:γ][end]
-    γ_means_test = mean.(γ_test_posteriors)
-
-    @info "Ensemble test metrics (multivariate)" ensemble_metrics...
-
-    # Save results
-    results = (
-        w_posteriors = w_posteriors,
-        v_posteriors = v_posteriors,
-        τ_posteriors = τ_posteriors,
-        ρ_posteriors = ρ_posteriors,
-        γ_test = γ_means_test,
-        free_energy = free_energy,
-        ensemble_mean = ensemble_mean,
-        ensemble_std = ensemble_std,
-        ensemble_metrics = ensemble_metrics,
-        predictions_test = predictions_test,
-        y_test = Yte_mat,
-        spec = (
-            prediction_type = string(typeof(spec.prediction_type)),
-            model_type = string(typeof(spec.model_type)),
-            column = nothing,
-            horizon = spec.horizon,
-            dataset = typeof(spec.dataset).parameters[1],
-            dataset_path = spec.dataset_path,
-            experts = spec.experts,
-            selected_quantiles = spec.selected_quantiles,
-            number_of_quantiles = spec.number_of_quantiles,
-        ),
-    )
-
-    return results
-end
-
-# ---------------------------------------------------------------------------
-# Deep Univariate pipeline
-# ---------------------------------------------------------------------------
-
-function run_deep_univariate(spec::ExperimentSpecifier{Univariate,Deep})
-    y_val, y_test, predictions_val, predictions_test, features_val, features_test =
-        before_rxinfer(spec)
-    n_forecasters = size(predictions_val, 1)
-    n_val = length(y_val)
-    n_test = length(y_test)
-
-    if !isnothing(spec.subsample_percentage)
-        n_obs = round(Int, n_val*spec.subsample_percentage)
-    else
-        n_obs = something(spec.subsample_size, n_val)
-    end
-    @info n_obs
-
-    model = deep_model(n_forecasters = n_forecasters, n_obs = n_obs, priors = spec.priors)
-    constraints = deep_constraints()
-    init = deep_init(spec.priors)
-    data = (y = y_val, features = features_val, predictions = predictions_val)
-
-    @info "Fitting deep ensemble on validation data" n_forecasters n_val
-    result = run_training_rxinfer(
-        spec,
-        model,
-        data;
-        constraints = constraints,
-        initialization = init,
-        showprogress = true,
-    )
-
-    free_energy = result.free_energy
-    w_posteriors = result.posteriors[:w][end]
-    v_posteriors = result.posteriors[:v][end]
-    τ_posteriors = result.posteriors[:τ][end]
-    ρ_posteriors = result.posteriors[:ρ][end]
-    γ_posteriors = result.posteriors[:γ][end]
-
-    γ_means_val = mean.(γ_posteriors)
-
-    @info "Learned deep weights on validation"
-    for i = 1:n_forecasters
-        mse_i = mse(predictions_val[i, :], y_val)
-        avg_γ = mean(γ_means_val[i, :])
-        @info "Expert $i" avg_E_γ = round(avg_γ; digits = 4) val_MSE =
-            round(mse_i; digits = 6)
-    end
-
-    # 6. Ensemble predictions on test
-    @info "Generating deep ensemble predictions on test"
-    # deepcopy posteriors to prevent in-place mutation by LowRank product rules
-    posterior_priors = Dict{Symbol,Any}(
-        :w => deepcopy(w_posteriors),
-        :v => deepcopy(v_posteriors),
-        :τ => deepcopy(τ_posteriors),
-        :ρ => deepcopy(ρ_posteriors),
-        :α => spec.priors[:α],
-    )
-    prediction_array = [missing for _ = 1:n_test]
-
-    infer_test = infer(
-        model = deep_model(
-            n_forecasters = n_forecasters,
-            n_obs = n_test,
-            priors = posterior_priors,
-        ),
-        data = (
-            y = prediction_array,
-            features = features_test,
-            predictions = predictions_test,
-        ),
-        constraints = deep_constraints(),
-        initialization = deep_init(posterior_priors),
-        iterations = spec.prediction_iterations,
-        free_energy = false,
-        showprogress = true,
-    )
-
-    ensemble_preds = infer_test.predictions[:y][end]
-    (; ensemble_mean, ensemble_std, ensemble_metrics) =
-        compute_ensemble_metrics(spec.prediction_type, ensemble_preds, y_test)
-
-    # Extract precision weights on test
-    γ_test_posteriors = infer_test.posteriors[:γ][end]
-    γ_means_test = mean.(γ_test_posteriors)
-
-    @info "Ensemble test metrics" ensemble_metrics...
-
-    # 8. Save results
-    results = (
-        w_posteriors = w_posteriors,
-        v_posteriors = v_posteriors,
-        τ_posteriors = τ_posteriors,
-        ρ_posteriors = ρ_posteriors,
-        γ_test = γ_means_test,
-        free_energy = free_energy,
-        ensemble_mean = ensemble_mean,
-        ensemble_std = ensemble_std,
-        ensemble_metrics = ensemble_metrics,
-        predictions_test = predictions_test,
-        y_test = y_test,
-        spec = (
-            prediction_type = string(typeof(spec.prediction_type)),
-            model_type = string(typeof(spec.model_type)),
-            column = spec.column,
-            horizon = spec.horizon,
-            dataset = typeof(spec.dataset).parameters[1],
-            dataset_path = spec.dataset_path,
-            experts = spec.experts,
-            selected_quantiles = spec.selected_quantiles,
-            number_of_quantiles = spec.number_of_quantiles,
-        ),
-    )
-
-    return results
 end
