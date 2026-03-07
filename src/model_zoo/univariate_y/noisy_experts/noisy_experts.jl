@@ -3,33 +3,8 @@
 # E_q[-log Uninformative(x)] = 0 since log(const) = 0.
 # ---------------------------------------------------------------------------
 
-@average_energy Uninformative (q_out::PointMass,) = begin
+@average_energy Uninformative (q_out::Any,) = begin
     return 0.0
-end
-
-# ---------------------------------------------------------------------------
-# Custom rules for Uninformative output on NormalMeanPrecision
-# These enable proper BP (instead of mean-field) when y is unobserved,
-# giving additive variance: Var(y) = 1/κ + 1/γ
-# ---------------------------------------------------------------------------
-
-@marginalrule NormalMeanPrecision(:out_μ) (
-    m_out::Uninformative,
-    m_μ::UnivariateNormalDistributionsFamily,
-    q_τ::Any,
-) = begin
-    xi_μ, W_μ = weightedmean_precision(m_μ)
-    W_bar = mean(q_τ)
-    W = [W_bar -W_bar; -W_bar W_μ+W_bar]
-    xi = [zero(xi_μ); xi_μ]
-    return MvNormalWeightedMeanPrecision(xi, W)
-end
-
-@rule NormalMeanPrecision(:μ, Marginalisation) (
-    m_out::Uninformative,
-    q_τ::Any,
-) = begin
-    return Uninformative()
 end
 
 # ---------------------------------------------------------------------------
