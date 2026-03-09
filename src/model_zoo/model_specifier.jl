@@ -181,6 +181,7 @@ end
 
 build_rxinfer_constraints(::Any, ::Any, _, _) = nothing
 build_rxinfer_init(::Any, ::Any, _) = nothing
+prepare_priors!(::Any, ::Any, _, _) = nothing
 build_training_data(::Any, ::Any, y, features, predictions) =
     (y = y, features = features, predictions = predictions)
 training_posterior_keys(::ModelType) = (:γ,)
@@ -258,6 +259,8 @@ function run_experiment(spec::ExperimentSpecifier)
     n_test = length(y_test)
     n_obs = _compute_n_obs(spec, n_val)
     @info n_obs
+
+    prepare_priors!(pt, mt, spec.priors, predictions_val)
 
     # Build model + train
     model = build_rxinfer_model(pt, mt, n_forecasters, n_obs, spec.priors)
@@ -494,6 +497,7 @@ function predict_from_trained_ensemble(
     prediction_array = [missing for _ = 1:n_steps]
 
     priors = extract_prediction_priors(model_type, saved)
+    prepare_priors!(prediction_type, model_type, priors, predictions_test)
     @info "Prediction start"
     infer_test = predict_with_model(
         prediction_type,
