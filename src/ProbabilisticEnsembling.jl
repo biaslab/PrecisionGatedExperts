@@ -21,21 +21,21 @@ include("model_zoo/model_specifier.jl")
 
 # model implementations
 # static
-include("model_zoo/univariate_y/static/model_type.jl")
-include("model_zoo/univariate_y/static/static.jl")
-include("model_zoo/multivariate_y/static/static.jl")
-include("model_zoo/univariate_y/static/pipeline.jl")
+include("model_zoo/static/model_type.jl")
+include("model_zoo/static/univariate.jl")
+include("model_zoo/static/multivariate.jl")
+include("model_zoo/static/pipeline.jl")
 
 # dynamic
-include("model_zoo/univariate_y/dynamic/model_type.jl")
-include("model_zoo/univariate_y/dynamic/dynamic.jl")
-include("model_zoo/multivariate_y/dynamic/dynamic.jl")
-include("model_zoo/univariate_y/dynamic/pipeline.jl")
+include("model_zoo/dynamic/model_type.jl")
+include("model_zoo/dynamic/univariate.jl")
+include("model_zoo/dynamic/multivariate.jl")
+include("model_zoo/dynamic/pipeline.jl")
 
 # noisy experts
-include("model_zoo/univariate_y/noisy_experts/model_type.jl")
-include("model_zoo/univariate_y/noisy_experts/noisy_experts.jl")
-include("model_zoo/univariate_y/noisy_experts/pipeline.jl")
+include("model_zoo/noisy_experts/model_type.jl")
+include("model_zoo/noisy_experts/univariate.jl")
+include("model_zoo/noisy_experts/pipeline.jl")
 
 # neural ensemble pipeline (Adaptive Mixture of Local Experts)
 include("neural_ensemble/neural_ensemble_types.jl")
