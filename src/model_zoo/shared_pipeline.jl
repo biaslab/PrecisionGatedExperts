@@ -7,14 +7,29 @@ using Reactant
 using Distributions
 using Statistics
 
-# prediction_type: univariate | multivariate
 struct Univariate end
+
+function model_prediction_name(::Univariate)
+    return "univariate"
+end
+
 struct Multivariate end
 
-function parse_prediction_type(s::String)
-    s == "univariate" && return Univariate()
-    s == "multivariate" && return Multivariate()
-    error("Unknown prediction_type: $s")
+function model_prediction_name(::Multivariate)
+    return "multivariate"
+end
+
+function create_prediction_type(::Val{:univariate})
+    Univariate()
+end
+
+function create_prediction_type(::Val{:multivariate})
+    Multivariate()
+end
+
+function _parse_prediction_type(s::String)
+    model_prediction_symbol = Symbol(lowercase(s))
+    create_prediction_type(Val(model_prediction_symbol))
 end
 
 # ---------------------------------------------------------------------------

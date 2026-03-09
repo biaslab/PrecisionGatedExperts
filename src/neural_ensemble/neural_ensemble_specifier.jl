@@ -15,7 +15,7 @@ export run_neural_ensemble_experiment, predict_from_trained_neural_ensemble
 function _parse_neural_ensemble_spec(config::Dict)
     params = config["params"]
 
-    prediction_type = parse_prediction_type(params["prediction_type"])
+    prediction_type = _parse_prediction_type(params["prediction_type"])
     column = get(params, "column", nothing)
     if prediction_type isa Univariate && column === nothing
         error("column is required when prediction_type is univariate")

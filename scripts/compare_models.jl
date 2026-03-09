@@ -92,31 +92,14 @@ function find_neural_result_file(dataset::String, horizon::Int)
     return nothing
 end
 
-function resolve_alpha(saved)
-    if haskey(saved, "raw_spec")
-        params = get(saved["raw_spec"], "params", nothing)
-        if !isnothing(params)
-            priors = get(params, "priors", nothing)
-            if !isnothing(priors) && haskey(priors, "α")
-                α_cfg = priors["α"]
-                if haskey(α_cfg, "value")
-                    return Float64(α_cfg["value"])
-                end
-            end
-        end
-    end
-    return 1.0
-end
-
 # ── Run prediction from a saved .jld2 ───────────────────────────────────────
 
 function run_prediction(path::String)
     saved = JLD2.load(path)
     spec_saved = saved["spec"]
 
-    prediction_type = ProbabilisticEnsembling._parse_saved_prediction_type(string(spec_saved.prediction_type))
-    model_type = ProbabilisticEnsembling._parse_saved_model_type(string(spec_saved.model_type))
-    alpha = resolve_alpha(saved)
+    prediction_type = ProbabilisticEnsembling._parse_prediction_type(string(spec_saved.prediction_type))
+    model_type = ProbabilisticEnsembling._parse_model_type(string(spec_saved.model_type))
 
     spec_for_data = ProbabilisticEnsembling._spec_for_prediction_from_saved(saved, PREDICTION_ITERATIONS)
     experts = spec_for_data.experts
@@ -134,7 +117,7 @@ function run_prediction(path::String)
     n_forecasters = size(predictions_test, 1)
     prediction_array = [missing for _ = 1:n_steps]
 
-    priors = ProbabilisticEnsembling.extract_prediction_priors(model_type, saved, alpha)
+    priors = ProbabilisticEnsembling.extract_prediction_priors(model_type, saved)
     @info "Running prediction for $(basename(path))..."
     infer_test = ProbabilisticEnsembling.predict_with_model(
         prediction_type, model_type, priors;
