@@ -14,6 +14,10 @@ struct StrangeMissingMeta end
     return Uninformative()
 end
 
+@rule NormalMeanPrecision(:μ, Marginalisation) (m_out::NormalWeightedMeanPrecision, q_τ::Gamma, meta::StrangeMissingMeta) = begin 
+    return @call_rule NormalMeanPrecision(:μ, Marginalisation) (m_out = m_out, q_τ = q_τ)
+end
+
 # VMP rule
 @marginalrule NormalMeanPrecision(:out_μ) (m_out::Uninformative, m_μ::UnivariateNormalDistributionsFamily, q_τ::Any, meta::StrangeMissingMeta) = begin
     return missing
@@ -24,6 +28,10 @@ end
     # W  = [W_bar -W_bar; -W_bar W_μ+W_bar]
     # xi = [zero(xi_μ); xi_μ]
     # return MvNormalWeightedMeanPrecision(xi, W)
+end
+
+@rule NormalMeanPrecision(:τ, Marginalisation) (q_out_μ::MvNormalWeightedMeanPrecision, meta::StrangeMissingMeta) = begin 
+    return @call_rule NormalMeanPrecision(:τ, Marginalisation) (q_out_μ = q_out_μ,)
 end
 
 @rule NormalMeanPrecision(:out, Marginalisation) (m_μ::NormalMeanPrecision, q_τ::Gamma, meta::StrangeMissingMeta) = begin 

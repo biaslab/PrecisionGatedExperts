@@ -1,6 +1,7 @@
 using RxInfer
 
 @marginalrule NormalMeanPrecision(:out_μ) (m_out::Uninformative, m_μ::UnivariateNormalDistributionsFamily, q_τ::Any) = begin
+    return missing
     xi_μ, W_μ = weightedmean_precision(m_μ)
     W_bar = mean(q_τ)
     W  = [W_bar -W_bar; -W_bar W_μ+W_bar]
@@ -36,5 +37,5 @@ result = infer(
 );
 
 # @show result.posteriors[:prediction]
-# @show result.posteriors[:γ]
+@show result.posteriors[:γ]
 @show result.posteriors[:y]
