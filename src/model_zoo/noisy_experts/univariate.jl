@@ -7,6 +7,20 @@
     return 0.0
 end
 
+# BP message from Normal to Normal mean is uniformative when message is unformative
+@rule NormalMeanPrecision(:μ, Marginalisation) (m_out::Uninformative, q_τ::Any, ) = begin 
+    return Uninformative()
+end
+
+# VMP rule
+@marginalrule NormalMeanPrecision(:out_μ) (m_out::Uninformative, m_μ::UnivariateNormalDistributionsFamily, q_τ::Any) = begin
+    xi_μ, W_μ = weightedmean_precision(m_μ)
+    W_bar = mean(q_τ)
+    W  = [W_bar -W_bar; -W_bar W_μ+W_bar]
+    xi = [zero(xi_μ); xi_μ]
+    return MvNormalWeightedMeanPrecision(xi, W)
+end
+
 # ---------------------------------------------------------------------------
 # Training model: y is a data variable (observed)
 # ---------------------------------------------------------------------------
