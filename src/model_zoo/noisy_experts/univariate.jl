@@ -7,21 +7,27 @@
     return 0.0
 end
 
+struct StrangeMissingMeta end
+
 # BP message from Normal to Normal mean is uniformative when message is unformative
-@rule NormalMeanPrecision(:μ, Marginalisation) (m_out::Uninformative, q_τ::Any, ) = begin 
+@rule NormalMeanPrecision(:μ, Marginalisation) (m_out::Uninformative, q_τ::Any, meta::StrangeMissingMeta) = begin 
     return Uninformative()
 end
 
 # VMP rule
-@marginalrule NormalMeanPrecision(:out_μ) (m_out::Uninformative, m_μ::UnivariateNormalDistributionsFamily, q_τ::Any) = begin
+@marginalrule NormalMeanPrecision(:out_μ) (m_out::Uninformative, m_μ::UnivariateNormalDistributionsFamily, q_τ::Any, meta::StrangeMissingMeta) = begin
     return missing
     # TODO: the rule below "is correct" however it gives the divergence in gamma because of the resulting message for \tau
-    # If I put missing here then it will go a missing to tau and it will converge
+    # If I put missing here then it will go a missing to tau and it will converge, because \tau will not depend on the joint
     # xi_μ, W_μ = weightedmean_precision(m_μ)
     # W_bar = mean(q_τ)
     # W  = [W_bar -W_bar; -W_bar W_μ+W_bar]
     # xi = [zero(xi_μ); xi_μ]
     # return MvNormalWeightedMeanPrecision(xi, W)
+end
+
+@rule NormalMeanPrecision(:out, Marginalisation) (m_μ::NormalMeanPrecision, q_τ::Gamma, meta::StrangeMissingMeta) = begin 
+    return @call_rule NormalMeanPrecision(:out, Marginalisation) (m_μ = m_μ, q_τ = q_τ)
 end
 
 # ---------------------------------------------------------------------------
@@ -90,7 +96,7 @@ end
             z[i, j] ~ Log(γ[i, j])
 
             pred[i, j] ~ NormalMeanPrecision(predictions[i, j], κ[i])
-            y[j] ~ NormalMeanPrecision(pred[i, j], γ[i, j])
+            y[j] ~ NormalMeanPrecision(pred[i, j], γ[i, j]) where {meta = StrangeMissingMeta()}
         end
         y[j] ~ Uninformative()
     end
