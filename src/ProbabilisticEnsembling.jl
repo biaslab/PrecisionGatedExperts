@@ -12,6 +12,8 @@ include("models.jl")
 include("low_rank_normal.jl")
 # low rank softdot
 include("low_rank_softdot.jl")
+# low rank diagonal product rules (ADF diagonal-precision accumulator)
+include("low_rank_diagonal.jl")
 
 # shared infrastructure (must precede model files)
 include("model_zoo/model_types.jl")
@@ -31,6 +33,12 @@ include("model_zoo/dynamic/model_type.jl")
 include("model_zoo/dynamic/univariate.jl")
 include("model_zoo/dynamic/multivariate.jl")
 include("model_zoo/dynamic/pipeline.jl")
+
+# dynamic_diagonal
+include("model_zoo/dynamic_diagonal/model_type.jl")
+include("model_zoo/dynamic_diagonal/univariate.jl")
+include("model_zoo/dynamic_diagonal/multivariate.jl")
+include("model_zoo/dynamic_diagonal/pipeline.jl")
 
 # noisy experts
 include("model_zoo/noisy_experts/model_type.jl")

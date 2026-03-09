@@ -106,43 +106,56 @@ logdetcov, entropy, etc.) — `Diagonal` already dispatches efficiently for all 
 these. The accumulator is just a `MvNormalWeightedMeanPrecision` whose precision
 happens to be `Diagonal` instead of `Matrix`.
 
-### New meta type: `LowRankUpdateDiagonal`
+### Dispatch via prior type — no new meta or message types
 
-A meta tag (analogous to `LowRankMeta`) placed on the softdot factor node. The
-softdot VMP rules under this meta produce a distinct message type,
-`LowRankDiagonalUpdate`, which carries the same (ξ, u, scale) rank-1 data as
-`LowRankNormalWeightedMeanPrecision` but dispatches to diagonal product rules.
+The key simplification: no new meta type or message type is needed. The existing
+`LowRankMeta` and `LowRankNormalWeightedMeanPrecision` (LR) messages are reused
+unchanged. The dispatch to the diagonal path is controlled entirely by the
+**prior type** of `w`:
 
-The separation is needed because the product rules fire on message types, not on
-factor-node metadata. The existing `LR` messages accumulate into dense `Matrix`
-precision; `LowRankDiagonalUpdate` messages accumulate into `Diagonal` precision.
+- `Dynamic` model: w prior is `MvNormalMeanScalePrecision(zeros(n), scale)`
+  → first product `MvNormalMeanScalePrecision × LR` creates dense `Matrix` accumulator
+- `DynamicDiagonal` model: w prior is `MvNormalWeightedMeanPrecision(zeros(n), Diagonal(fill(scale, n)))`
+  → first product `MvNormalWeightedMeanPrecision{..., Diagonal} × LR` fires the diagonal rule
 
-### Product rules
+The existing dense product rule dispatches on `M<:Matrix`:
+
+```julia
+function BayesBase.prod(..., left::MvNormalWeightedMeanPrecision{T,V,M}, right::LR) where {T,V,M<:Matrix}
+```
+
+The new diagonal rule dispatches on `M<:Diagonal`:
+
+```julia
+function BayesBase.prod(..., left::MvNormalWeightedMeanPrecision{T,V,M}, right::LR) where {T,V,M<:Diagonal}
+```
+
+No ambiguity, no new types — just one new product rule.
+
+### Product rule
 
 | Left | Right | Result | Cost |
 |------|-------|--------|------|
-| `MvNormalMeanScalePrecision` | `LowRankDiagonalUpdate` | `MvNormalWeightedMeanPrecision{..., Diagonal}` | O(n) — allocates two vectors |
-| `MvNormalWeightedMeanPrecision{..., Diagonal}` | `LowRankDiagonalUpdate` | same (in-place) | O(n) — Sherman–Morrison projection |
+| `MvNormalWeightedMeanPrecision{..., Diagonal}` | `LR` | same (in-place) | O(n) — Sherman–Morrison projection |
 
-The first product converts the isotropic prior into weighted-mean-precision form
-with a `Diagonal` precision. Each subsequent `LowRankDiagonalUpdate` message
-updates it in-place:
+Each LR message updates the accumulator in-place:
 
-1. Recover the current mean via Sherman–Morrison (O(n) since Λ is Diagonal)
-2. Update diagonal precision in-place: `d .+= scale * (u .⊙ u)`
-3. Recompute weighted mean in-place: `xi .= d .⊙ μ`
+1. Accumulate weighted mean: `xi .+= right.xi`
+2. Recover the current mean via Sherman–Morrison (O(n) since Λ is Diagonal)
+3. Update diagonal precision in-place: `d .+= scale * (u .⊙ u)`
+4. Recompute weighted mean in-place: `xi .= d_new .⊙ μ`
 
 ### Model structure
 
 The `@model` function is structurally identical to the existing `Dynamic` model.
-The only difference is the meta tag on the softdot node and the constraint that
-`w` posteriors use the diagonal form. The generative model is the same:
+The same `LowRankMeta()` is used on softdot nodes. The only difference is that
+`w` priors are `MvNormalWeightedMeanPrecision{..., Diagonal}`:
 
 ```
-w[i] ~ prior                           # MvNormalMeanScalePrecision (diagonal)
+w[i] ~ prior                           # MvNormalWeightedMeanPrecision{..., Diagonal}
 τ[i] ~ GammaShapeRate(...)
 β[i] ~ GammaShapeRate(...)
-z[i,j] ~ softdot(features[j], w[i], τ[i])   where {meta = LowRankUpdateDiagonal()}
+z[i,j] ~ softdot(features[j], w[i], τ[i])   where {meta = LowRankMeta()}
 γ[i,j] ~ GammaShapeRate(1.0, β[i])
 z[i,j] ~ Log(γ[i,j])
 y[j]   ~ NormalMeanPrecision(predictions[i,j], γ[i,j])
