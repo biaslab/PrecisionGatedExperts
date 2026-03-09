@@ -14,11 +14,14 @@ end
 
 # VMP rule
 @marginalrule NormalMeanPrecision(:out_μ) (m_out::Uninformative, m_μ::UnivariateNormalDistributionsFamily, q_τ::Any) = begin
-    xi_μ, W_μ = weightedmean_precision(m_μ)
-    W_bar = mean(q_τ)
-    W  = [W_bar -W_bar; -W_bar W_μ+W_bar]
-    xi = [zero(xi_μ); xi_μ]
-    return MvNormalWeightedMeanPrecision(xi, W)
+    return missing
+    # TODO: the rule below "is correct" however it gives the divergence in gamma because of the resulting message for \tau
+    # If I put missing here then it will go a missing to tau and it will converge
+    # xi_μ, W_μ = weightedmean_precision(m_μ)
+    # W_bar = mean(q_τ)
+    # W  = [W_bar -W_bar; -W_bar W_μ+W_bar]
+    # xi = [zero(xi_μ); xi_μ]
+    # return MvNormalWeightedMeanPrecision(xi, W)
 end
 
 # ---------------------------------------------------------------------------
