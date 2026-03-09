@@ -8,8 +8,7 @@ This guide walks through adding a new RxInfer-based model type to the ensemble f
 model_types.jl          abstract type ModelType, _parse_model_type
 shared_pipeline.jl      Univariate / Multivariate prediction types, metrics
 model_specifier.jl      Generic pipeline (run_experiment, predict_with_model) + hook defaults
-univariate_y/<name>/    Per-model directory: type + @model + hooks
-multivariate_y/<name>/  Multivariate @model variant (optional)
+<name>/                 Per-model directory: type + univariate/multivariate @model + hooks
 ```
 
 The generic pipeline in `model_specifier.jl` calls hook functions dispatched on `(prediction_type, model_type)`. You only override what differs from the defaults.
@@ -19,12 +18,11 @@ The generic pipeline in `model_specifier.jl` calls hook functions dispatched on 
 ### 1. Create the directory structure
 
 ```
-src/model_zoo/univariate_y/<name>/
+src/model_zoo/<name>/
     model_type.jl    # struct, dispatch, priors
-    <name>.jl        # @model (and optionally @constraints, @initialization)
+    univariate.jl    # univariate @model (and optionally @constraints, @initialization)
+    multivariate.jl  # multivariate @model variant (optional)
     pipeline.jl      # hook overrides
-src/model_zoo/multivariate_y/<name>/
-    <name>.jl        # multivariate @model variant (if needed)
 ```
 
 ### 2. Define the model type (`model_type.jl`)
@@ -86,7 +84,7 @@ end
 end
 ```
 
-For multivariate support, create `multivariate_y/<name>/<name>.jl` with a separate `@model` function.
+For multivariate support, create `multivariate.jl` in the same directory with a separate `@model` function.
 
 ### 4. Implement pipeline hooks (`pipeline.jl`)
 
@@ -137,10 +135,10 @@ Add your includes **after** the shared infrastructure and **in this order**:
 
 ```julia
 # mymodel
-include("model_zoo/univariate_y/mymodel/model_type.jl")
-include("model_zoo/univariate_y/mymodel/mymodel.jl")
-# include("model_zoo/multivariate_y/mymodel/mymodel.jl")  # if applicable
-include("model_zoo/univariate_y/mymodel/pipeline.jl")
+include("model_zoo/mymodel/model_type.jl")
+include("model_zoo/mymodel/univariate.jl")
+# include("model_zoo/mymodel/multivariate.jl")  # if applicable
+include("model_zoo/mymodel/pipeline.jl")
 ```
 
 Order matters: `model_type.jl` first (defines the struct), then `@model` files (use the struct), then `pipeline.jl` (dispatches on the struct).
@@ -187,5 +185,6 @@ julia --project -e 'using ProbabilisticEnsembling; run_experiment("config.yaml")
 
 ## Existing Models as Reference
 
-- **Static** — simplest model. No constraints, no initialization, single `:γ` posterior. Good starting point.
-- **Dynamic** — state-space model with constraints and initialization. Shows how to override all optional hooks.
+- **Static** (`model_zoo/static/`) — simplest model. No constraints, no initialization, single `:γ` posterior. Good starting point.
+- **Dynamic** (`model_zoo/dynamic/`) — state-space model with constraints and initialization. Shows how to override all optional hooks.
+- **Noisy Experts** (`model_zoo/noisy_experts/`) — univariate-only model with noisy expert observations.
