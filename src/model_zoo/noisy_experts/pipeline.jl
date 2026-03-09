@@ -69,3 +69,63 @@ function predict_with_model(
         posteriors = result.posteriors,
     )
 end
+
+# ---------------------------------------------------------------------------
+# Multivariate pipeline hooks
+# ---------------------------------------------------------------------------
+
+function prepare_priors!(::Multivariate, ::NoisyExperts, priors, predictions)
+    priors[:output_dim] = length(predictions[1, 1])
+    return nothing
+end
+
+build_rxinfer_model(::Multivariate, ::NoisyExperts, nf, no, p) =
+    multivariate_noisy_experts(n_forecasters = nf, n_obs = no, priors = p)
+
+build_rxinfer_constraints(::Multivariate, ::NoisyExperts, p, pred) =
+    multivariate_noisy_experts_constraints(p, pred)
+
+build_rxinfer_init(::Multivariate, ::NoisyExperts, p) =
+    multivariate_noisy_experts_init(p)
+
+function predict_with_model(
+    ::Multivariate,
+    ::NoisyExperts,
+    priors;
+    n_forecasters,
+    n_steps,
+    prediction_array,
+    predictions_test,
+    features_test,
+    prediction_iterations,
+)
+    # Ensure output_dim is available for initialization
+    if !haskey(priors, :output_dim)
+        priors[:output_dim] = length(predictions_test[1, 1])
+    end
+
+    model = multivariate_noisy_experts_prediction(
+        n_forecasters = n_forecasters,
+        n_obs = n_steps,
+        priors = priors,
+    )
+    data = (features = features_test, predictions = predictions_test)
+
+    constraints = multivariate_noisy_experts_constraints(priors, true)
+    init = multivariate_noisy_experts_init(priors)
+
+    result = infer(;
+        model = model,
+        data = data,
+        constraints = constraints,
+        initialization = init,
+        iterations = prediction_iterations,
+        free_energy = false,
+        showprogress = true,
+    )
+
+    return (
+        predictions = Dict(:y => result.posteriors[:y]),
+        posteriors = result.posteriors,
+    )
+end

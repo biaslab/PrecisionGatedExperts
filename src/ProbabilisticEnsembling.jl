@@ -43,6 +43,7 @@ include("model_zoo/dynamic_diagonal/pipeline.jl")
 # noisy experts
 include("model_zoo/noisy_experts/model_type.jl")
 include("model_zoo/noisy_experts/univariate.jl")
+include("model_zoo/noisy_experts/multivariate.jl")
 include("model_zoo/noisy_experts/pipeline.jl")
 
 # neural ensemble pipeline (Adaptive Mixture of Local Experts)
