@@ -3,17 +3,17 @@ params:
   model_type: "noisy_experts"
   dataset: "exchange_rate"
   dataset_path: "data/exchange_rate.csv"
-  horizon: 96
+  horizon: 336
   feature_type: "window"
   inference_iterations: 5
   prediction_iterations: 2
   selected_quantiles: [10, 90]
   experts:
-    - "models/exchange_rate_h96_s96_CNN_enzyme.jld2"
-    - "models/exchange_rate_h96_s96_MLP_enzyme.jld2"
-    - "models/exchange_rate_h96_s96_LSTM_enzyme.jld2"
-    - "models/exchange_rate_h96_s96_DLinear_enzyme.jld2"
-    - "models/exchange_rate_h96_s96_NConv_enzyme.jld2"
+    - "models/exchange_rate_h336_s96_CNN_enzyme.jld2"
+    - "models/exchange_rate_h336_s96_MLP_enzyme.jld2"
+    - "models/exchange_rate_h336_s96_LSTM_enzyme.jld2"
+    - "models/exchange_rate_h336_s96_DLinear_enzyme.jld2"
+    - "models/exchange_rate_h336_s96_NConv_enzyme.jld2"
   priors:
     β:
       type: "GammaShapeRate"

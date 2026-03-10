@@ -2,19 +2,19 @@ params:
   prediction_type: "univariate"
   column: "OT"
   model_type: "noisy_experts"
-  dataset: "ETTh1"
-  dataset_path: "data/ETTh1.csv"
+  dataset: "ETTh2"
+  dataset_path: "data/ETTh2.csv"
   horizon: 96
   feature_type: "uniwindow"
   inference_iterations: 5
   prediction_iterations: 2
   selected_quantiles: [10, 90]
   experts:
-    - "models/ETTh1_h96_s96_CNN_enzyme.jld2"
-    - "models/ETTh1_h96_s96_MLP_enzyme.jld2"
-    - "models/ETTh1_h96_s96_LSTM_enzyme.jld2"
-    - "models/ETTh1_h96_s96_DLinear_enzyme.jld2"
-    - "models/ETTh1_h96_s96_NConv_enzyme.jld2"
+    - "models/ETTh2_h96_s96_CNN_enzyme.jld2"
+    - "models/ETTh2_h96_s96_MLP_enzyme.jld2"
+    - "models/ETTh2_h96_s96_LSTM_enzyme.jld2"
+    - "models/ETTh2_h96_s96_DLinear_enzyme.jld2"
+    - "models/ETTh2_h96_s96_NConv_enzyme.jld2"
   priors:
     β:
       type: "GammaShapeRate"
