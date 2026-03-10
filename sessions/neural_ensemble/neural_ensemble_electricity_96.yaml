@@ -1,0 +1,23 @@
+params:
+  pipeline: "neural_ensemble"
+  prediction_type: "multivariate"
+  column: null
+  dataset: "electricity"
+  dataset_path: "data/electricity.csv"
+  experts:
+    - "models/electricity_h96_s96_CNN_enzyme.jld2"
+    - "models/electricity_h96_s96_MLP_enzyme.jld2"
+    - "models/electricity_h96_s96_LSTM_enzyme.jld2"
+    - "models/electricity_h96_s96_DLinear_enzyme.jld2"
+    - "models/electricity_h96_s96_NConv_enzyme.jld2"
+  train_set: false
+  feature_type: "vae"
+  quantiles: [10, 90]
+  gating:
+    layers: 1
+    hidden_dim: 64
+    n_epochs: 100
+    patience: 50
+    min_delta: 1.0e-6
+    learning_rate: 1.0e-3
+  save_dir: "saved_neural_ensemble_models"
