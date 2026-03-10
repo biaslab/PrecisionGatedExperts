@@ -3,10 +3,12 @@ using Printf
 
 const RESULTS_DIR = joinpath(@__DIR__, "..", "paper", "results")
 const HORIZONS = [96, 192, 336, 720]
-const ENSEMBLE_MODEL_TYPES = ["static", "dynamic", "neural_ensemble"]
+const ENSEMBLE_MODEL_TYPES = ["static", "dynamic", "dynamic_diagonal", "noisy_experts_diagonal", "neural_ensemble"]
 const ENSEMBLE_MODEL_LABELS = Dict(
     "static" => "Static",
     "dynamic" => "Dyn.",
+    "dynamic_diagonal" => "Dyn. Diag.",
+    "noisy_experts_diagonal" => "Noisy Diag.",
     "neural_ensemble" => "MoE",
 )
 const BASELINE_MODELS = ["CNN", "DLinear", "LSTM", "MLP", "NConv"]
@@ -130,6 +132,11 @@ function fmt(val)
     end
 end
 
+function second_best(vals)
+    unique_sorted = sort(unique(vals))
+    length(unique_sorted) >= 2 ? unique_sorted[2] : nothing
+end
+
 function build_latex_table()
     n_ensemble_models = length(ENSEMBLE_MODEL_TYPES)
     # Collect all data first to identify best values per row
@@ -172,7 +179,7 @@ function build_latex_table()
     push!(lines, "\\centering")
     push!(lines, "\\scriptsize")
     push!(lines, "\\setlength{\\tabcolsep}{2.5pt}")
-    push!(lines, "\\caption{MSE / MAE / NLL for Static, Dynamic (Dyn.), and Mixture of Experts (MoE) ensembles, compared against the best baseline model selected by lowest baseline MSE for each dataset and horizon.}")
+    push!(lines, "\\caption{MSE / MAE / NLL for Static, Dynamic (Dyn.), Dynamic Diagonal (Dyn. Diag.), Noisy Diagonal (Noisy Diag.), and Mixture of Experts (MoE) ensembles, compared against the best baseline model selected by lowest baseline MSE for each dataset and horizon. \\textbf{Bold} indicates the best result; {\\underline{\\textcolor{blue}{blue underlined}}} indicates the second best.}")
     push!(lines, "\\label{tab:ensemble_comparison}")
     push!(lines, "\\begin{tabular}{$col_spec}")
     push!(lines, "\\toprule")
@@ -226,6 +233,9 @@ function build_latex_table()
             best_mse = isempty(valid_mse) ? nothing : minimum(valid_mse)
             best_mae = isempty(valid_mae) ? nothing : minimum(valid_mae)
             best_nll = isempty(valid_nll) ? nothing : minimum(valid_nll)
+            second_mse = second_best(valid_mse)
+            second_mae = second_best(valid_mae)
+            second_nll = second_best(valid_nll)
 
             cells = String[]
             for mt in ENSEMBLE_MODEL_TYPES
@@ -234,12 +244,18 @@ function build_latex_table()
                 nll_str = fmt(row_nll[mt])
                 if row_mse[mt] !== nothing && row_mse[mt] == best_mse
                     mse_str = "\\textbf{$mse_str}"
+                elseif row_mse[mt] !== nothing && second_mse !== nothing && row_mse[mt] == second_mse
+                    mse_str = "\\underline{\\textcolor{blue}{$mse_str}}"
                 end
                 if row_mae[mt] !== nothing && row_mae[mt] == best_mae
                     mae_str = "\\textbf{$mae_str}"
+                elseif row_mae[mt] !== nothing && second_mae !== nothing && row_mae[mt] == second_mae
+                    mae_str = "\\underline{\\textcolor{blue}{$mae_str}}"
                 end
                 if row_nll[mt] !== nothing && row_nll[mt] == best_nll
                     nll_str = "\\textbf{$nll_str}"
+                elseif row_nll[mt] !== nothing && second_nll !== nothing && row_nll[mt] == second_nll
+                    nll_str = "\\underline{\\textcolor{blue}{$nll_str}}"
                 end
                 push!(cells, "$mse_str & $mae_str & $nll_str")
             end
@@ -247,9 +263,13 @@ function build_latex_table()
             best_mae_str = fmt(best_baseline_mae)
             if best_baseline_mse !== nothing && best_baseline_mse == best_mse
                 best_mse_str = "\\textbf{$best_mse_str}"
+            elseif best_baseline_mse !== nothing && second_mse !== nothing && best_baseline_mse == second_mse
+                best_mse_str = "\\underline{\\textcolor{blue}{$best_mse_str}}"
             end
             if best_baseline_mae !== nothing && best_baseline_mae == best_mae
                 best_mae_str = "\\textbf{$best_mae_str}"
+            elseif best_baseline_mae !== nothing && second_mae !== nothing && best_baseline_mae == second_mae
+                best_mae_str = "\\underline{\\textcolor{blue}{$best_mae_str}}"
             end
             push!(cells, "$best_mse_str & $best_mae_str & $best_baseline_model")
 
@@ -282,6 +302,9 @@ function build_latex_table()
         best_avg_mse = isempty(valid_avg_mse) ? nothing : minimum(valid_avg_mse)
         best_avg_mae = isempty(valid_avg_mae) ? nothing : minimum(valid_avg_mae)
         best_avg_nll = isempty(valid_avg_nll) ? nothing : minimum(valid_avg_nll)
+        second_avg_mse = second_best(valid_avg_mse)
+        second_avg_mae = second_best(valid_avg_mae)
+        second_avg_nll = second_best(valid_avg_nll)
 
         for mt in ENSEMBLE_MODEL_TYPES
             mse_str = fmt(avg_mse_vals[mt])
@@ -289,12 +312,18 @@ function build_latex_table()
             nll_str = fmt(avg_nll_vals[mt])
             if avg_mse_vals[mt] !== nothing && avg_mse_vals[mt] == best_avg_mse
                 mse_str = "\\textbf{$mse_str}"
+            elseif avg_mse_vals[mt] !== nothing && second_avg_mse !== nothing && avg_mse_vals[mt] == second_avg_mse
+                mse_str = "\\underline{\\textcolor{blue}{$mse_str}}"
             end
             if avg_mae_vals[mt] !== nothing && avg_mae_vals[mt] == best_avg_mae
                 mae_str = "\\textbf{$mae_str}"
+            elseif avg_mae_vals[mt] !== nothing && second_avg_mae !== nothing && avg_mae_vals[mt] == second_avg_mae
+                mae_str = "\\underline{\\textcolor{blue}{$mae_str}}"
             end
             if avg_nll_vals[mt] !== nothing && avg_nll_vals[mt] == best_avg_nll
                 nll_str = "\\textbf{$nll_str}"
+            elseif avg_nll_vals[mt] !== nothing && second_avg_nll !== nothing && avg_nll_vals[mt] == second_avg_nll
+                nll_str = "\\underline{\\textcolor{blue}{$nll_str}}"
             end
             push!(avg_cells, "$mse_str & $mae_str & $nll_str")
         end
@@ -302,9 +331,13 @@ function build_latex_table()
         avg_best_mae_str = fmt(avg_best_mae)
         if avg_best_mse !== nothing && avg_best_mse == best_avg_mse
             avg_best_mse_str = "\\textbf{$avg_best_mse_str}"
+        elseif avg_best_mse !== nothing && second_avg_mse !== nothing && avg_best_mse == second_avg_mse
+            avg_best_mse_str = "\\underline{\\textcolor{blue}{$avg_best_mse_str}}"
         end
         if avg_best_mae !== nothing && avg_best_mae == best_avg_mae
             avg_best_mae_str = "\\textbf{$avg_best_mae_str}"
+        elseif avg_best_mae !== nothing && second_avg_mae !== nothing && avg_best_mae == second_avg_mae
+            avg_best_mae_str = "\\underline{\\textcolor{blue}{$avg_best_mae_str}}"
         end
         push!(avg_cells, "$avg_best_mse_str & $avg_best_mae_str & $avg_best_model")
 
