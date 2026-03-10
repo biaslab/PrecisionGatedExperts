@@ -2,7 +2,7 @@
 # Training model: y is a data variable (observed)
 # ---------------------------------------------------------------------------
 
-@model function multivariate_noisy_experts(
+@model function univariate_noisy_experts_diagonal(
     n_forecasters,
     n_obs,
     features,
@@ -21,12 +21,12 @@
 
     for j = 1:n_obs
         for i = 1:n_forecasters
-            z[i, j] ~ softdot(features[j], w[i], τ[i]) where {meta = LowRankMeta()}
+            z[i, j] ~ softdot(features[j], w[i], τ[i]) where {meta = LowRankUpdateDiagonal()}
             γ[i, j] ~ GammaShapeRate(1.0, β[i])
             z[i, j] ~ Log(γ[i, j])
 
-            pred[i, j] ~ MvNormalMeanScalePrecision(predictions[i, j], κ[i])
-            y[j] ~ MvNormalMeanScalePrecision(pred[i, j], γ[i, j])
+            pred[i, j] ~ NormalMeanPrecision(predictions[i, j], κ[i])
+            y[j] ~ NormalMeanPrecision(pred[i, j], γ[i, j])
         end
     end
 end
@@ -35,7 +35,7 @@ end
 # Prediction model: y is a latent variable with Uninformative()
 # ---------------------------------------------------------------------------
 
-@model function multivariate_noisy_experts_prediction(
+@model function univariate_noisy_experts_diagonal_prediction(
     n_forecasters,
     n_obs,
     features,
@@ -53,12 +53,12 @@ end
 
     for j = 1:n_obs
         for i = 1:n_forecasters
-            z[i, j] ~ softdot(features[j], w[i], τ[i]) where {meta = LowRankMeta()}
+            z[i, j] ~ softdot(features[j], w[i], τ[i]) where {meta = LowRankUpdateDiagonal()}
             γ[i, j] ~ GammaShapeRate(1.0, β[i])
             z[i, j] ~ Log(γ[i, j])
 
-            pred[i, j] ~ MvNormalMeanScalePrecision(predictions[i, j], κ[i])
-            y[j] ~ MvNormalMeanScalePrecision(pred[i, j], γ[i, j]) where {meta = StrangeMissingMeta()}
+            pred[i, j] ~ NormalMeanPrecision(predictions[i, j], κ[i])
+            y[j] ~ NormalMeanPrecision(pred[i, j], γ[i, j]) where {meta = StrangeMissingMeta()}
         end
         y[j] ~ Uninformative()
     end
@@ -68,7 +68,7 @@ end
 # Constraints
 # ---------------------------------------------------------------------------
 
-@constraints function multivariate_noisy_experts_constraints(priors, prediction)
+@constraints function univariate_noisy_experts_diagonal_constraints(priors, prediction)
     if prediction
         q(w, z, γ, τ, β, κ, pred, y) = q(w)q(z, γ)q(τ)q(β)q(κ)q(y, pred)
     else
@@ -106,12 +106,12 @@ end
 # Initialization
 # ---------------------------------------------------------------------------
 
-@initialization function multivariate_noisy_experts_init(priors)
+@initialization function univariate_noisy_experts_diagonal_init(priors)
     q(w) = deepcopy(priors[:w])
     q(z) = NormalMeanVariance(0.0, 1.0)
     q(γ) = GammaShapeScale(1.0, 1.0)
     q(τ) = priors[:τ]
     q(β) = priors[:β]
     q(κ) = priors[:κ]
-    q(pred) = MvNormalMeanScalePrecision(zeros(priors[:output_dim]), 1.0)
+    q(pred) = NormalMeanVariance(0.0, 1.0)
 end

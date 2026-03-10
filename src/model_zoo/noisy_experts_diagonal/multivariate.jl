@@ -2,7 +2,7 @@
 # Training model: y is a data variable (observed)
 # ---------------------------------------------------------------------------
 
-@model function multivariate_noisy_experts(
+@model function multivariate_noisy_experts_diagonal(
     n_forecasters,
     n_obs,
     features,
@@ -21,7 +21,7 @@
 
     for j = 1:n_obs
         for i = 1:n_forecasters
-            z[i, j] ~ softdot(features[j], w[i], τ[i]) where {meta = LowRankMeta()}
+            z[i, j] ~ softdot(features[j], w[i], τ[i]) where {meta = LowRankUpdateDiagonal()}
             γ[i, j] ~ GammaShapeRate(1.0, β[i])
             z[i, j] ~ Log(γ[i, j])
 
@@ -35,7 +35,7 @@ end
 # Prediction model: y is a latent variable with Uninformative()
 # ---------------------------------------------------------------------------
 
-@model function multivariate_noisy_experts_prediction(
+@model function multivariate_noisy_experts_diagonal_prediction(
     n_forecasters,
     n_obs,
     features,
@@ -53,7 +53,7 @@ end
 
     for j = 1:n_obs
         for i = 1:n_forecasters
-            z[i, j] ~ softdot(features[j], w[i], τ[i]) where {meta = LowRankMeta()}
+            z[i, j] ~ softdot(features[j], w[i], τ[i]) where {meta = LowRankUpdateDiagonal()}
             γ[i, j] ~ GammaShapeRate(1.0, β[i])
             z[i, j] ~ Log(γ[i, j])
 
@@ -68,7 +68,7 @@ end
 # Constraints
 # ---------------------------------------------------------------------------
 
-@constraints function multivariate_noisy_experts_constraints(priors, prediction)
+@constraints function multivariate_noisy_experts_diagonal_constraints(priors, prediction)
     if prediction
         q(w, z, γ, τ, β, κ, pred, y) = q(w)q(z, γ)q(τ)q(β)q(κ)q(y, pred)
     else
@@ -106,7 +106,7 @@ end
 # Initialization
 # ---------------------------------------------------------------------------
 
-@initialization function multivariate_noisy_experts_init(priors)
+@initialization function multivariate_noisy_experts_diagonal_init(priors)
     q(w) = deepcopy(priors[:w])
     q(z) = NormalMeanVariance(0.0, 1.0)
     q(γ) = GammaShapeScale(1.0, 1.0)
