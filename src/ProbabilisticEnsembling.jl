@@ -40,11 +40,20 @@ include("model_zoo/dynamic_diagonal/univariate.jl")
 include("model_zoo/dynamic_diagonal/multivariate.jl")
 include("model_zoo/dynamic_diagonal/pipeline.jl")
 
+# shared noisy experts rules (must precede noisy_experts and noisy_experts_diagonal)
+include("model_zoo/noisy_experts/strange_missing_meta.jl")
+
 # noisy experts
 include("model_zoo/noisy_experts/model_type.jl")
 include("model_zoo/noisy_experts/univariate.jl")
 include("model_zoo/noisy_experts/multivariate.jl")
 include("model_zoo/noisy_experts/pipeline.jl")
+
+# noisy experts diagonal
+include("model_zoo/noisy_experts_diagonal/model_type.jl")
+include("model_zoo/noisy_experts_diagonal/univariate.jl")
+include("model_zoo/noisy_experts_diagonal/multivariate.jl")
+include("model_zoo/noisy_experts_diagonal/pipeline.jl")
 
 # neural ensemble pipeline (Adaptive Mixture of Local Experts)
 include("neural_ensemble/neural_ensemble_types.jl")
