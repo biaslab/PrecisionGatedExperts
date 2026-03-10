@@ -114,7 +114,20 @@ function fmt(val)
     if val === nothing
         return "\$\\times\$"
     end
-    return @sprintf("%.3f", val)
+    abs_val = abs(val)
+    if abs_val == 0.0
+        return "0.000"
+    elseif abs_val >= 1000.0
+        exp = floor(Int, log10(abs_val))
+        coeff = val / 10.0^exp
+        return "\$" * @sprintf("%.3f", coeff) * "\\!\\times\\!10^{$exp}\$"
+    elseif abs_val >= 100.0
+        return @sprintf("%.1f", val)
+    elseif abs_val >= 10.0
+        return @sprintf("%.2f", val)
+    else
+        return @sprintf("%.3f", val)
+    end
 end
 
 function build_latex_table()
