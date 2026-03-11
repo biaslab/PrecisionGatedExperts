@@ -11,7 +11,7 @@ params:
     - "models/exchange_rate_h720_s96_DLinear_enzyme.jld2"
     - "models/exchange_rate_h720_s96_NConv_enzyme.jld2"
   train_set: false
-  feature_type: "simple"
+  feature_type: "vae"
   quantiles: [10, 90]
   gating:
     layers: 1
