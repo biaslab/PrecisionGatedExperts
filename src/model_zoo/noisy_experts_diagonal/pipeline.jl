@@ -11,6 +11,8 @@ build_rxinfer_constraints(::Univariate, ::NoisyExpertsDiagonal, p, pred) =
 
 build_rxinfer_init(::Univariate, ::NoisyExpertsDiagonal, p) =
     univariate_noisy_experts_diagonal_init(p)
+build_returnvars(::ModelType) =
+    (pred = KeepLast(), w = KeepEach(), β = KeepEach(), κ = KeepEach(), γ = KeepEach())
 
 training_posterior_keys(::NoisyExpertsDiagonal) = (:w, :τ, :β, :κ, :γ)
 
@@ -59,10 +61,7 @@ function predict_with_model(
         showprogress = true,
     )
 
-    return (
-        predictions = Dict(:y => result.posteriors[:y]),
-        posteriors = result.posteriors,
-    )
+    return (predictions = Dict(:y => result.posteriors[:y]), posteriors = result.posteriors)
 end
 
 # ---------------------------------------------------------------------------
@@ -118,8 +117,5 @@ function predict_with_model(
         showprogress = true,
     )
 
-    return (
-        predictions = Dict(:y => result.posteriors[:y]),
-        posteriors = result.posteriors,
-    )
+    return (predictions = Dict(:y => result.posteriors[:y]), posteriors = result.posteriors)
 end

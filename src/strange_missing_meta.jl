@@ -14,16 +14,29 @@ struct StrangeMissingMeta end
 # ---------------------------------------------------------------------------
 
 # BP message from Normal to Normal mean is uninformative when message is uninformative
-@rule NormalMeanPrecision(:μ, Marginalisation) (m_out::Uninformative, q_τ::Any, meta::StrangeMissingMeta) = begin
+@rule NormalMeanPrecision(:μ, Marginalisation) (
+    m_out::Uninformative,
+    q_τ::Any,
+    meta::StrangeMissingMeta,
+) = begin
     return Uninformative()
 end
 
-@rule NormalMeanPrecision(:μ, Marginalisation) (m_out::NormalWeightedMeanPrecision, q_τ::Gamma, meta::StrangeMissingMeta) = begin
+@rule NormalMeanPrecision(:μ, Marginalisation) (
+    m_out::NormalWeightedMeanPrecision,
+    q_τ::Gamma,
+    meta::StrangeMissingMeta,
+) = begin
     return @call_rule NormalMeanPrecision(:μ, Marginalisation) (m_out = m_out, q_τ = q_τ)
 end
 
 # VMP rule
-@marginalrule NormalMeanPrecision(:out_μ) (m_out::Uninformative, m_μ::UnivariateNormalDistributionsFamily, q_τ::Any, meta::StrangeMissingMeta) = begin
+@marginalrule NormalMeanPrecision(:out_μ) (
+    m_out::Uninformative,
+    m_μ::UnivariateNormalDistributionsFamily,
+    q_τ::Any,
+    meta::StrangeMissingMeta,
+) = begin
     return missing
     # TODO: the rule below "is correct" however it gives the divergence in gamma because of the resulting message for \tau
     # If I put missing here then it will go a missing to tau and it will converge, because \tau will not depend on the joint
@@ -34,11 +47,18 @@ end
     # return MvNormalWeightedMeanPrecision(xi, W)
 end
 
-@rule NormalMeanPrecision(:τ, Marginalisation) (q_out_μ::MvNormalWeightedMeanPrecision, meta::StrangeMissingMeta) = begin
+@rule NormalMeanPrecision(:τ, Marginalisation) (
+    q_out_μ::MvNormalWeightedMeanPrecision,
+    meta::StrangeMissingMeta,
+) = begin
     return @call_rule NormalMeanPrecision(:τ, Marginalisation) (q_out_μ = q_out_μ,)
 end
 
-@rule NormalMeanPrecision(:out, Marginalisation) (m_μ::NormalMeanPrecision, q_τ::Gamma, meta::StrangeMissingMeta) = begin
+@rule NormalMeanPrecision(:out, Marginalisation) (
+    m_μ::NormalMeanPrecision,
+    q_τ::Gamma,
+    meta::StrangeMissingMeta,
+) = begin
     return @call_rule NormalMeanPrecision(:out, Marginalisation) (m_μ = m_μ, q_τ = q_τ)
 end
 
@@ -61,9 +81,7 @@ end
     q_γ::Any,
     meta::StrangeMissingMeta,
 ) = begin
-    return @call_rule MvNormalMeanScalePrecision(:μ, Marginalisation) (
-        m_out = m_out, q_γ = q_γ,
-    )
+    return @call_rule MvNormalMeanScalePrecision(:μ, Marginalisation) (m_out = m_out, q_γ = q_γ)
 end
 
 # 3. :out_μ joint marginal when y is Uninformative → return missing
@@ -82,9 +100,7 @@ end
     q_out_μ::MultivariateNormalDistributionsFamily,
     meta::StrangeMissingMeta,
 ) = begin
-    return @call_rule MvNormalMeanScalePrecision(:γ, Marginalisation) (
-        q_out_μ = q_out_μ,
-    )
+    return @call_rule MvNormalMeanScalePrecision(:γ, Marginalisation) (q_out_μ = q_out_μ,)
 end
 
 # 5. :out (observation) message → delegate to standard rule
@@ -93,7 +109,5 @@ end
     q_γ::Any,
     meta::StrangeMissingMeta,
 ) = begin
-    return @call_rule MvNormalMeanScalePrecision(:out, Marginalisation) (
-        m_μ = m_μ, q_γ = q_γ,
-    )
+    return @call_rule MvNormalMeanScalePrecision(:out, Marginalisation) (m_μ = m_μ, q_γ = q_γ)
 end

@@ -64,7 +64,8 @@ end
             z[i, j] ~ Log(γ[i, j])
 
             pred[i, j] ~ NormalMeanPrecision(predictions[i, j], κ[i])
-            y[j] ~ NormalMeanPrecision(pred[i, j], γ[i, j]) where {meta = StrangeMissingMeta()}
+            y[j] ~
+            NormalMeanPrecision(pred[i, j], γ[i, j]) where {meta = StrangeMissingMeta()}
         end
         y[j] ~ Uninformative()
     end

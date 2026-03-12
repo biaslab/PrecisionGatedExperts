@@ -21,7 +21,8 @@
 
     for j = 1:n_obs
         for i = 1:n_forecasters
-            z[i, j] ~ softdot(features[j], w[i], τ[i]) where {meta = LowRankUpdateDiagonal()}
+            z[i, j] ~
+            softdot(features[j], w[i], τ[i]) where {meta = LowRankUpdateDiagonal()}
             γ[i, j] ~ GammaShapeRate(1.0, β[i])
             z[i, j] ~ Log(γ[i, j])
 
@@ -53,12 +54,14 @@ end
 
     for j = 1:n_obs
         for i = 1:n_forecasters
-            z[i, j] ~ softdot(features[j], w[i], τ[i]) where {meta = LowRankUpdateDiagonal()}
+            z[i, j] ~
+            softdot(features[j], w[i], τ[i]) where {meta = LowRankUpdateDiagonal()}
             γ[i, j] ~ GammaShapeRate(1.0, β[i])
             z[i, j] ~ Log(γ[i, j])
 
             pred[i, j] ~ NormalMeanPrecision(predictions[i, j], κ[i])
-            y[j] ~ NormalMeanPrecision(pred[i, j], γ[i, j]) where {meta = StrangeMissingMeta()}
+            y[j] ~
+            NormalMeanPrecision(pred[i, j], γ[i, j]) where {meta = StrangeMissingMeta()}
         end
         y[j] ~ Uninformative()
     end

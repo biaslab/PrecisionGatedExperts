@@ -3,7 +3,7 @@ abstract type ModelType end
 function _parse_model_type(s::String)
     model_symbol = Symbol(lowercase(s))
     create_based_on_symbol(Val(model_symbol))
-end 
+end
 
 # model_type_name(::T) — defined per model type in its file
 

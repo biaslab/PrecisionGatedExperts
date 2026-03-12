@@ -94,10 +94,8 @@ end
 
 # --- MvNormalWeightedMeanPrecision{Diagonal} × LRD → in-place ADF step ---
 
-BayesBase.default_prod_rule(
-    ::Type{<:MvNormalWeightedMeanPrecision},
-    ::Type{<:LRD},
-) = PreserveTypeProd(Distribution)
+BayesBase.default_prod_rule(::Type{<:MvNormalWeightedMeanPrecision}, ::Type{<:LRD}) =
+    PreserveTypeProd(Distribution)
 
 function BayesBase.prod(
     ::PreserveTypeProd{Distribution},
@@ -141,10 +139,8 @@ end
 
 # --- Commutative: LRD × MvNormalWeightedMeanPrecision{Diagonal} ---
 
-BayesBase.default_prod_rule(
-    ::Type{<:LRD},
-    ::Type{<:MvNormalWeightedMeanPrecision},
-) = PreserveTypeProd(Distribution)
+BayesBase.default_prod_rule(::Type{<:LRD}, ::Type{<:MvNormalWeightedMeanPrecision}) =
+    PreserveTypeProd(Distribution)
 
 function BayesBase.prod(
     ::PreserveTypeProd{Distribution},

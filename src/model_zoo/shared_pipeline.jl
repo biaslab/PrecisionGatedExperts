@@ -283,7 +283,8 @@ function generate_expert_predictions_three_splits(experts, Xtr_s, Xval_s, Xte_s)
     predictions_val = Array{Float64}(undef, n_model_forecasters, d, n_val)
     predictions_test = Array{Float64}(undef, n_model_forecasters, d, n_test)
 
-    @info "Generating expert predictions (three splits)" n_model_forecasters n_train n_val n_test output_dim = d
+    @info "Generating expert predictions (three splits)" n_model_forecasters n_train n_val n_test output_dim =
+        d
     for (i, m) in enumerate(experts)
         model = build_model(m.model_type, m.config)
         yhat_tr = predict_unscaled(model, m.parameters, m.states, Xtr_s)

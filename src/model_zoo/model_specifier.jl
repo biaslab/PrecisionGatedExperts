@@ -187,6 +187,7 @@ build_training_data(::Any, ::Any, y, features, predictions) =
 training_posterior_keys(::ModelType) = (:γ,)
 prediction_prior_keys(mt::ModelType) =
     Tuple(k for k in training_posterior_keys(mt) if k !== :γ)
+build_returnvars(::ModelType) = nothing
 
 # model_results(pt, mt, training_posteriors, test_posteriors) — required, no default
 
@@ -200,10 +201,9 @@ end
 
 function _build_infer_kwargs(pt, mt, priors, prediction::Bool)
     kwargs = Dict{Symbol,Any}(:showprogress => true)
-    c = build_rxinfer_constraints(pt, mt, priors, prediction)
-    isnothing(c) || (kwargs[:constraints] = c)
-    i = build_rxinfer_init(pt, mt, priors)
-    isnothing(i) || (kwargs[:initialization] = i)
+    kwargs[:constraints] = build_rxinfer_constraints(pt, mt, priors, prediction)
+    kwargs[:initialization] = build_rxinfer_init(pt, mt, priors)
+    kwargs[:returnvars] = build_returnvars(mt)
     return kwargs
 end
 
@@ -271,16 +271,16 @@ function run_experiment(spec::ExperimentSpecifier)
     result = run_training_rxinfer(spec, model, data; train_kwargs...)
 
     # Extract posteriors
-    posteriors =
-        Dict{Symbol,Any}(k => result.posteriors[k][end] for k in training_posterior_keys(mt))
+    posteriors = Dict{Symbol,Any}(
+        k => result.posteriors[k][end] for k in training_posterior_keys(mt)
+    )
     free_energy = result.free_energy
 
     _log_validation_metrics(pt, mt, posteriors, predictions_val, y_val)
 
     # Prediction on test
-    prediction_priors = Dict{Symbol,Any}(
-        k => deepcopy(posteriors[k]) for k in prediction_prior_keys(mt)
-    )
+    prediction_priors =
+        Dict{Symbol,Any}(k => deepcopy(posteriors[k]) for k in prediction_prior_keys(mt))
 
     @info "Generating $(model_type_name(mt)) ensemble predictions on test"
     prediction_array = [missing for _ = 1:n_test]

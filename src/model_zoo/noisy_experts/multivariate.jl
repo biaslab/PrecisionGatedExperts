@@ -58,7 +58,10 @@ end
             z[i, j] ~ Log(γ[i, j])
 
             pred[i, j] ~ MvNormalMeanScalePrecision(predictions[i, j], κ[i])
-            y[j] ~ MvNormalMeanScalePrecision(pred[i, j], γ[i, j]) where {meta = StrangeMissingMeta()}
+            y[j] ~ MvNormalMeanScalePrecision(
+                pred[i, j],
+                γ[i, j],
+            ) where {meta = StrangeMissingMeta()}
         end
         y[j] ~ Uninformative()
     end

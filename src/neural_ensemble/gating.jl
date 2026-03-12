@@ -54,7 +54,7 @@ function build_gating_network(n_features::Int, n_experts::Int, layers::Int, hidd
         return Chain(Dense(n_features => n_experts))
     end
     gating_layers = Any[Dense(n_features => hidden_dim)]
-    for _ in 2:(layers - 1)
+    for _ = 2:(layers-1)
         push!(gating_layers, Dense(hidden_dim => hidden_dim))
     end
     push!(gating_layers, Dense(hidden_dim => n_experts))
@@ -62,10 +62,18 @@ function build_gating_network(n_features::Int, n_experts::Int, layers::Int, hidd
 end
 
 function train_moe!(
-    predictions_train_vec, features_train, y_train,
-    predictions_monitor_vec, features_monitor, y_monitor,
-    gating, opt;
-    n_epochs, patience, min_delta, monitor_label,
+    predictions_train_vec,
+    features_train,
+    y_train,
+    predictions_monitor_vec,
+    features_monitor,
+    y_monitor,
+    gating,
+    opt;
+    n_epochs,
+    patience,
+    min_delta,
+    monitor_label,
 )
     rng = Random.default_rng()
     ps, st = Lux.setup(rng, gating)
@@ -74,10 +82,16 @@ function train_moe!(
 
     y_train_f32 = [Float32.(y) for y in y_train]
     features_train_f32 = [Float32.(x) for x in features_train]
-    predictions_train_f32 = [Float32.(predictions_train_vec[i, j]) for i in axes(predictions_train_vec, 1), j in axes(predictions_train_vec, 2)]
+    predictions_train_f32 = [
+        Float32.(predictions_train_vec[i, j]) for
+        i in axes(predictions_train_vec, 1), j in axes(predictions_train_vec, 2)
+    ]
     y_monitor_f32 = [Float32.(y) for y in y_monitor]
     features_monitor_f32 = [Float32.(x) for x in features_monitor]
-    predictions_monitor_f32 = [Float32.(predictions_monitor_vec[i, j]) for i in axes(predictions_monitor_vec, 1), j in axes(predictions_monitor_vec, 2)]
+    predictions_monitor_f32 = [
+        Float32.(predictions_monitor_vec[i, j]) for
+        i in axes(predictions_monitor_vec, 1), j in axes(predictions_monitor_vec, 2)
+    ]
 
     best_monitor_loss = Inf32
     best_epoch = 0
@@ -85,19 +99,28 @@ function train_moe!(
     best_st = train_state.states
     patience_counter = 0
 
-    @showprogress for epoch in 1:n_epochs
+    @showprogress for epoch = 1:n_epochs
         for j in eachindex(features_train_f32)
             data_j = (predictions_train_f32[:, j], features_train_f32[j], y_train_f32[j])
-            (_, _, _, train_state) = Lux.Training.single_train_step!(ad, moe_objective, data_j, train_state)
+            (_, _, _, train_state) =
+                Lux.Training.single_train_step!(ad, moe_objective, data_j, train_state)
         end
 
         train_loss = average_moe_loss(
-            predictions_train_f32, features_train_f32, y_train_f32,
-            gating, train_state.parameters, train_state.states
+            predictions_train_f32,
+            features_train_f32,
+            y_train_f32,
+            gating,
+            train_state.parameters,
+            train_state.states,
         )
         monitor_loss = average_moe_loss(
-            predictions_monitor_f32, features_monitor_f32, y_monitor_f32,
-            gating, train_state.parameters, train_state.states
+            predictions_monitor_f32,
+            features_monitor_f32,
+            y_monitor_f32,
+            gating,
+            train_state.parameters,
+            train_state.states,
         )
         @info "Gating epoch" epoch train_loss monitor_label monitor_loss
 
@@ -116,5 +139,10 @@ function train_moe!(
         end
     end
 
-    return (parameters = best_ps, states = best_st, best_epoch = best_epoch, best_monitor_loss = best_monitor_loss)
+    return (
+        parameters = best_ps,
+        states = best_st,
+        best_epoch = best_epoch,
+        best_monitor_loss = best_monitor_loss,
+    )
 end

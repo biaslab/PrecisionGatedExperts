@@ -64,10 +64,7 @@ function predict_with_model(
     # The generic pipeline expects result.predictions[:y].
     # In the prediction model, y is a posterior (latent), not a prediction (data).
     # Wrap the result so the pipeline can find y in .predictions[:y].
-    return (
-        predictions = Dict(:y => result.posteriors[:y]),
-        posteriors = result.posteriors,
-    )
+    return (predictions = Dict(:y => result.posteriors[:y]), posteriors = result.posteriors)
 end
 
 # ---------------------------------------------------------------------------
@@ -85,8 +82,7 @@ build_rxinfer_model(::Multivariate, ::NoisyExperts, nf, no, p) =
 build_rxinfer_constraints(::Multivariate, ::NoisyExperts, p, pred) =
     multivariate_noisy_experts_constraints(p, pred)
 
-build_rxinfer_init(::Multivariate, ::NoisyExperts, p) =
-    multivariate_noisy_experts_init(p)
+build_rxinfer_init(::Multivariate, ::NoisyExperts, p) = multivariate_noisy_experts_init(p)
 
 function predict_with_model(
     ::Multivariate,
@@ -124,8 +120,5 @@ function predict_with_model(
         showprogress = true,
     )
 
-    return (
-        predictions = Dict(:y => result.posteriors[:y]),
-        posteriors = result.posteriors,
-    )
+    return (predictions = Dict(:y => result.posteriors[:y]), posteriors = result.posteriors)
 end

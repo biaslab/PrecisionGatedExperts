@@ -76,7 +76,8 @@ function run_neural_ensemble_experiment(path_to_yaml::String)
     config = YAML.load_file(path_to_yaml)
     spec = _parse_neural_ensemble_spec(config)
 
-    @info "Running neural ensemble experiment" dataset = spec.dataset horizon = spec.horizon prediction_type = spec.prediction_type train_set = spec.train_set
+    @info "Running neural ensemble experiment" dataset = spec.dataset horizon = spec.horizon prediction_type =
+        spec.prediction_type train_set = spec.train_set
     results = run_neural_ensemble(spec, config)
 
     return results
@@ -86,7 +87,8 @@ function run_neural_ensemble_experiment(spec::NeuralEnsembleSpecifier)
     raw_spec = Dict(
         "params" => Dict(
             "pipeline" => "neural_ensemble",
-            "prediction_type" => spec.prediction_type isa Univariate ? "univariate" : "multivariate",
+            "prediction_type" =>
+                spec.prediction_type isa Univariate ? "univariate" : "multivariate",
             "column" => spec.column,
             "dataset" => string(typeof(spec.dataset).parameters[1]),
             "dataset_path" => spec.dataset_path,
@@ -116,7 +118,12 @@ function predict_from_trained_neural_ensemble(path_to_jld2::String)
     saved = load_neural_ensemble(path_to_jld2)
 
     gating_cfg = saved["gating_config"]
-    gating = build_gating_network(gating_cfg.n_features, gating_cfg.n_experts, gating_cfg.layers, gating_cfg.hidden_dim)
+    gating = build_gating_network(
+        gating_cfg.n_features,
+        gating_cfg.n_experts,
+        gating_cfg.layers,
+        gating_cfg.hidden_dim,
+    )
 
     gating_ps = saved["gating_parameters"]
     gating_st = saved["gating_states"]
@@ -129,10 +136,14 @@ function predict_from_trained_neural_ensemble(path_to_jld2::String)
     data = before_neural_ensemble(spec)
 
     results = evaluate_neural_ensemble(
-        spec.prediction_type, gating,
-        gating_ps, gating_st,
-        data.predictions_test_vec, data.features_test,
-        data.y_test_mat, data.col_idx,
+        spec.prediction_type,
+        gating,
+        gating_ps,
+        gating_st,
+        data.predictions_test_vec,
+        data.features_test,
+        data.y_test_mat,
+        data.col_idx,
     )
 
     @info "Prediction metrics" results.ensemble_metrics...
