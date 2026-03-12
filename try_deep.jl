@@ -7,17 +7,17 @@ using ExponentialFamilyProjection: ClosedFormStrategy
 using Statistics
 
 # Fixed, non-learned parameters for the XOR capability demo.
-const V_SPLIT = [-14.0, 0.0, 7.0]   # top router: h ~ +7 for x1=0, -7 for x1=1
+const V_SPLIT = [[14.0, 0.0, -7.0], [-14.0, 0.0, 7.0]]  # top router: h ~ +7 for x1=0, -7 for x1=1
 const W_LEFT = [0.0, 10.0, 0.0]      # lower expert 1: predicts x2
 const W_RIGHT = [0.0, -10.0, 10.0]    # lower expert 2: predicts 1 - x2
-const TAU_SOFTDOT = 200.0
+const TAU_SOFTDOT = 2000.0
 
 @model function deep_model_xor_genuine(n_obs, n_forecasters, features, y, predictors)
     local h, right_switch, left_switch, z, kappa, γ
     for i in 1:n_forecasters
         for j = 1:n_obs
             # Level 1: top routing score.
-            h[j, i] ~ softdot(features[j], V_SPLIT, TAU_SOFTDOT)
+            h[j, i] ~ softdot(features[j], V_SPLIT[i], TAU_SOFTDOT)
 
             # Level 2: two opposite softdot routers driven by h.
             right_switch[j, i] ~ softdot(h[j, i], 1.0, TAU_SOFTDOT)
@@ -101,7 +101,7 @@ function run_xor_demo()
     predictors = [0 0 0 0; 1 1 1 1]
 
     result = infer(
-        model = deep_model_xor_genuine(n_obs = length(features)),
+        model = deep_model_xor_genuine(n_obs = length(features), n_forecasters=2),
         data = (
             features = features,
             y = fill(missing, length(features)),
@@ -144,3 +144,5 @@ function run_xor_demo()
     end
     println("Classification accuracy (direct): ", round(acc_direct, digits = 4))
 end
+
+run_xor_demo()
