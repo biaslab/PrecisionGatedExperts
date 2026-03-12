@@ -109,7 +109,7 @@ function run_xor_demo()
         ),
         constraints = deep_constraints(),
         initialization = deep_init(),
-        iterations = 20,
+        iterations = 10,
         free_energy = false,
         showprogress = false,
     )
