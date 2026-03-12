@@ -1,0 +1,33 @@
+params:
+  prediction_type: "multivariate"
+  model_type: "noisy_experts_diagonal"
+  dataset: "electricity"
+  dataset_path: "data/electricity.csv"
+  horizon: 96
+  feature_type: "vae"
+  inference_iterations: 5
+  prediction_iterations: 2
+  selected_quantiles: [10, 90]
+  experts:
+    - "models/electricity_h96_s96_CNN_enzyme.jld2"
+    - "models/electricity_h96_s96_MLP_enzyme.jld2"
+    - "models/electricity_h96_s96_LSTM_enzyme.jld2"
+    - "models/electricity_h96_s96_DLinear_enzyme.jld2"
+    - "models/electricity_h96_s96_NConv_enzyme.jld2"
+  priors:
+    β:
+      type: "GammaShapeRate"
+      shape: 1.0
+      rate: 1e6
+    τ:
+      type: "GammaShapeRate"
+      shape: 1.0
+      rate: 1.0
+    κ:
+      type: "GammaShapeRate"
+      shape: 1.0
+      rate: 1.0
+    w:
+      type: "MvNormalMeanScalePrecision"
+      n_features: 65
+      scale: 1.0
