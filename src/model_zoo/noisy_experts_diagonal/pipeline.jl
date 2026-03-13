@@ -11,8 +11,14 @@ build_rxinfer_constraints(::Univariate, ::NoisyExpertsDiagonal, p, pred) =
 
 build_rxinfer_init(::Univariate, ::NoisyExpertsDiagonal, p) =
     univariate_noisy_experts_diagonal_init(p)
-build_returnvars(::ModelType) =
-    (pred = KeepLast(), w = KeepEach(), β = KeepEach(), κ = KeepEach(), γ = KeepEach())
+build_returnvars(::ModelType) = (
+    pred = KeepLast(),
+    w = KeepEach(),
+    τ = KeepEach(),
+    β = KeepEach(),
+    κ = KeepEach(),
+    γ = KeepEach(),
+)
 
 training_posterior_keys(::NoisyExpertsDiagonal) = (:w, :τ, :β, :κ, :γ)
 
