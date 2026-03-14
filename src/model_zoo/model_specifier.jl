@@ -246,6 +246,72 @@ function _save_spec_column(::Multivariate, _)
     return nothing
 end
 
+const TEST_PREDICTION_BATCH_SIZE = 500
+
+_batch_slice(x::AbstractVector, batch_range) = x[batch_range]
+_batch_slice(x::AbstractMatrix, batch_range) = x[:, batch_range]
+
+function _merge_batched_posterior(existing, chunk)
+    if existing isa AbstractVector && chunk isa AbstractVector
+        return vcat(existing, chunk)
+    elseif existing isa AbstractMatrix && chunk isa AbstractMatrix
+        return hcat(existing, chunk)
+    else
+        return chunk
+    end
+end
+
+function _predict_test_in_batches(
+    pt,
+    mt,
+    prediction_priors;
+    n_forecasters,
+    n_test,
+    predictions_test,
+    features_test,
+    prediction_iterations,
+    batch_size = TEST_PREDICTION_BATCH_SIZE,
+)
+    ensemble_preds = Any[]
+    test_posteriors = Dict{Symbol,Any}()
+
+    for batch_start = 1:batch_size:n_test
+        batch_end = min(batch_start + batch_size - 1, n_test)
+        batch_range = batch_start:batch_end
+        n_batch = length(batch_range)
+
+        @info "Running test prediction batch" batch_start batch_end n_batch
+
+        infer_batch = predict_with_model(
+            pt,
+            mt,
+            prediction_priors;
+            n_forecasters = n_forecasters,
+            n_steps = n_batch,
+            prediction_array = [missing for _ = 1:n_batch],
+            predictions_test = _batch_slice(predictions_test, batch_range),
+            features_test = _batch_slice(features_test, batch_range),
+            prediction_iterations = prediction_iterations,
+        )
+
+        append!(ensemble_preds, infer_batch.predictions[:y][end])
+
+        for k in training_posterior_keys(mt)
+            if haskey(infer_batch.posteriors, k)
+                batch_posterior = infer_batch.posteriors[k][end]
+                if haskey(test_posteriors, k)
+                    test_posteriors[k] =
+                        _merge_batched_posterior(test_posteriors[k], batch_posterior)
+                else
+                    test_posteriors[k] = batch_posterior
+                end
+            end
+        end
+    end
+
+    return ensemble_preds, test_posteriors
+end
+
 # ---------------------------------------------------------------------------
 # Generic run_experiment — dispatches to model hooks
 # ---------------------------------------------------------------------------
@@ -282,34 +348,25 @@ function run_experiment(spec::ExperimentSpecifier)
     prediction_priors =
         Dict{Symbol,Any}(k => deepcopy(posteriors[k]) for k in prediction_prior_keys(mt))
 
-    @info "Generating $(model_type_name(mt)) ensemble predictions on test"
-    prediction_array = [missing for _ = 1:n_test]
-    infer_test = predict_with_model(
+    @info "Generating $(model_type_name(mt)) ensemble predictions on test" batch_size = TEST_PREDICTION_BATCH_SIZE
+    ensemble_preds, test_posteriors = _predict_test_in_batches(
         pt,
         mt,
         prediction_priors;
         n_forecasters = n_forecasters,
-        n_steps = n_test,
-        prediction_array = prediction_array,
+        n_test = n_test,
         predictions_test = predictions_test,
         features_test = features_test,
         prediction_iterations = spec.prediction_iterations,
     )
 
     # Metrics
-    ensemble_preds = infer_test.predictions[:y][end]
     y_metrics = prepare_y_for_metrics(pt, y_test)
     (; ensemble_mean, ensemble_std, ensemble_metrics) =
         compute_ensemble_metrics(pt, ensemble_preds, y_metrics)
     @info "Ensemble test metrics" ensemble_metrics...
 
     # Build results: model-specific fields + common fields
-    test_posteriors = Dict{Symbol,Any}()
-    for k in training_posterior_keys(mt)
-        if haskey(infer_test.posteriors, k)
-            test_posteriors[k] = infer_test.posteriors[k][end]
-        end
-    end
     model_fields = model_results(pt, mt, posteriors, test_posteriors)
 
     return merge(
