@@ -16,8 +16,13 @@ const NOIS_SESS = [
     # /Users/ruiite/projects/new_prob/probabilistic_ensemble_forecasting/sessions/dynamic_diagonal/vae/dynamic_diagonal_electricity_192.yaml
     # "/Users/ruiite/projects/new_prob/probabilistic_ensemble_forecasting/sessions/noisy_experts_diagonal/vae/noisy_experts_diagonal_electricity_192.yaml",
     # "/Users/ruiite/projects/new_prob/probabilistic_ensemble_forecasting/sessions/noisy_experts_diagonal/vae/noisy_experts_diagonal_electricity_336.yaml",
-    "/Users/ruiite/projects/new_prob/probabilistic_ensemble_forecasting/sessions/noisy_experts_diagonal/vae/noisy_experts_diagonal_electricity_720.yaml",
-    "/Users/ruiite/projects/new_prob/probabilistic_ensemble_forecasting/sessions/noisy_experts_diagonal/vae/noisy_experts_diagonal_electricity_96.yaml",
+    # "/Users/ruiite/projects/new_prob/probabilistic_ensemble_forecasting/sessions/noisy_experts_diagonal/vae/noisy_experts_diagonal_electricity_720.yaml",
+    # "/Users/ruiite/projects/new_prob/probabilistic_ensemble_forecasting/sessions/noisy_experts_diagonal/vae/noisy_experts_diagonal_electricity_96.yaml",
+    "/Users/ruiite/projects/new_prob/probabilistic_ensemble_forecasting/sessions/noisy_experts/vae/noisy_experts_electricity_192.yaml",
+    "/Users/ruiite/projects/new_prob/probabilistic_ensemble_forecasting/sessions/noisy_experts/vae/noisy_experts_electricity_336.yaml",
+    "/Users/ruiite/projects/new_prob/probabilistic_ensemble_forecasting/sessions/noisy_experts/vae/noisy_experts_electricity_720.yaml",
+    "/Users/ruiite/projects/new_prob/probabilistic_ensemble_forecasting/sessions/noisy_experts/vae/noisy_experts_electricity_96.yaml",
+
 ]
 
 const SESSIONS = [
