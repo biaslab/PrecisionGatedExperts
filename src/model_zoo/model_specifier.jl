@@ -4,6 +4,7 @@ using Distributions
 using Statistics
 using JLD2
 using Lux
+using ProgressMeter
 using Reactant
 
 export run_experiment, predict_from_trained_ensemble
@@ -274,13 +275,17 @@ function _predict_test_in_batches(
 )
     ensemble_preds = Any[]
     test_posteriors = Dict{Symbol,Any}()
+    n_batches = cld(n_test, batch_size)
+    progress = Progress(
+        n_batches;
+        desc = "Test prediction batches",
+        dt = 0.5,
+    )
 
     for batch_start = 1:batch_size:n_test
         batch_end = min(batch_start + batch_size - 1, n_test)
         batch_range = batch_start:batch_end
         n_batch = length(batch_range)
-
-        @info "Running test prediction batch" batch_start batch_end n_batch
 
         infer_batch = predict_with_model(
             pt,
@@ -307,6 +312,11 @@ function _predict_test_in_batches(
                 end
             end
         end
+
+        ProgressMeter.next!(
+            progress;
+            showvalues = [(:batch_start, batch_start), (:batch_end, batch_end)],
+        )
     end
 
     return ensemble_preds, test_posteriors
