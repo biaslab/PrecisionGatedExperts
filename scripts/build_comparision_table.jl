@@ -3,7 +3,7 @@ using Printf
 
 const RESULTS_DIR = joinpath(@__DIR__, "..", "paper", "results_vae")
 const HORIZONS = [96, 192, 336, 720]
-const SELECTED_METRICS = [:mse, :nll]
+const SELECTED_METRICS = [:mse, :nll, :r2, :smape, :ci95_interval_score]
 const ENSEMBLE_MODEL_TYPES = ["static", "dynamic", "dynamic_diagonal", "noisy_experts", "noisy_experts_diagonal", "neural_ensemble", "neural_ensemble_big"]
 const ENSEMBLE_MODEL_LABELS = Dict(
     "static" => "Static",
@@ -90,7 +90,14 @@ function load_metrics(dataset::String, horizon::Int, pred_type::Symbol, model_ty
     end
     data = JLD2.load(fpath)
     metrics = data["ensemble_metrics"]
-    return (mse = metrics.mse, mae = metrics.mae, nll = -metrics.nll)
+    return Dict(
+        :mse => clean_metric(get_metric_value(metrics, :mse)),
+        :mae => clean_metric(get_metric_value(metrics, :mae)),
+        :nll => clean_metric(negate_if_present(get_metric_value(metrics, :nll))),
+        :r2 => clean_metric(get_metric_value(metrics, :r2)),
+        :smape => clean_metric(get_metric_value(metrics, :smape)),
+        :ci95_interval_score => clean_metric(get_metric_value(metrics, :ci95_interval_score)),
+    )
 end
 
 function best_baseline_metrics(dataset::String, horizon::Int)
@@ -111,10 +118,20 @@ function best_baseline_metrics(dataset::String, horizon::Int)
     end
 
     best_metrics === nothing && return nothing
-    return (model = best_model, mse = best_metrics.mse, mae = best_metrics.mae, nll = nothing)
+    return Dict(
+        :model => best_model,
+        :mse => clean_metric(best_metrics.mse),
+        :mae => clean_metric(best_metrics.mae),
+        :nll => nothing,
+        :r2 => nothing,
+        :smape => nothing,
+        :ci95_interval_score => nothing,
+    )
 end
 
 clean_metric(val) = (val === nothing || !isfinite(val)) ? nothing : val
+negate_if_present(val) = val === nothing ? nothing : -val
+get_metric_value(metrics, key::Symbol) = hasproperty(metrics, key) ? getproperty(metrics, key) : nothing
 
 function fmt(val)
     if val === nothing
@@ -136,9 +153,10 @@ function fmt(val)
     end
 end
 
-function second_best(vals)
-    unique_sorted = sort(unique(filter(isfinite, vals)))
-    length(unique_sorted) >= 2 ? unique_sorted[2] : nothing
+function best_and_second(vals, larger_is_better::Bool)
+    unique_sorted = sort(unique(filter(isfinite, vals)); rev = larger_is_better)
+    isempty(unique_sorted) && return (nothing, nothing)
+    return (unique_sorted[1], length(unique_sorted) >= 2 ? unique_sorted[2] : nothing)
 end
 
 function highlight_metric(val, best_val, second_val)
@@ -153,16 +171,19 @@ end
 
 function selected_metric_specs()
     metric_catalog = Dict(
-        :mse => "MSE",
-        :mae => "MAE",
-        :nll => "NLL",
+        :mse => (label = "MSE", larger_is_better = false),
+        :mae => (label = "MAE", larger_is_better = false),
+        :nll => (label = "NLL", larger_is_better = false),
+        :r2 => (label = "R2", larger_is_better = true),
+        :smape => (label = "sMAPE", larger_is_better = false),
+        :ci95_interval_score => (label = "CI95 Int. Score", larger_is_better = false),
     )
     isempty(SELECTED_METRICS) && error("SELECTED_METRICS must contain at least one metric.")
 
-    specs = Tuple{Symbol,String}[]
+    specs = NamedTuple{(:key,:label,:larger_is_better),Tuple{Symbol,String,Bool}}[]
     for metric in SELECTED_METRICS
         haskey(metric_catalog, metric) || error("Unsupported metric in SELECTED_METRICS: $(metric). Supported metrics: $(collect(keys(metric_catalog))).")
-        push!(specs, (metric, metric_catalog[metric]))
+        push!(specs, (key = metric, label = metric_catalog[metric].label, larger_is_better = metric_catalog[metric].larger_is_better))
     end
     return specs
 end
@@ -173,8 +194,8 @@ function build_latex_table()
     metric_names = selected_metric_specs()
     horizon_groups = vcat(string.(HORIZONS), ["Avg"])
 
-    metric_tuple_type = NamedTuple{(:mse, :mae, :nll),Tuple{Union{Nothing,Float64},Union{Nothing,Float64},Union{Nothing,Float64}}}
-    all_data = Dict{Tuple{String,Int,String}, Union{Nothing,metric_tuple_type}}()
+    metric_dict_type = Dict{Symbol,Union{Nothing,Float64}}
+    all_data = Dict{Tuple{String,Int,String}, Union{Nothing,metric_dict_type}}()
     for (ds, _, pred_type) in DATASETS
         for h in HORIZONS
             for mt in ENSEMBLE_MODEL_TYPES
@@ -182,11 +203,7 @@ function build_latex_table()
                 if metrics === nothing
                     all_data[(ds, h, mt)] = nothing
                 else
-                    all_data[(ds, h, mt)] = (
-                        mse = clean_metric(metrics.mse),
-                        mae = clean_metric(metrics.mae),
-                        nll = clean_metric(metrics.nll),
-                    )
+                    all_data[(ds, h, mt)] = metrics
                 end
             end
         end
@@ -210,28 +227,22 @@ function build_latex_table()
     for (di, (ds, display_name, _)) in enumerate(DATASETS)
         dataset_row_span = length(horizon_groups) * length(metric_names)
         for (hi, horizon_label) in enumerate(horizon_groups)
-            per_model_metrics = Dict{String,metric_tuple_type}()
+            per_model_metrics = Dict{String,metric_dict_type}()
             for mt in ENSEMBLE_MODEL_TYPES
                 if horizon_label == "Avg"
                     model_metrics = [
                         all_data[(ds, h, mt)] for h in HORIZONS
                         if all_data[(ds, h, mt)] !== nothing
                     ]
-                    per_model_metrics[mt] = isempty(model_metrics) ? (mse = nothing, mae = nothing, nll = nothing) : (
-                        mse = let vals = [m.mse for m in model_metrics if m.mse !== nothing]
+                    per_model_metrics[mt] = Dict(
+                        metric.key => let vals = [m[metric.key] for m in model_metrics if get(m, metric.key, nothing) !== nothing]
                             isempty(vals) ? nothing : sum(vals) / length(vals)
-                        end,
-                        mae = let vals = [m.mae for m in model_metrics if m.mae !== nothing]
-                            isempty(vals) ? nothing : sum(vals) / length(vals)
-                        end,
-                        nll = let vals = [m.nll for m in model_metrics if m.nll !== nothing]
-                            isempty(vals) ? nothing : sum(vals) / length(vals)
-                        end,
+                        end for metric in metric_names
                     )
                 else
                     h = parse(Int, horizon_label)
                     metrics = all_data[(ds, h, mt)]
-                    per_model_metrics[mt] = metrics === nothing ? (mse = nothing, mae = nothing, nll = nothing) : metrics
+                    per_model_metrics[mt] = metrics === nothing ? Dict(metric.key => nothing for metric in metric_names) : Dict(metric.key => get(metrics, metric.key, nothing) for metric in metric_names)
                 end
             end
             if horizon_label == "Avg"
@@ -239,29 +250,20 @@ function build_latex_table()
                     best_baseline_metrics(ds, h) for h in HORIZONS
                     if best_baseline_metrics(ds, h) !== nothing
                 ]
-                per_model_metrics["best_baseline"] = isempty(baseline_metrics) ? (mse = nothing, mae = nothing, nll = nothing) : (
-                    mse = let vals = [clean_metric(m.mse) for m in baseline_metrics if clean_metric(m.mse) !== nothing]
+                per_model_metrics["best_baseline"] = Dict(
+                    metric.key => let vals = [m[metric.key] for m in baseline_metrics if get(m, metric.key, nothing) !== nothing]
                         isempty(vals) ? nothing : sum(vals) / length(vals)
-                    end,
-                    mae = let vals = [clean_metric(m.mae) for m in baseline_metrics if clean_metric(m.mae) !== nothing]
-                        isempty(vals) ? nothing : sum(vals) / length(vals)
-                    end,
-                    nll = nothing,
+                    end for metric in metric_names
                 )
             else
                 h = parse(Int, horizon_label)
                 baseline = best_baseline_metrics(ds, h)
-                per_model_metrics["best_baseline"] = baseline === nothing ? (mse = nothing, mae = nothing, nll = nothing) : (
-                    mse = clean_metric(baseline.mse),
-                    mae = clean_metric(baseline.mae),
-                    nll = nothing,
-                )
+                per_model_metrics["best_baseline"] = baseline === nothing ? Dict(metric.key => nothing for metric in metric_names) : Dict(metric.key => get(baseline, metric.key, nothing) for metric in metric_names)
             end
 
-            for (mi, (metric_key, metric_label)) in enumerate(metric_names)
-                values = [getfield(per_model_metrics[mt], metric_key) for mt in table_models if getfield(per_model_metrics[mt], metric_key) !== nothing]
-                best_val = isempty(values) ? nothing : minimum(values)
-                second_val = second_best(values)
+            for (mi, metric) in enumerate(metric_names)
+                values = [per_model_metrics[mt][metric.key] for mt in table_models if per_model_metrics[mt][metric.key] !== nothing]
+                best_val, second_val = best_and_second(values, metric.larger_is_better)
 
                 dataset_cell = (hi == 1 && mi == 1) ? "\\multirow{$dataset_row_span}{*}{$display_name}" : ""
                 horizon_cell = mi == 1 ? "\\multirow{$(length(metric_names))}{*}{$horizon_label}" : ""
@@ -269,10 +271,10 @@ function build_latex_table()
                 row_cells = String[]
                 for mt in table_models
                     model_metrics = per_model_metrics[mt]
-                    push!(row_cells, highlight_metric(getfield(model_metrics, metric_key), best_val, second_val))
+                    push!(row_cells, highlight_metric(model_metrics[metric.key], best_val, second_val))
                 end
 
-                push!(lines, "$dataset_cell & $horizon_cell & $metric_label & $(join(row_cells, " & ")) \\\\")
+                push!(lines, "$dataset_cell & $horizon_cell & $(metric.label) & $(join(row_cells, " & ")) \\\\")
             end
 
             if hi < length(horizon_groups)
