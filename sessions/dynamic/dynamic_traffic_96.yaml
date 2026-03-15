@@ -4,7 +4,7 @@ params:
   dataset: "traffic"
   dataset_path: "data/traffic.csv"
   horizon: 96
-  inference_iterations: 500
+  inference_iterations: 5
   prediction_iterations: 1
   feature_type: "vae"
   selected_quantiles: [10, 90]
@@ -26,4 +26,4 @@ params:
     w:
       type: "MvNormalMeanScalePrecision"
       n_features: 65
-      scale: 12.0
+      scale: 100.0

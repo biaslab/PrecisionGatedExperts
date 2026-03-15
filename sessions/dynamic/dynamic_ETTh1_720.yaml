@@ -5,7 +5,7 @@ params:
   dataset: "ETTh1"
   dataset_path: "data/ETTh1.csv"
   horizon: 720
-  feature_type: "uniwindow"
+  feature_type: "vae"
   inference_iterations: 5
   prediction_iterations: 1
   selected_quantiles: [10, 90]
@@ -26,5 +26,5 @@ params:
       rate: 1e-3
     w:
       type: "MvNormalMeanScalePrecision"
-      n_features: 33
+      n_features: 65
       scale: 0.01

@@ -1,6 +1,6 @@
 params:
   prediction_type: "multivariate"
-  model_type: "dynamic"
+  model_type: "dynamic_diagonal"
   dataset: "traffic"
   dataset_path: "data/traffic.csv"
   horizon: 192
@@ -18,7 +18,7 @@ params:
     β:
       type: "GammaShapeRate"
       shape: 1.0
-      rate: 1.0
+      rate: 1e6
     τ:
       type: "GammaShapeRate"
       shape: 1.0
