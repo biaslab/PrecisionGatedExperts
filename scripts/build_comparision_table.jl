@@ -113,6 +113,8 @@ function best_baseline_metrics(dataset::String, horizon::Int)
     return (model = best_model, mse = best_metrics.mse, mae = best_metrics.mae, nll = nothing)
 end
 
+clean_metric(val) = (val === nothing || !isfinite(val)) ? nothing : val
+
 function fmt(val)
     if val === nothing
         return "\$\\times\$"
@@ -134,215 +136,94 @@ function fmt(val)
 end
 
 function second_best(vals)
-    unique_sorted = sort(unique(vals))
+    unique_sorted = sort(unique(filter(isfinite, vals)))
     length(unique_sorted) >= 2 ? unique_sorted[2] : nothing
 end
 
+function highlight_metric(val, best_val, second_val)
+    rendered = fmt(val)
+    if val !== nothing && best_val !== nothing && val == best_val
+        return "\\textbf{$rendered}"
+    elseif val !== nothing && second_val !== nothing && val == second_val
+        return "\\underline{\\textcolor{blue}{$rendered}}"
+    end
+    return rendered
+end
+
 function build_latex_table()
-    n_ensemble_models = length(ENSEMBLE_MODEL_TYPES)
-    # Collect all data first to identify best values per row
-    all_data = Dict{Tuple{String,Int,String}, Union{Nothing,NamedTuple{(:mse,:mae,:nll), Tuple{Float64,Float64,Float64}}}}()
+    table_models = vcat(ENSEMBLE_MODEL_TYPES, ["best_baseline"])
+    table_model_labels = merge(copy(ENSEMBLE_MODEL_LABELS), Dict("best_baseline" => "Best"))
+    metric_names = [
+        (:mse, "MSE"),
+        (:mae, "MAE"),
+        (:nll, "NLL"),
+    ]
+
+    metric_tuple_type = NamedTuple{(:mse, :mae, :nll),Tuple{Union{Nothing,Float64},Union{Nothing,Float64},Union{Nothing,Float64}}}
+    all_data = Dict{Tuple{String,Int,String}, Union{Nothing,metric_tuple_type}}()
     for (ds, _, pred_type) in DATASETS
         for h in HORIZONS
             for mt in ENSEMBLE_MODEL_TYPES
-                all_data[(ds, h, mt)] = load_metrics(ds, h, pred_type, mt)
+                metrics = load_metrics(ds, h, pred_type, mt)
+                if metrics === nothing
+                    all_data[(ds, h, mt)] = nothing
+                else
+                    all_data[(ds, h, mt)] = (
+                        mse = clean_metric(metrics.mse),
+                        mae = clean_metric(metrics.mae),
+                        nll = clean_metric(metrics.nll),
+                    )
+                end
             end
         end
     end
 
-    col_spec = "ll" * join([" ccc" for _ in ENSEMBLE_MODEL_TYPES], " @{\\hskip 6pt}") * " @{\\hskip 6pt} ccc"
-    cmidrules = join(
-        vcat(
-            ["\\cmidrule(lr){$(3i)-$(3i+2)}" for i in 1:n_ensemble_models],
-            ["\\cmidrule(lr){$(3n_ensemble_models+3)-$(3n_ensemble_models+5)}"],
-        ),
-        " ",
-    )
-
-    header_models = join(
-        vcat(
-            ["\\multicolumn{3}{c}{$(ENSEMBLE_MODEL_LABELS[mt])}" for mt in ENSEMBLE_MODEL_TYPES],
-            ["\\multicolumn{3}{c}{Best}"],
-        ),
-        " & ",
-    )
-
-    subheader = join(
-        vcat(
-            ["MSE & MAE & NLL" for _ in ENSEMBLE_MODEL_TYPES],
-            ["MSE & MAE & Model"],
-        ),
-        " & ",
-    )
+    col_spec = "lll" * repeat(" c", length(table_models))
+    header_models = join([table_model_labels[mt] for mt in table_models], " & ")
 
     lines = String[]
     push!(lines, "\\begin{table}[t]")
     push!(lines, "\\centering")
     push!(lines, "\\scriptsize")
     push!(lines, "\\setlength{\\tabcolsep}{2.5pt}")
-    push!(lines, "\\caption{MSE / MAE / NLL for Static, Dynamic (Dyn.), Dynamic Diagonal (Dyn. Diag.), Noisy Experts (Noisy), Noisy Diagonal (Noisy Diag.), Mixture of Experts (MoE), and MoE Big ensembles, compared against the best baseline model selected by lowest baseline MSE for each dataset and horizon. \\textbf{Bold} indicates the best result; {\\underline{\\textcolor{blue}{blue underlined}}} indicates the second best.}")
+    push!(lines, "\\caption{MSE / MAE / NLL for Static, Dynamic (Dyn.), Dynamic Diagonal (Dyn. Diag.), Noisy Experts (Noisy), Noisy Diagonal (Noisy Diag.), Mixture of Experts (MoE), and MoE Big ensembles, compared against the best baseline model selected by lowest baseline MSE for each dataset and horizon. Rows are organized by dataset, horizon, and metric; models remain as columns. \\textbf{Bold} indicates the best result; {\\underline{\\textcolor{blue}{blue underlined}}} indicates the second best. Non-finite values are treated as missing.}")
     push!(lines, "\\label{tab:ensemble_comparison}")
     push!(lines, "\\begin{tabular}{$col_spec}")
     push!(lines, "\\toprule")
-    push!(lines, "\\multirow{2}{*}{Dataset} & \\multirow{2}{*}{H} &")
-    push!(lines, "$header_models \\\\")
-    push!(lines, "$cmidrules")
-    push!(lines, "& & $subheader \\\\")
+    push!(lines, "Dataset & H & Metric & $header_models \\\\")
     push!(lines, "\\midrule")
 
-    for (di, (ds, display_name, pred_type)) in enumerate(DATASETS)
-        push!(lines, "\\multirow{$(length(HORIZONS) + 1)}{*}{$display_name}")
-
-        # Collect metrics for avg computation
-        avg_mse = Dict(mt => Float64[] for mt in ENSEMBLE_MODEL_TYPES)
-        avg_mae = Dict(mt => Float64[] for mt in ENSEMBLE_MODEL_TYPES)
-        avg_nll = Dict(mt => Float64[] for mt in ENSEMBLE_MODEL_TYPES)
-        best_avg_mse = Float64[]
-        best_avg_mae = Float64[]
-        best_avg_models = String[]
-
-        for h in HORIZONS
-            row_mse = Dict{String,Union{Nothing,Float64}}()
-            row_mae = Dict{String,Union{Nothing,Float64}}()
-            row_nll = Dict{String,Union{Nothing,Float64}}()
+    for (di, (ds, display_name, _)) in enumerate(DATASETS)
+        for (hi, h) in enumerate(HORIZONS)
+            per_model_metrics = Dict{String,metric_tuple_type}()
             for mt in ENSEMBLE_MODEL_TYPES
-                m = all_data[(ds, h, mt)]
-                row_mse[mt] = m === nothing ? nothing : m.mse
-                row_mae[mt] = m === nothing ? nothing : m.mae
-                row_nll[mt] = m === nothing ? nothing : m.nll
-                if m !== nothing
-                    push!(avg_mse[mt], m.mse)
-                    push!(avg_mae[mt], m.mae)
-                    push!(avg_nll[mt], m.nll)
+                metrics = all_data[(ds, h, mt)]
+                per_model_metrics[mt] = metrics === nothing ? (mse = nothing, mae = nothing, nll = nothing) : metrics
+            end
+            baseline = best_baseline_metrics(ds, h)
+            per_model_metrics["best_baseline"] = baseline === nothing ? (mse = nothing, mae = nothing, nll = nothing) : (
+                mse = clean_metric(baseline.mse),
+                mae = clean_metric(baseline.mae),
+                nll = nothing,
+            )
+
+            for (mi, (metric_key, metric_label)) in enumerate(metric_names)
+                values = [getfield(per_model_metrics[mt], metric_key) for mt in table_models if getfield(per_model_metrics[mt], metric_key) !== nothing]
+                best_val = isempty(values) ? nothing : minimum(values)
+                second_val = second_best(values)
+
+                dataset_cell = (hi == 1 && mi == 1) ? "\\multirow{$(length(HORIZONS) * length(metric_names))}{*}{$display_name}" : ""
+                horizon_cell = mi == 1 ? "\\multirow{$(length(metric_names))}{*}{$h}" : ""
+
+                row_cells = String[]
+                for mt in table_models
+                    model_metrics = per_model_metrics[mt]
+                    push!(row_cells, highlight_metric(getfield(model_metrics, metric_key), best_val, second_val))
                 end
-            end
 
-            best_baseline = best_baseline_metrics(ds, h)
-            best_baseline_mse = best_baseline === nothing ? nothing : best_baseline.mse
-            best_baseline_mae = best_baseline === nothing ? nothing : best_baseline.mae
-            best_baseline_model = best_baseline === nothing ? "--" : best_baseline.model
-            if best_baseline !== nothing
-                push!(best_avg_mse, best_baseline.mse)
-                push!(best_avg_mae, best_baseline.mae)
-                push!(best_avg_models, best_baseline.model)
-            end
-
-            # Find best (min) MSE, MAE, and NLL across models for this row
-            valid_mse = [v for v in vcat(collect(values(row_mse)), [best_baseline_mse]) if v !== nothing]
-            valid_mae = [v for v in vcat(collect(values(row_mae)), [best_baseline_mae]) if v !== nothing]
-            valid_nll = [v for v in values(row_nll) if v !== nothing]
-            best_mse = isempty(valid_mse) ? nothing : minimum(valid_mse)
-            best_mae = isempty(valid_mae) ? nothing : minimum(valid_mae)
-            best_nll = isempty(valid_nll) ? nothing : minimum(valid_nll)
-            second_mse = second_best(valid_mse)
-            second_mae = second_best(valid_mae)
-            second_nll = second_best(valid_nll)
-
-            cells = String[]
-            for mt in ENSEMBLE_MODEL_TYPES
-                mse_str = fmt(row_mse[mt])
-                mae_str = fmt(row_mae[mt])
-                nll_str = fmt(row_nll[mt])
-                if row_mse[mt] !== nothing && row_mse[mt] == best_mse
-                    mse_str = "\\textbf{$mse_str}"
-                elseif row_mse[mt] !== nothing && second_mse !== nothing && row_mse[mt] == second_mse
-                    mse_str = "\\underline{\\textcolor{blue}{$mse_str}}"
-                end
-                if row_mae[mt] !== nothing && row_mae[mt] == best_mae
-                    mae_str = "\\textbf{$mae_str}"
-                elseif row_mae[mt] !== nothing && second_mae !== nothing && row_mae[mt] == second_mae
-                    mae_str = "\\underline{\\textcolor{blue}{$mae_str}}"
-                end
-                if row_nll[mt] !== nothing && row_nll[mt] == best_nll
-                    nll_str = "\\textbf{$nll_str}"
-                elseif row_nll[mt] !== nothing && second_nll !== nothing && row_nll[mt] == second_nll
-                    nll_str = "\\underline{\\textcolor{blue}{$nll_str}}"
-                end
-                push!(cells, "$mse_str & $mae_str & $nll_str")
-            end
-            best_mse_str = fmt(best_baseline_mse)
-            best_mae_str = fmt(best_baseline_mae)
-            if best_baseline_mse !== nothing && best_baseline_mse == best_mse
-                best_mse_str = "\\textbf{$best_mse_str}"
-            elseif best_baseline_mse !== nothing && second_mse !== nothing && best_baseline_mse == second_mse
-                best_mse_str = "\\underline{\\textcolor{blue}{$best_mse_str}}"
-            end
-            if best_baseline_mae !== nothing && best_baseline_mae == best_mae
-                best_mae_str = "\\textbf{$best_mae_str}"
-            elseif best_baseline_mae !== nothing && second_mae !== nothing && best_baseline_mae == second_mae
-                best_mae_str = "\\underline{\\textcolor{blue}{$best_mae_str}}"
-            end
-            push!(cells, "$best_mse_str & $best_mae_str & $best_baseline_model")
-
-            push!(lines, "& $h  & $(join(cells, " & ")) \\\\")
-        end
-
-        # Avg row
-        avg_cells = String[]
-        avg_mse_vals = Dict{String,Union{Nothing,Float64}}()
-        avg_mae_vals = Dict{String,Union{Nothing,Float64}}()
-        avg_nll_vals = Dict{String,Union{Nothing,Float64}}()
-        for mt in ENSEMBLE_MODEL_TYPES
-            if isempty(avg_mse[mt])
-                avg_mse_vals[mt] = nothing
-                avg_mae_vals[mt] = nothing
-                avg_nll_vals[mt] = nothing
-            else
-                avg_mse_vals[mt] = sum(avg_mse[mt]) / length(avg_mse[mt])
-                avg_mae_vals[mt] = sum(avg_mae[mt]) / length(avg_mae[mt])
-                avg_nll_vals[mt] = sum(avg_nll[mt]) / length(avg_nll[mt])
+                push!(lines, "$dataset_cell & $horizon_cell & $metric_label & $(join(row_cells, " & ")) \\\\")
             end
         end
-        avg_best_mse = isempty(best_avg_mse) ? nothing : sum(best_avg_mse) / length(best_avg_mse)
-        avg_best_mae = isempty(best_avg_mae) ? nothing : sum(best_avg_mae) / length(best_avg_mae)
-        avg_best_model = isempty(best_avg_models) ? "--" : (length(unique(best_avg_models)) == 1 ? only(unique(best_avg_models)) : "varies")
-
-        valid_avg_mse = [v for v in vcat(collect(values(avg_mse_vals)), [avg_best_mse]) if v !== nothing]
-        valid_avg_mae = [v for v in vcat(collect(values(avg_mae_vals)), [avg_best_mae]) if v !== nothing]
-        valid_avg_nll = [v for v in values(avg_nll_vals) if v !== nothing]
-        best_avg_mse = isempty(valid_avg_mse) ? nothing : minimum(valid_avg_mse)
-        best_avg_mae = isempty(valid_avg_mae) ? nothing : minimum(valid_avg_mae)
-        best_avg_nll = isempty(valid_avg_nll) ? nothing : minimum(valid_avg_nll)
-        second_avg_mse = second_best(valid_avg_mse)
-        second_avg_mae = second_best(valid_avg_mae)
-        second_avg_nll = second_best(valid_avg_nll)
-
-        for mt in ENSEMBLE_MODEL_TYPES
-            mse_str = fmt(avg_mse_vals[mt])
-            mae_str = fmt(avg_mae_vals[mt])
-            nll_str = fmt(avg_nll_vals[mt])
-            if avg_mse_vals[mt] !== nothing && avg_mse_vals[mt] == best_avg_mse
-                mse_str = "\\textbf{$mse_str}"
-            elseif avg_mse_vals[mt] !== nothing && second_avg_mse !== nothing && avg_mse_vals[mt] == second_avg_mse
-                mse_str = "\\underline{\\textcolor{blue}{$mse_str}}"
-            end
-            if avg_mae_vals[mt] !== nothing && avg_mae_vals[mt] == best_avg_mae
-                mae_str = "\\textbf{$mae_str}"
-            elseif avg_mae_vals[mt] !== nothing && second_avg_mae !== nothing && avg_mae_vals[mt] == second_avg_mae
-                mae_str = "\\underline{\\textcolor{blue}{$mae_str}}"
-            end
-            if avg_nll_vals[mt] !== nothing && avg_nll_vals[mt] == best_avg_nll
-                nll_str = "\\textbf{$nll_str}"
-            elseif avg_nll_vals[mt] !== nothing && second_avg_nll !== nothing && avg_nll_vals[mt] == second_avg_nll
-                nll_str = "\\underline{\\textcolor{blue}{$nll_str}}"
-            end
-            push!(avg_cells, "$mse_str & $mae_str & $nll_str")
-        end
-        avg_best_mse_str = fmt(avg_best_mse)
-        avg_best_mae_str = fmt(avg_best_mae)
-        if avg_best_mse !== nothing && avg_best_mse == best_avg_mse
-            avg_best_mse_str = "\\textbf{$avg_best_mse_str}"
-        elseif avg_best_mse !== nothing && second_avg_mse !== nothing && avg_best_mse == second_avg_mse
-            avg_best_mse_str = "\\underline{\\textcolor{blue}{$avg_best_mse_str}}"
-        end
-        if avg_best_mae !== nothing && avg_best_mae == best_avg_mae
-            avg_best_mae_str = "\\textbf{$avg_best_mae_str}"
-        elseif avg_best_mae !== nothing && second_avg_mae !== nothing && avg_best_mae == second_avg_mae
-            avg_best_mae_str = "\\underline{\\textcolor{blue}{$avg_best_mae_str}}"
-        end
-        push!(avg_cells, "$avg_best_mse_str & $avg_best_mae_str & $avg_best_model")
-
-        push!(lines, "& Avg & $(join(avg_cells, " & ")) \\\\")
 
         if di < length(DATASETS)
             push!(lines, "\\midrule")
