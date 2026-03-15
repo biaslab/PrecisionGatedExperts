@@ -223,6 +223,9 @@ function build_latex_table()
 
                 push!(lines, "$dataset_cell & $horizon_cell & $metric_label & $(join(row_cells, " & ")) \\\\")
             end
+            if hi < length(HORIZONS)
+                push!(lines, "\\cmidrule(lr){2-$(3 + length(table_models))}")
+            end
         end
 
         if di < length(DATASETS)
