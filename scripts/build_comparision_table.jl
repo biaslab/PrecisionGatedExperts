@@ -1,15 +1,22 @@
 using JLD2
 using Printf
 
-const RESULTS_DIR = joinpath(@__DIR__, "..", "paper", "results")
+const RESULTS_DIR = joinpath(@__DIR__, "..", "paper", "results_vae")
 const HORIZONS = [96, 192, 336, 720]
-const ENSEMBLE_MODEL_TYPES = ["static", "dynamic", "dynamic_diagonal", "noisy_experts_diagonal", "neural_ensemble"]
+const ENSEMBLE_MODEL_TYPES = ["static", "dynamic", "dynamic_diagonal", "noisy_experts", "noisy_experts_diagonal", "neural_ensemble", "neural_ensemble_big"]
 const ENSEMBLE_MODEL_LABELS = Dict(
     "static" => "Static",
     "dynamic" => "Dyn.",
     "dynamic_diagonal" => "Dyn. Diag.",
+    "noisy_experts" => "Noisy",
     "noisy_experts_diagonal" => "Noisy Diag.",
     "neural_ensemble" => "MoE",
+    "neural_ensemble_big" => "MoE Big",
+)
+# Map model type to its actual directory name under results_vae/
+const MODEL_DIR = Dict(
+    "noisy_experts_diagonal" => "noisy_diagonal",
+    "noisy_experts" => "noisy_experts",
 )
 const BASELINE_MODELS = ["CNN", "DLinear", "LSTM", "MLP", "NConv"]
 
@@ -58,7 +65,9 @@ const DATASETS = [
 ]
 
 function result_filename(dataset::String, horizon::Int, pred_type::Symbol, model_type::String)
-    if pred_type == :univariate
+    if startswith(model_type, "neural_ensemble")
+        return "$(dataset)_h$(horizon)_neural_ensemble.jld2"
+    elseif pred_type == :univariate
         return "$(dataset)_h$(horizon)_OT_$(model_type).jld2"
     else
         return "$(dataset)_h$(horizon)_multivariate_$(model_type).jld2"
@@ -66,26 +75,18 @@ function result_filename(dataset::String, horizon::Int, pred_type::Symbol, model
 end
 
 function load_metrics(dataset::String, horizon::Int, pred_type::Symbol, model_type::String)
-    if model_type == "neural_ensemble"
-        return load_neural_ensemble_metrics(dataset, horizon, pred_type)
-    end
     fname = result_filename(dataset, horizon, pred_type, model_type)
-    fpath = joinpath(RESULTS_DIR, model_type, fname)
+    dir_name = get(MODEL_DIR, model_type, model_type)
+    fpath = joinpath(RESULTS_DIR, dir_name, fname)
     if !isfile(fpath)
-        return nothing
+        # Fall back to prefix-matching (handles files with hash suffixes)
+        dir = joinpath(RESULTS_DIR, dir_name)
+        !isdir(dir) && return nothing
+        prefix = replace(fname, ".jld2" => "")
+        matches = filter(f -> startswith(f, prefix) && endswith(f, ".jld2"), readdir(dir))
+        isempty(matches) && return nothing
+        fpath = joinpath(dir, first(matches))
     end
-    data = JLD2.load(fpath)
-    metrics = data["ensemble_metrics"]
-    return (mse = metrics.mse, mae = metrics.mae, nll = -metrics.nll)
-end
-
-function load_neural_ensemble_metrics(dataset::String, horizon::Int, pred_type::Symbol)
-    dir = joinpath(RESULTS_DIR, "neural_ensemble")
-    !isdir(dir) && return nothing
-    prefix = "$(dataset)_h$(horizon)_neural_ensemble"
-    matches = filter(f -> startswith(f, prefix) && endswith(f, ".jld2"), readdir(dir))
-    isempty(matches) && return nothing
-    fpath = joinpath(dir, first(matches))
     data = JLD2.load(fpath)
     metrics = data["ensemble_metrics"]
     return (mse = metrics.mse, mae = metrics.mae, nll = -metrics.nll)
@@ -179,7 +180,7 @@ function build_latex_table()
     push!(lines, "\\centering")
     push!(lines, "\\scriptsize")
     push!(lines, "\\setlength{\\tabcolsep}{2.5pt}")
-    push!(lines, "\\caption{MSE / MAE / NLL for Static, Dynamic (Dyn.), Dynamic Diagonal (Dyn. Diag.), Noisy Diagonal (Noisy Diag.), and Mixture of Experts (MoE) ensembles, compared against the best baseline model selected by lowest baseline MSE for each dataset and horizon. \\textbf{Bold} indicates the best result; {\\underline{\\textcolor{blue}{blue underlined}}} indicates the second best.}")
+    push!(lines, "\\caption{MSE / MAE / NLL for Static, Dynamic (Dyn.), Dynamic Diagonal (Dyn. Diag.), Noisy Experts (Noisy), Noisy Diagonal (Noisy Diag.), Mixture of Experts (MoE), and MoE Big ensembles, compared against the best baseline model selected by lowest baseline MSE for each dataset and horizon. \\textbf{Bold} indicates the best result; {\\underline{\\textcolor{blue}{blue underlined}}} indicates the second best.}")
     push!(lines, "\\label{tab:ensemble_comparison}")
     push!(lines, "\\begin{tabular}{$col_spec}")
     push!(lines, "\\toprule")
