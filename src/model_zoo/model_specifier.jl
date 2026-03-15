@@ -247,7 +247,7 @@ function _save_spec_column(::Multivariate, _)
     return nothing
 end
 
-const TEST_PREDICTION_BATCH_SIZE = 500
+const TEST_PREDICTION_BATCH_SIZE = 250
 
 _batch_slice(x::AbstractVector, batch_range) = x[batch_range]
 _batch_slice(x::AbstractMatrix, batch_range) = x[:, batch_range]
