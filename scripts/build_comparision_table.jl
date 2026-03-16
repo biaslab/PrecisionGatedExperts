@@ -3,7 +3,7 @@ using Printf
 
 const RESULTS_DIR = joinpath(@__DIR__, "..", "paper", "results_vae")
 const HORIZONS = [96, 192, 336, 720]
-const SELECTED_METRICS = [:mse, :nll, :r2, :smape, :ci95_interval_score]
+const SELECTED_METRICS = [:mse, :nll]
 const ENSEMBLE_MODEL_TYPES = ["static", "dynamic", "dynamic_diagonal", "noisy_experts", "noisy_experts_diagonal", "neural_ensemble", "neural_ensemble_big"]
 const ENSEMBLE_MODEL_LABELS = Dict(
     "static" => "Static",
