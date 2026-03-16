@@ -15,7 +15,7 @@ const DATASETS_DEFAULT = [
     ("ETTh2",         "ETTh2",         :univariate),
     ("exchange_rate", "Exchange Rate", :multivariate),
     ("electricity",   "Electricity",   :multivariate),
-    # ("traffic",       "Traffic",       :multivariate),  # uncomment for 5-axis pentagon
+    ("traffic",       "Traffic",       :multivariate),  # uncomment for 5-axis pentagon
 ]
 
 const ENSEMBLE_MODEL_TYPES = [
@@ -48,11 +48,11 @@ const MODEL_COLORS = Dict(
 )
 
 # Cap extreme values (e.g., MoE NLL can be 1e22+)
-const VALUE_CAP = 1e30
+const VALUE_CAP = 1e40
 
 # Models to exclude from axis range calculation (they distort the scale)
 # Their values will be clamped to the axis range instead
-const RANGE_EXCLUDE_MODELS = Set(["neural_ensemble", "neural_ensemble_big"])
+const RANGE_EXCLUDE_MODELS = Set{String}()  # include all models in axis range (log compresses MoE NLL)
 
 const BASELINE_MODELS = ["CNN", "DLinear", "LSTM", "MLP", "NConv"]
 const BASELINE_METRICS = Dict(
@@ -117,7 +117,7 @@ function load_metrics(dataset::String, horizon::Int, pred_type::Symbol, model_ty
     return (mse=metrics.mse, mae=metrics.mae, nll=-metrics.nll)
 end
 
-clean_val(v, cap) = (v === nothing || !isfinite(v)) ? nothing : min(abs(v), cap)
+clean_val(v, cap) = (v === nothing || !isfinite(v)) ? nothing : min(log(abs(v)), log(cap))
 
 function best_baseline_metric(dataset::String, metric::Symbol)
     by_dataset = get(BASELINE_METRICS, dataset, nothing)
@@ -281,15 +281,8 @@ function build_radar_chart(metric::Symbol;
     # 7. Build polar plot
     θ = LinRange(0, 2π, N + 1) |> collect  # N+1 to close the polygon
 
-    # Filter out models with all-zero normalized values (clamped outliers like MoE on NLL)
-    plotted_models = String[]
-    for mt in ENSEMBLE_MODEL_TYPES
-        if any(normed[mt][i] > 0.01 for i in 1:N)
-            push!(plotted_models, mt)
-        else
-            println("  [Excluded from plot: $(ENSEMBLE_MODEL_LABELS[mt]) — all values at axis boundary]")
-        end
-    end
+    # Plot all models (log transform compresses scale enough for all to be visible)
+    plotted_models = copy(ENSEMBLE_MODEL_TYPES)
 
     p = plot(
         size = (950, 900),
@@ -305,7 +298,7 @@ function build_radar_chart(metric::Symbol;
         right_margin = 25mm,
         top_margin = 15mm,
         bottom_margin = 20mm,
-        title = "$metric_upper — Average over Horizons",
+        title = "Log $metric_upper — Average over Horizons",
         titlefontsize = 14,
         legend = :outertopright,
         legendfontsize = 10,
