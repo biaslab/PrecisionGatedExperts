@@ -3,17 +3,17 @@ params:
   model_type: "dynamic"
   dataset: "electricity"
   dataset_path: "data/electricity.csv"
-  horizon: 720
+  horizon: 192
   inference_iterations: 500
-  prediction_iterations: 1
+  prediction_iterations: 3
   feature_type: "vae"
   selected_quantiles: [10, 90]
   experts:
-    - "models/electricity_h720_s96_CNN_enzyme.jld2"
-    - "models/electricity_h720_s96_MLP_enzyme.jld2"
-    - "models/electricity_h720_s96_LSTM_enzyme.jld2"
-    - "models/electricity_h720_s96_DLinear_enzyme.jld2"
-    - "models/electricity_h720_s96_NConv_enzyme.jld2"
+    - "models/electricity_h192_s96_CNN_enzyme.jld2"
+    - "models/electricity_h192_s96_MLP_enzyme.jld2"
+    - "models/electricity_h192_s96_LSTM_enzyme.jld2"
+    - "models/electricity_h192_s96_DLinear_enzyme.jld2"
+    - "models/electricity_h192_s96_NConv_enzyme.jld2"
   priors:
     β:
       type: "GammaShapeRate"

@@ -5,7 +5,7 @@ params:
   dataset_path: "data/traffic.csv"
   horizon: 192
   inference_iterations: 5
-  prediction_iterations: 1
+  prediction_iterations: 3
   feature_type: "vae"
   selected_quantiles: [10, 90]
   experts:

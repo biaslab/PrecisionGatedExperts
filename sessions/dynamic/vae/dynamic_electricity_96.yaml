@@ -5,7 +5,7 @@ params:
   dataset_path: "data/electricity.csv"
   horizon: 96
   inference_iterations: 500
-  prediction_iterations: 1
+  prediction_iterations: 3
   feature_type: "vae"
   selected_quantiles: [10, 90]
   experts:
@@ -18,7 +18,7 @@ params:
     β:
       type: "GammaShapeRate"
       shape: 1.0
-      rate: 1000.0
+      rate: 100.0
     τ:
       type: "GammaShapeRate"
       shape: 1.0
