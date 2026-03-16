@@ -323,30 +323,33 @@ function build_radar_chart(metric::Symbol;
         )
     end
 
-    # 8. Add axis labels (dataset names) with angle-aware alignment
-    label_r = 1.30
+    # 8. Add axis labels (dataset names) — placed well outside the plot area
     for i in 1:N
         angle = 2π * (i - 1) / N
-        angle_deg = rad2deg(angle)
-        ha = if angle_deg ≈ 0 || angle_deg ≈ 360
-            :center
-        elseif angle_deg ≈ 180
-            :center
-        elseif 0 < angle_deg < 180
-            :left
-        else
-            :right
+        angle_deg = mod(rad2deg(angle), 360)
+
+        # Determine alignment based on quadrant
+        if angle_deg < 10 || angle_deg > 350       # right
+            label_r = 1.38; ha = :left;   va = :center
+        elseif angle_deg < 80                       # upper-right
+            label_r = 1.35; ha = :left;   va = :bottom
+        elseif angle_deg < 100                      # top
+            label_r = 1.40; ha = :center; va = :bottom
+        elseif angle_deg < 170                      # upper-left
+            label_r = 1.35; ha = :right;  va = :bottom
+        elseif angle_deg < 190                      # left
+            label_r = 1.38; ha = :right;  va = :center
+        elseif angle_deg < 260                      # lower-left
+            label_r = 1.35; ha = :right;  va = :top
+        elseif angle_deg < 280                      # bottom
+            label_r = 1.40; ha = :center; va = :top
+        else                                        # lower-right
+            label_r = 1.35; ha = :left;   va = :top
         end
-        va = if angle_deg ≈ 0
-            :bottom
-        elseif angle_deg ≈ 180
-            :top
-        else
-            :center
-        end
+
         x = label_r * cos(angle)
         y = label_r * sin(angle)
-        annotate!(p, x, y, text(dataset_labels[i], 11, ha, :bold))
+        annotate!(p, x, y, text(dataset_labels[i], 12, ha, va, :bold))
     end
 
     # 9. Per-axis numeric tick labels (along each spoke, offset slightly)
