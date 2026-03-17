@@ -9,7 +9,25 @@ using Reactant
 
 export run_experiment, predict_from_trained_ensemble
 
-struct ExperimentSpecifier{P,M,D,F}
+abstract type PredictionMode end
+
+struct FullPrediction <: PredictionMode end
+struct BatchPrediction <: PredictionMode end
+struct KalmanPrediction <: PredictionMode end
+
+prediction_mode_name(::FullPrediction) = "full"
+prediction_mode_name(::BatchPrediction) = "batch"
+prediction_mode_name(::KalmanPrediction) = "kalman"
+
+create_prediction_mode(::Val{:full}) = FullPrediction()
+create_prediction_mode(::Val{:batch}) = BatchPrediction()
+create_prediction_mode(::Val{:kalman}) = KalmanPrediction()
+
+function _parse_prediction_mode(s::String)
+    create_prediction_mode(Val(Symbol(lowercase(s))))
+end
+
+struct ExperimentSpecifier{P,M,D,F,PM}
     prediction_type::P
     model_type::M
     column::Union{String,Nothing}
@@ -22,6 +40,7 @@ struct ExperimentSpecifier{P,M,D,F}
     priors::Dict{Symbol,Any}
     inference_iterations::Int
     prediction_iterations::Int
+    prediction_mode::PM
     save_predictions::Bool
     subsample_size::Union{Int,Nothing}
     subsample_percentage::Union{Float64,Nothing}
@@ -100,6 +119,7 @@ function _parse_spec(config)
     priors = parse_priors(model_type, p["priors"], n_forecasters)
     inference_iterations = p["inference_iterations"]
     prediction_iterations = p["prediction_iterations"]
+    prediction_mode = _parse_prediction_mode(get(p, "prediction_mode", "batch"))
     save_predictions = get(p, "save_predictions", false)
     subsample_size = get(p, "subsample_size", nothing)
     subsample_percentage = get(p, "subsample_percentage", nothing)
@@ -118,6 +138,7 @@ function _parse_spec(config)
         priors,
         inference_iterations,
         prediction_iterations,
+        prediction_mode,
         save_predictions,
         subsample_size,
         subsample_percentage,
@@ -164,6 +185,7 @@ function _save_spec(spec::ExperimentSpecifier; column = spec.column)
     return (
         prediction_type = model_prediction_name(spec.prediction_type),
         model_type = model_type_name(spec.model_type),
+        prediction_mode = prediction_mode_name(spec.prediction_mode),
         column = column,
         horizon = spec.horizon,
         dataset = typeof(spec.dataset).parameters[1],
@@ -249,6 +271,7 @@ end
 
 const TEST_PREDICTION_BATCH_SIZE = 250
 
+_batch_slice(::Nothing, _) = nothing
 _batch_slice(x::AbstractVector, batch_range) = x[batch_range]
 _batch_slice(x::AbstractMatrix, batch_range) = x[:, batch_range]
 
@@ -322,6 +345,165 @@ function _predict_test_in_batches(
     return ensemble_preds, test_posteriors
 end
 
+function _collect_test_posteriors(mt, infer_result)
+    test_posteriors = Dict{Symbol,Any}()
+    for k in training_posterior_keys(mt)
+        if haskey(infer_result.posteriors, k)
+            test_posteriors[k] = infer_result.posteriors[k][end]
+        end
+    end
+    return test_posteriors
+end
+
+function _predict_test_full(
+    pt,
+    mt,
+    prediction_priors;
+    n_forecasters,
+    n_test,
+    predictions_test,
+    features_test,
+    prediction_iterations,
+)
+    infer_test = predict_with_model(
+        pt,
+        mt,
+        prediction_priors;
+        n_forecasters = n_forecasters,
+        n_steps = n_test,
+        prediction_array = [missing for _ = 1:n_test],
+        predictions_test = predictions_test,
+        features_test = features_test,
+        prediction_iterations = prediction_iterations,
+    )
+
+    return infer_test.predictions[:y][end], _collect_test_posteriors(mt, infer_test)
+end
+
+function _predict_test_kalman(
+    pt,
+    mt,
+    prediction_priors;
+    n_forecasters,
+    n_test,
+    predictions_test,
+    features_test,
+    prediction_iterations,
+)
+    ensemble_preds = Any[]
+    test_posteriors = Dict{Symbol,Any}()
+    current_priors = Dict{Symbol,Any}(k => deepcopy(v) for (k, v) in pairs(prediction_priors))
+
+    progress = Progress(
+        n_test;
+        desc = "Kalman test prediction",
+        dt = 0.5,
+    )
+
+    for step in 1:n_test
+        step_range = step:step
+        infer_step = predict_with_model(
+            pt,
+            mt,
+            current_priors;
+            n_forecasters = n_forecasters,
+            n_steps = 1,
+            prediction_array = [missing],
+            predictions_test = _batch_slice(predictions_test, step_range),
+            features_test = _batch_slice(features_test, step_range),
+            prediction_iterations = prediction_iterations,
+        )
+
+        append!(ensemble_preds, infer_step.predictions[:y][end])
+
+        step_posteriors = _collect_test_posteriors(mt, infer_step)
+        for (k, step_posterior) in pairs(step_posteriors)
+            if haskey(test_posteriors, k)
+                test_posteriors[k] = _merge_batched_posterior(test_posteriors[k], step_posterior)
+            else
+                test_posteriors[k] = step_posterior
+            end
+        end
+
+        if haskey(current_priors, :w) && haskey(step_posteriors, :w)
+            current_priors[:w] = deepcopy(step_posteriors[:w])
+        end
+
+        ProgressMeter.next!(progress; showvalues = [(:step, step)])
+    end
+
+    return ensemble_preds, test_posteriors
+end
+
+function _predict_test(
+    ::FullPrediction,
+    pt,
+    mt,
+    prediction_priors;
+    n_forecasters,
+    n_test,
+    predictions_test,
+    features_test,
+    prediction_iterations,
+)
+    return _predict_test_full(
+        pt,
+        mt,
+        prediction_priors;
+        n_forecasters = n_forecasters,
+        n_test = n_test,
+        predictions_test = predictions_test,
+        features_test = features_test,
+        prediction_iterations = prediction_iterations,
+    )
+end
+
+function _predict_test(
+    ::BatchPrediction,
+    pt,
+    mt,
+    prediction_priors;
+    n_forecasters,
+    n_test,
+    predictions_test,
+    features_test,
+    prediction_iterations,
+)
+    return _predict_test_in_batches(
+        pt,
+        mt,
+        prediction_priors;
+        n_forecasters = n_forecasters,
+        n_test = n_test,
+        predictions_test = predictions_test,
+        features_test = features_test,
+        prediction_iterations = prediction_iterations,
+    )
+end
+
+function _predict_test(
+    ::KalmanPrediction,
+    pt,
+    mt,
+    prediction_priors;
+    n_forecasters,
+    n_test,
+    predictions_test,
+    features_test,
+    prediction_iterations,
+)
+    return _predict_test_kalman(
+        pt,
+        mt,
+        prediction_priors;
+        n_forecasters = n_forecasters,
+        n_test = n_test,
+        predictions_test = predictions_test,
+        features_test = features_test,
+        prediction_iterations = prediction_iterations,
+    )
+end
+
 # ---------------------------------------------------------------------------
 # Generic run_experiment — dispatches to model hooks
 # ---------------------------------------------------------------------------
@@ -358,8 +540,10 @@ function run_experiment(spec::ExperimentSpecifier)
     prediction_priors =
         Dict{Symbol,Any}(k => deepcopy(posteriors[k]) for k in prediction_prior_keys(mt))
 
-    @info "Generating $(model_type_name(mt)) ensemble predictions on test" batch_size = TEST_PREDICTION_BATCH_SIZE
-    ensemble_preds, test_posteriors = _predict_test_in_batches(
+    @info "Generating $(model_type_name(mt)) ensemble predictions on test" prediction_mode =
+        prediction_mode_name(spec.prediction_mode) batch_size = TEST_PREDICTION_BATCH_SIZE
+    ensemble_preds, test_posteriors = _predict_test(
+        spec.prediction_mode,
         pt,
         mt,
         prediction_priors;
@@ -463,6 +647,9 @@ function _spec_for_prediction_from_saved(saved, prediction_iterations::Int)
         dataset_path = String(spec_saved.dataset_path)
         experts = collect(String, spec_saved.experts)
         selected_quantiles, number_of_quantiles = _saved_quantile_config(spec_saved)
+        prediction_mode =
+            _has_field(spec_saved, :prediction_mode) ?
+            _parse_prediction_mode(string(spec_saved.prediction_mode)) : BatchPrediction()
 
         return ExperimentSpecifier(
             prediction_type,
@@ -477,6 +664,7 @@ function _spec_for_prediction_from_saved(saved, prediction_iterations::Int)
             Dict{Symbol,Any}(),
             1,
             prediction_iterations,
+            prediction_mode,
             false,
             nothing,
             nothing,
@@ -501,6 +689,7 @@ function _spec_for_prediction_from_saved(saved, prediction_iterations::Int)
                 Dict{Symbol,Any}(),
                 1,
                 prediction_iterations,
+                spec_from_raw.prediction_mode,
                 false,
                 nothing,
                 nothing,
