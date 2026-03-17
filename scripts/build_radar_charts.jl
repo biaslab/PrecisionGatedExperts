@@ -23,6 +23,11 @@ const ENSEMBLE_MODEL_TYPES = [
     "noisy_experts", "noisy_experts_diagonal",
     "neural_ensemble", "neural_ensemble_big",
 ]
+
+const ENSEMBLE_BAYES_MODEL_TYPES = [
+    "static", "dynamic", "dynamic_diagonal",
+    "noisy_experts", "noisy_experts_diagonal",
+]
 const ENSEMBLE_MODEL_LABELS = Dict(
     "static"                  => "Static",
     "dynamic"                 => "Dyn.",
@@ -114,10 +119,12 @@ function load_metrics(dataset::String, horizon::Int, pred_type::Symbol, model_ty
     end
     data = JLD2.load(fpath)
     metrics = data["ensemble_metrics"]
-    return (mse=metrics.mse, mae=metrics.mae, nll=-metrics.nll)
+    return (mse=metrics.mse, mae=metrics.mae, nll=-metrics.nll, smape=metrics.smape)
 end
 
-clean_val(v, cap) = (v === nothing || !isfinite(v)) ? nothing : min(log(abs(v)), log(cap))
+clean_val(v, cap) = (v === nothing || !isfinite(v)) ? nothing : min(abs(v), cap)
+
+clean_val_log(v, cap) = (v === nothing || !isfinite(v)) ? nothing : min(log(abs(v)), log(cap))
 
 function best_baseline_metric(dataset::String, metric::Symbol)
     by_dataset = get(BASELINE_METRICS, dataset, nothing)
@@ -169,13 +176,15 @@ end
 
 function build_radar_chart(metric::Symbol;
                            datasets = DATASETS_DEFAULT,
-                           cap = VALUE_CAP)
+                           cap = VALUE_CAP,
+                           models = ENSEMBLE_MODEL_TYPES,
+                           log_metric = true)
     N = length(datasets)
     dataset_labels = [d[2] for d in datasets]
 
     # 1. Compute average metric per model × dataset
     raw_data = Dict{String, Vector{Union{Nothing,Float64}}}()
-    for mt in ENSEMBLE_MODEL_TYPES
+    for mt in models
         vals = Union{Nothing,Float64}[]
         for (ds, _, pred_type) in datasets
             horizon_vals = Float64[]
@@ -183,7 +192,11 @@ function build_radar_chart(metric::Symbol;
                 m = load_metrics(ds, h, pred_type, mt)
                 m === nothing && continue
                 v = getfield(m, metric)
-                cv = clean_val(v, cap)
+                if log_metric
+                    cv = clean_val_log(v, cap)
+                else
+                    cv = clean_val(v, cap)
+                end
                 cv !== nothing && push!(horizon_vals, cv)
             end
             push!(vals, isempty(horizon_vals) ? nothing : sum(horizon_vals) / length(horizon_vals))
@@ -203,7 +216,7 @@ function build_radar_chart(metric::Symbol;
     axis_best  = fill(Inf, N)
     axis_worst = fill(-Inf, N)
     for i in 1:N
-        for mt in ENSEMBLE_MODEL_TYPES
+        for mt in models
             mt in RANGE_EXCLUDE_MODELS && continue
             v = raw_data[mt][i]
             v === nothing && continue
@@ -236,14 +249,14 @@ function build_radar_chart(metric::Symbol;
     end
 
     normed = Dict{String, Vector{Float64}}()
-    for mt in ENSEMBLE_MODEL_TYPES
+    for mt in models
         normed[mt] = [normalize_val(raw_data[mt][i], i) for i in 1:N]
     end
 
     # 5. Find best model (largest total area)
     θ_raw = LinRange(0, 2π, N + 1)[1:N] |> collect
     areas = Dict{String, Float64}()
-    for mt in ENSEMBLE_MODEL_TYPES
+    for mt in models
         areas[mt] = radar_polygon_area(normed[mt], θ_raw)
     end
     max_area = radar_polygon_area(ones(N), θ_raw)
@@ -254,7 +267,7 @@ function build_radar_chart(metric::Symbol;
     println("\n--- Radar Polygon Areas ($metric_upper) ---")
     @printf("%-20s %10s %10s\n", "Model", "Area", "% of max")
     println("-"^42)
-    sorted_models = sort(collect(ENSEMBLE_MODEL_TYPES), by=mt -> -areas[mt])
+    sorted_models = sort(collect(models), by=mt -> -areas[mt])
     for mt in sorted_models
         label = ENSEMBLE_MODEL_LABELS[mt]
         @printf("%-20s %10.4f %9.1f%%\n", label, areas[mt], 100 * areas[mt] / max_area)
@@ -282,7 +295,7 @@ function build_radar_chart(metric::Symbol;
     θ = LinRange(0, 2π, N + 1) |> collect  # N+1 to close the polygon
 
     # Plot all models (log transform compresses scale enough for all to be visible)
-    plotted_models = copy(ENSEMBLE_MODEL_TYPES)
+    plotted_models = copy(models)
 
     p = plot(
         size = (950, 900),
@@ -381,5 +394,7 @@ function build_radar_chart(metric::Symbol;
 end
 
 # ─── Generate Charts ──────────────────────────────────────────────────────────
+build_radar_chart(:mse, models = ENSEMBLE_BAYES_MODEL_TYPES)
+build_radar_chart(:nll, models = ENSEMBLE_BAYES_MODEL_TYPES)
 build_radar_chart(:mse)
 build_radar_chart(:nll)
