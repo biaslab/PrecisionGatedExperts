@@ -27,6 +27,14 @@ const ENSEMBLE_MODEL_TYPES = [
     "neural_ensemble_big",
 ]
 
+const ENSEMBLE_BAYES_MODEL_TYPES = [
+    "static",
+    "dynamic",
+    "dynamic_diagonal",
+    "noisy_experts",
+    "noisy_experts_diagonal",
+]
+
 const ENSEMBLE_MODEL_LABELS = Dict(
     "static" => "Static",
     "dynamic" => "Dyn.",
@@ -213,9 +221,9 @@ function plot_metric_frontier!(ax, metric_label::String, points)
     ax.xscale = log10
 end
 
-function build_pareto_frontier()
-    mse_scores = score_models(:mse)
-    nll_scores = score_models(:nll)
+function build_pareto_frontier(; models = ENSEMBLE_MODEL_TYPES, output_suffix = "models")
+    mse_scores = score_models(:mse, models = models)
+    nll_scores = score_models(:nll, models = models)
 
     mse_points = [
         (
@@ -224,7 +232,7 @@ function build_pareto_frontier()
             params = MODEL_PARAM_COUNTS[model_type],
             score = mse_scores[model_type],
         )
-        for model_type in ENSEMBLE_MODEL_TYPES
+        for model_type in models
     ]
     nll_points = [
         (
@@ -233,13 +241,13 @@ function build_pareto_frontier()
             params = MODEL_PARAM_COUNTS[model_type],
             score = nll_scores[model_type],
         )
-        for model_type in ENSEMBLE_MODEL_TYPES
+        for model_type in models
     ]
 
     println("\n--- Pareto Scores ---")
     @printf("%-16s %10s %12s %12s\n", "Model", "Params", "MSE area %", "NLL area %")
     println("-"^56)
-    for model_type in ENSEMBLE_MODEL_TYPES
+    for model_type in models
         @printf(
             "%-16s %10d %11.2f%% %11.2f%%\n",
             ENSEMBLE_MODEL_LABELS[model_type],
@@ -265,8 +273,8 @@ function build_pareto_frontier()
     )
 
     mkpath(FIGURES_DIR)
-    png_path = joinpath(FIGURES_DIR, "pareto_frontier_models.png")
-    pdf_path = joinpath(FIGURES_DIR, "pareto_frontier_models.pdf")
+    png_path = joinpath(FIGURES_DIR, "pareto_frontier_$(output_suffix).png")
+    pdf_path = joinpath(FIGURES_DIR, "pareto_frontier_$(output_suffix).pdf")
     save(png_path, fig; px_per_unit = 2)
     save(pdf_path, fig)
 
@@ -274,4 +282,5 @@ function build_pareto_frontier()
     println("Saved: $pdf_path")
 end
 
-build_pareto_frontier()
+build_pareto_frontier(models = ENSEMBLE_BAYES_MODEL_TYPES, output_suffix = "bayes_models")
+build_pareto_frontier(models = ENSEMBLE_MODEL_TYPES, output_suffix = "all_models")
