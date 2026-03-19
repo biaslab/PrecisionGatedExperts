@@ -7,7 +7,7 @@ params:
   horizon: 720
   feature_type: "vae"
   inference_iterations: 5
-  prediction_iterations: 1
+  prediction_iterations: 3
   selected_quantiles: [10, 90]
   experts:
     - "models/ETTh1_h720_s96_CNN_enzyme.jld2"

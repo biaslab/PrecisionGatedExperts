@@ -6,7 +6,7 @@ params:
   horizon: 96
   feature_type: "vae"
   inference_iterations: 5
-  prediction_iterations: 1
+  prediction_iterations: 3
   selected_quantiles: [10, 90]
   experts:
     - "models/electricity_h96_s96_CNN_enzyme.jld2"

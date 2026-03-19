@@ -1,15 +1,23 @@
 using JLD2
 using Printf
 
-const RESULTS_DIR = joinpath(@__DIR__, "..", "paper", "results")
+const RESULTS_DIR = joinpath(@__DIR__, "..", "paper", "results_vae")
 const HORIZONS = [96, 192, 336, 720]
-const ENSEMBLE_MODEL_TYPES = ["static", "dynamic", "dynamic_diagonal", "noisy_experts_diagonal", "neural_ensemble"]
+const SELECTED_METRICS = [:mse, :nll]
+const ENSEMBLE_MODEL_TYPES = ["static", "dynamic", "dynamic_diagonal", "noisy_experts", "noisy_experts_diagonal", "neural_ensemble", "neural_ensemble_big"]
 const ENSEMBLE_MODEL_LABELS = Dict(
     "static" => "Static",
     "dynamic" => "Dyn.",
     "dynamic_diagonal" => "Dyn. Diag.",
+    "noisy_experts" => "Noisy",
     "noisy_experts_diagonal" => "Noisy Diag.",
     "neural_ensemble" => "MoE",
+    "neural_ensemble_big" => "MoE Big",
+)
+# Map model type to its actual directory name under results_vae/
+const MODEL_DIR = Dict(
+    "noisy_experts_diagonal" => "noisy_diagonal",
+    "noisy_experts" => "noisy_experts",
 )
 const BASELINE_MODELS = ["CNN", "DLinear", "LSTM", "MLP", "NConv"]
 
@@ -58,7 +66,9 @@ const DATASETS = [
 ]
 
 function result_filename(dataset::String, horizon::Int, pred_type::Symbol, model_type::String)
-    if pred_type == :univariate
+    if startswith(model_type, "neural_ensemble")
+        return "$(dataset)_h$(horizon)_neural_ensemble.jld2"
+    elseif pred_type == :univariate
         return "$(dataset)_h$(horizon)_OT_$(model_type).jld2"
     else
         return "$(dataset)_h$(horizon)_multivariate_$(model_type).jld2"
@@ -66,29 +76,28 @@ function result_filename(dataset::String, horizon::Int, pred_type::Symbol, model
 end
 
 function load_metrics(dataset::String, horizon::Int, pred_type::Symbol, model_type::String)
-    if model_type == "neural_ensemble"
-        return load_neural_ensemble_metrics(dataset, horizon, pred_type)
-    end
     fname = result_filename(dataset, horizon, pred_type, model_type)
-    fpath = joinpath(RESULTS_DIR, model_type, fname)
+    dir_name = get(MODEL_DIR, model_type, model_type)
+    fpath = joinpath(RESULTS_DIR, dir_name, fname)
     if !isfile(fpath)
-        return nothing
+        # Fall back to prefix-matching (handles files with hash suffixes)
+        dir = joinpath(RESULTS_DIR, dir_name)
+        !isdir(dir) && return nothing
+        prefix = replace(fname, ".jld2" => "")
+        matches = filter(f -> startswith(f, prefix) && endswith(f, ".jld2"), readdir(dir))
+        isempty(matches) && return nothing
+        fpath = joinpath(dir, first(matches))
     end
     data = JLD2.load(fpath)
     metrics = data["ensemble_metrics"]
-    return (mse = metrics.mse, mae = metrics.mae, nll = -metrics.nll)
-end
-
-function load_neural_ensemble_metrics(dataset::String, horizon::Int, pred_type::Symbol)
-    dir = joinpath(RESULTS_DIR, "neural_ensemble")
-    !isdir(dir) && return nothing
-    prefix = "$(dataset)_h$(horizon)_neural_ensemble"
-    matches = filter(f -> startswith(f, prefix) && endswith(f, ".jld2"), readdir(dir))
-    isempty(matches) && return nothing
-    fpath = joinpath(dir, first(matches))
-    data = JLD2.load(fpath)
-    metrics = data["ensemble_metrics"]
-    return (mse = metrics.mse, mae = metrics.mae, nll = -metrics.nll)
+    return Dict(
+        :mse => clean_metric(get_metric_value(metrics, :mse)),
+        :mae => clean_metric(get_metric_value(metrics, :mae)),
+        :nll => clean_metric(negate_if_present(get_metric_value(metrics, :nll))),
+        :r2 => clean_metric(get_metric_value(metrics, :r2)),
+        :smape => clean_metric(get_metric_value(metrics, :smape)),
+        :ci95_interval_score => clean_metric(get_metric_value(metrics, :ci95_interval_score)),
+    )
 end
 
 function best_baseline_metrics(dataset::String, horizon::Int)
@@ -109,8 +118,20 @@ function best_baseline_metrics(dataset::String, horizon::Int)
     end
 
     best_metrics === nothing && return nothing
-    return (model = best_model, mse = best_metrics.mse, mae = best_metrics.mae, nll = nothing)
+    return Dict(
+        :model => best_model,
+        :mse => clean_metric(best_metrics.mse),
+        :mae => clean_metric(best_metrics.mae),
+        :nll => nothing,
+        :r2 => nothing,
+        :smape => nothing,
+        :ci95_interval_score => nothing,
+    )
 end
+
+clean_metric(val) = (val === nothing || !isfinite(val)) ? nothing : val
+negate_if_present(val) = val === nothing ? nothing : -val
+get_metric_value(metrics, key::Symbol) = hasproperty(metrics, key) ? getproperty(metrics, key) : nothing
 
 function fmt(val)
     if val === nothing
@@ -132,216 +153,134 @@ function fmt(val)
     end
 end
 
-function second_best(vals)
-    unique_sorted = sort(unique(vals))
-    length(unique_sorted) >= 2 ? unique_sorted[2] : nothing
+function best_and_second(vals, larger_is_better::Bool)
+    unique_sorted = sort(unique(filter(isfinite, vals)); rev = larger_is_better)
+    isempty(unique_sorted) && return (nothing, nothing)
+    return (unique_sorted[1], length(unique_sorted) >= 2 ? unique_sorted[2] : nothing)
+end
+
+function highlight_metric(val, best_val, second_val)
+    rendered = fmt(val)
+    if val !== nothing && best_val !== nothing && val == best_val
+        return "\\textbf{$rendered}"
+    elseif val !== nothing && second_val !== nothing && val == second_val
+        return "\\underline{\\textcolor{blue}{$rendered}}"
+    end
+    return rendered
+end
+
+function selected_metric_specs()
+    metric_catalog = Dict(
+        :mse => (label = "MSE", larger_is_better = false),
+        :mae => (label = "MAE", larger_is_better = false),
+        :nll => (label = "NLL", larger_is_better = false),
+        :r2 => (label = "R2", larger_is_better = true),
+        :smape => (label = "sMAPE", larger_is_better = false),
+        :ci95_interval_score => (label = "CI95 Int. Score", larger_is_better = false),
+    )
+    isempty(SELECTED_METRICS) && error("SELECTED_METRICS must contain at least one metric.")
+
+    specs = NamedTuple{(:key,:label,:larger_is_better),Tuple{Symbol,String,Bool}}[]
+    for metric in SELECTED_METRICS
+        haskey(metric_catalog, metric) || error("Unsupported metric in SELECTED_METRICS: $(metric). Supported metrics: $(collect(keys(metric_catalog))).")
+        push!(specs, (key = metric, label = metric_catalog[metric].label, larger_is_better = metric_catalog[metric].larger_is_better))
+    end
+    return specs
 end
 
 function build_latex_table()
-    n_ensemble_models = length(ENSEMBLE_MODEL_TYPES)
-    # Collect all data first to identify best values per row
-    all_data = Dict{Tuple{String,Int,String}, Union{Nothing,NamedTuple{(:mse,:mae,:nll), Tuple{Float64,Float64,Float64}}}}()
+    table_models = vcat(ENSEMBLE_MODEL_TYPES, ["best_baseline"])
+    table_model_labels = merge(copy(ENSEMBLE_MODEL_LABELS), Dict("best_baseline" => "Best"))
+    metric_names = selected_metric_specs()
+    horizon_groups = vcat(string.(HORIZONS), ["Avg"])
+
+    metric_dict_type = Dict{Symbol,Union{Nothing,Float64}}
+    all_data = Dict{Tuple{String,Int,String}, Union{Nothing,metric_dict_type}}()
     for (ds, _, pred_type) in DATASETS
         for h in HORIZONS
             for mt in ENSEMBLE_MODEL_TYPES
-                all_data[(ds, h, mt)] = load_metrics(ds, h, pred_type, mt)
+                metrics = load_metrics(ds, h, pred_type, mt)
+                if metrics === nothing
+                    all_data[(ds, h, mt)] = nothing
+                else
+                    all_data[(ds, h, mt)] = metrics
+                end
             end
         end
     end
 
-    col_spec = "ll" * join([" ccc" for _ in ENSEMBLE_MODEL_TYPES], " @{\\hskip 6pt}") * " @{\\hskip 6pt} ccc"
-    cmidrules = join(
-        vcat(
-            ["\\cmidrule(lr){$(3i)-$(3i+2)}" for i in 1:n_ensemble_models],
-            ["\\cmidrule(lr){$(3n_ensemble_models+3)-$(3n_ensemble_models+5)}"],
-        ),
-        " ",
-    )
-
-    header_models = join(
-        vcat(
-            ["\\multicolumn{3}{c}{$(ENSEMBLE_MODEL_LABELS[mt])}" for mt in ENSEMBLE_MODEL_TYPES],
-            ["\\multicolumn{3}{c}{Best}"],
-        ),
-        " & ",
-    )
-
-    subheader = join(
-        vcat(
-            ["MSE & MAE & NLL" for _ in ENSEMBLE_MODEL_TYPES],
-            ["MSE & MAE & Model"],
-        ),
-        " & ",
-    )
+    col_spec = "lll" * repeat(" c", length(table_models))
+    header_models = join([table_model_labels[mt] for mt in table_models], " & ")
 
     lines = String[]
     push!(lines, "\\begin{table}[t]")
     push!(lines, "\\centering")
     push!(lines, "\\scriptsize")
     push!(lines, "\\setlength{\\tabcolsep}{2.5pt}")
-    push!(lines, "\\caption{MSE / MAE / NLL for Static, Dynamic (Dyn.), Dynamic Diagonal (Dyn. Diag.), Noisy Diagonal (Noisy Diag.), and Mixture of Experts (MoE) ensembles, compared against the best baseline model selected by lowest baseline MSE for each dataset and horizon. \\textbf{Bold} indicates the best result; {\\underline{\\textcolor{blue}{blue underlined}}} indicates the second best.}")
+    push!(lines, "\\caption{MSE / MAE / NLL for Static, Dynamic (Dyn.), Dynamic Diagonal (Dyn. Diag.), Noisy Experts (Noisy), Noisy Diagonal (Noisy Diag.), Mixture of Experts (MoE), and MoE Big ensembles, compared against the best baseline model selected by lowest baseline MSE for each dataset and horizon. Rows are organized by dataset, horizon, and metric; models remain as columns. An average block is included for each dataset. \\textbf{Bold} indicates the best result; {\\underline{\\textcolor{blue}{blue underlined}}} indicates the second best. Non-finite values are treated as missing.}")
     push!(lines, "\\label{tab:ensemble_comparison}")
     push!(lines, "\\begin{tabular}{$col_spec}")
     push!(lines, "\\toprule")
-    push!(lines, "\\multirow{2}{*}{Dataset} & \\multirow{2}{*}{H} &")
-    push!(lines, "$header_models \\\\")
-    push!(lines, "$cmidrules")
-    push!(lines, "& & $subheader \\\\")
+    push!(lines, "Dataset & H & Metric & $header_models \\\\")
     push!(lines, "\\midrule")
 
-    for (di, (ds, display_name, pred_type)) in enumerate(DATASETS)
-        push!(lines, "\\multirow{$(length(HORIZONS) + 1)}{*}{$display_name}")
-
-        # Collect metrics for avg computation
-        avg_mse = Dict(mt => Float64[] for mt in ENSEMBLE_MODEL_TYPES)
-        avg_mae = Dict(mt => Float64[] for mt in ENSEMBLE_MODEL_TYPES)
-        avg_nll = Dict(mt => Float64[] for mt in ENSEMBLE_MODEL_TYPES)
-        best_avg_mse = Float64[]
-        best_avg_mae = Float64[]
-        best_avg_models = String[]
-
-        for h in HORIZONS
-            row_mse = Dict{String,Union{Nothing,Float64}}()
-            row_mae = Dict{String,Union{Nothing,Float64}}()
-            row_nll = Dict{String,Union{Nothing,Float64}}()
+    for (di, (ds, display_name, _)) in enumerate(DATASETS)
+        dataset_row_span = length(horizon_groups) * length(metric_names)
+        for (hi, horizon_label) in enumerate(horizon_groups)
+            per_model_metrics = Dict{String,metric_dict_type}()
             for mt in ENSEMBLE_MODEL_TYPES
-                m = all_data[(ds, h, mt)]
-                row_mse[mt] = m === nothing ? nothing : m.mse
-                row_mae[mt] = m === nothing ? nothing : m.mae
-                row_nll[mt] = m === nothing ? nothing : m.nll
-                if m !== nothing
-                    push!(avg_mse[mt], m.mse)
-                    push!(avg_mae[mt], m.mae)
-                    push!(avg_nll[mt], m.nll)
+                if horizon_label == "Avg"
+                    model_metrics = [
+                        all_data[(ds, h, mt)] for h in HORIZONS
+                        if all_data[(ds, h, mt)] !== nothing
+                    ]
+                    per_model_metrics[mt] = Dict(
+                        metric.key => let vals = [m[metric.key] for m in model_metrics if get(m, metric.key, nothing) !== nothing]
+                            isempty(vals) ? nothing : sum(vals) / length(vals)
+                        end for metric in metric_names
+                    )
+                else
+                    h = parse(Int, horizon_label)
+                    metrics = all_data[(ds, h, mt)]
+                    per_model_metrics[mt] = metrics === nothing ? Dict(metric.key => nothing for metric in metric_names) : Dict(metric.key => get(metrics, metric.key, nothing) for metric in metric_names)
                 end
             end
-
-            best_baseline = best_baseline_metrics(ds, h)
-            best_baseline_mse = best_baseline === nothing ? nothing : best_baseline.mse
-            best_baseline_mae = best_baseline === nothing ? nothing : best_baseline.mae
-            best_baseline_model = best_baseline === nothing ? "--" : best_baseline.model
-            if best_baseline !== nothing
-                push!(best_avg_mse, best_baseline.mse)
-                push!(best_avg_mae, best_baseline.mae)
-                push!(best_avg_models, best_baseline.model)
-            end
-
-            # Find best (min) MSE, MAE, and NLL across models for this row
-            valid_mse = [v for v in vcat(collect(values(row_mse)), [best_baseline_mse]) if v !== nothing]
-            valid_mae = [v for v in vcat(collect(values(row_mae)), [best_baseline_mae]) if v !== nothing]
-            valid_nll = [v for v in values(row_nll) if v !== nothing]
-            best_mse = isempty(valid_mse) ? nothing : minimum(valid_mse)
-            best_mae = isempty(valid_mae) ? nothing : minimum(valid_mae)
-            best_nll = isempty(valid_nll) ? nothing : minimum(valid_nll)
-            second_mse = second_best(valid_mse)
-            second_mae = second_best(valid_mae)
-            second_nll = second_best(valid_nll)
-
-            cells = String[]
-            for mt in ENSEMBLE_MODEL_TYPES
-                mse_str = fmt(row_mse[mt])
-                mae_str = fmt(row_mae[mt])
-                nll_str = fmt(row_nll[mt])
-                if row_mse[mt] !== nothing && row_mse[mt] == best_mse
-                    mse_str = "\\textbf{$mse_str}"
-                elseif row_mse[mt] !== nothing && second_mse !== nothing && row_mse[mt] == second_mse
-                    mse_str = "\\underline{\\textcolor{blue}{$mse_str}}"
-                end
-                if row_mae[mt] !== nothing && row_mae[mt] == best_mae
-                    mae_str = "\\textbf{$mae_str}"
-                elseif row_mae[mt] !== nothing && second_mae !== nothing && row_mae[mt] == second_mae
-                    mae_str = "\\underline{\\textcolor{blue}{$mae_str}}"
-                end
-                if row_nll[mt] !== nothing && row_nll[mt] == best_nll
-                    nll_str = "\\textbf{$nll_str}"
-                elseif row_nll[mt] !== nothing && second_nll !== nothing && row_nll[mt] == second_nll
-                    nll_str = "\\underline{\\textcolor{blue}{$nll_str}}"
-                end
-                push!(cells, "$mse_str & $mae_str & $nll_str")
-            end
-            best_mse_str = fmt(best_baseline_mse)
-            best_mae_str = fmt(best_baseline_mae)
-            if best_baseline_mse !== nothing && best_baseline_mse == best_mse
-                best_mse_str = "\\textbf{$best_mse_str}"
-            elseif best_baseline_mse !== nothing && second_mse !== nothing && best_baseline_mse == second_mse
-                best_mse_str = "\\underline{\\textcolor{blue}{$best_mse_str}}"
-            end
-            if best_baseline_mae !== nothing && best_baseline_mae == best_mae
-                best_mae_str = "\\textbf{$best_mae_str}"
-            elseif best_baseline_mae !== nothing && second_mae !== nothing && best_baseline_mae == second_mae
-                best_mae_str = "\\underline{\\textcolor{blue}{$best_mae_str}}"
-            end
-            push!(cells, "$best_mse_str & $best_mae_str & $best_baseline_model")
-
-            push!(lines, "& $h  & $(join(cells, " & ")) \\\\")
-        end
-
-        # Avg row
-        avg_cells = String[]
-        avg_mse_vals = Dict{String,Union{Nothing,Float64}}()
-        avg_mae_vals = Dict{String,Union{Nothing,Float64}}()
-        avg_nll_vals = Dict{String,Union{Nothing,Float64}}()
-        for mt in ENSEMBLE_MODEL_TYPES
-            if isempty(avg_mse[mt])
-                avg_mse_vals[mt] = nothing
-                avg_mae_vals[mt] = nothing
-                avg_nll_vals[mt] = nothing
+            if horizon_label == "Avg"
+                baseline_metrics = [
+                    best_baseline_metrics(ds, h) for h in HORIZONS
+                    if best_baseline_metrics(ds, h) !== nothing
+                ]
+                per_model_metrics["best_baseline"] = Dict(
+                    metric.key => let vals = [m[metric.key] for m in baseline_metrics if get(m, metric.key, nothing) !== nothing]
+                        isempty(vals) ? nothing : sum(vals) / length(vals)
+                    end for metric in metric_names
+                )
             else
-                avg_mse_vals[mt] = sum(avg_mse[mt]) / length(avg_mse[mt])
-                avg_mae_vals[mt] = sum(avg_mae[mt]) / length(avg_mae[mt])
-                avg_nll_vals[mt] = sum(avg_nll[mt]) / length(avg_nll[mt])
+                h = parse(Int, horizon_label)
+                baseline = best_baseline_metrics(ds, h)
+                per_model_metrics["best_baseline"] = baseline === nothing ? Dict(metric.key => nothing for metric in metric_names) : Dict(metric.key => get(baseline, metric.key, nothing) for metric in metric_names)
             end
-        end
-        avg_best_mse = isempty(best_avg_mse) ? nothing : sum(best_avg_mse) / length(best_avg_mse)
-        avg_best_mae = isempty(best_avg_mae) ? nothing : sum(best_avg_mae) / length(best_avg_mae)
-        avg_best_model = isempty(best_avg_models) ? "--" : (length(unique(best_avg_models)) == 1 ? only(unique(best_avg_models)) : "varies")
 
-        valid_avg_mse = [v for v in vcat(collect(values(avg_mse_vals)), [avg_best_mse]) if v !== nothing]
-        valid_avg_mae = [v for v in vcat(collect(values(avg_mae_vals)), [avg_best_mae]) if v !== nothing]
-        valid_avg_nll = [v for v in values(avg_nll_vals) if v !== nothing]
-        best_avg_mse = isempty(valid_avg_mse) ? nothing : minimum(valid_avg_mse)
-        best_avg_mae = isempty(valid_avg_mae) ? nothing : minimum(valid_avg_mae)
-        best_avg_nll = isempty(valid_avg_nll) ? nothing : minimum(valid_avg_nll)
-        second_avg_mse = second_best(valid_avg_mse)
-        second_avg_mae = second_best(valid_avg_mae)
-        second_avg_nll = second_best(valid_avg_nll)
+            for (mi, metric) in enumerate(metric_names)
+                values = [per_model_metrics[mt][metric.key] for mt in table_models if per_model_metrics[mt][metric.key] !== nothing]
+                best_val, second_val = best_and_second(values, metric.larger_is_better)
 
-        for mt in ENSEMBLE_MODEL_TYPES
-            mse_str = fmt(avg_mse_vals[mt])
-            mae_str = fmt(avg_mae_vals[mt])
-            nll_str = fmt(avg_nll_vals[mt])
-            if avg_mse_vals[mt] !== nothing && avg_mse_vals[mt] == best_avg_mse
-                mse_str = "\\textbf{$mse_str}"
-            elseif avg_mse_vals[mt] !== nothing && second_avg_mse !== nothing && avg_mse_vals[mt] == second_avg_mse
-                mse_str = "\\underline{\\textcolor{blue}{$mse_str}}"
-            end
-            if avg_mae_vals[mt] !== nothing && avg_mae_vals[mt] == best_avg_mae
-                mae_str = "\\textbf{$mae_str}"
-            elseif avg_mae_vals[mt] !== nothing && second_avg_mae !== nothing && avg_mae_vals[mt] == second_avg_mae
-                mae_str = "\\underline{\\textcolor{blue}{$mae_str}}"
-            end
-            if avg_nll_vals[mt] !== nothing && avg_nll_vals[mt] == best_avg_nll
-                nll_str = "\\textbf{$nll_str}"
-            elseif avg_nll_vals[mt] !== nothing && second_avg_nll !== nothing && avg_nll_vals[mt] == second_avg_nll
-                nll_str = "\\underline{\\textcolor{blue}{$nll_str}}"
-            end
-            push!(avg_cells, "$mse_str & $mae_str & $nll_str")
-        end
-        avg_best_mse_str = fmt(avg_best_mse)
-        avg_best_mae_str = fmt(avg_best_mae)
-        if avg_best_mse !== nothing && avg_best_mse == best_avg_mse
-            avg_best_mse_str = "\\textbf{$avg_best_mse_str}"
-        elseif avg_best_mse !== nothing && second_avg_mse !== nothing && avg_best_mse == second_avg_mse
-            avg_best_mse_str = "\\underline{\\textcolor{blue}{$avg_best_mse_str}}"
-        end
-        if avg_best_mae !== nothing && avg_best_mae == best_avg_mae
-            avg_best_mae_str = "\\textbf{$avg_best_mae_str}"
-        elseif avg_best_mae !== nothing && second_avg_mae !== nothing && avg_best_mae == second_avg_mae
-            avg_best_mae_str = "\\underline{\\textcolor{blue}{$avg_best_mae_str}}"
-        end
-        push!(avg_cells, "$avg_best_mse_str & $avg_best_mae_str & $avg_best_model")
+                dataset_cell = (hi == 1 && mi == 1) ? "\\multirow{$dataset_row_span}{*}{$display_name}" : ""
+                horizon_cell = mi == 1 ? "\\multirow{$(length(metric_names))}{*}{$horizon_label}" : ""
 
-        push!(lines, "& Avg & $(join(avg_cells, " & ")) \\\\")
+                row_cells = String[]
+                for mt in table_models
+                    model_metrics = per_model_metrics[mt]
+                    push!(row_cells, highlight_metric(model_metrics[metric.key], best_val, second_val))
+                end
+
+                push!(lines, "$dataset_cell & $horizon_cell & $(metric.label) & $(join(row_cells, " & ")) \\\\")
+            end
+
+            if hi < length(horizon_groups)
+                push!(lines, "\\cmidrule(lr){2-$(3 + length(table_models))}")
+            end
+        end
 
         if di < length(DATASETS)
             push!(lines, "\\midrule")
