@@ -1,0 +1,617 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Phase Diagram: Gamma vs LogNormal Constraint</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  background: #0d1117; color: #c9d1d9;
+  padding: 20px 24px; max-width: 1200px; margin: 0 auto;
+}
+h1 { font-size: 1.3em; color: #e6edf3; font-weight: 600; }
+.subtitle { font-size: 0.82em; color: #7d8590; margin: 2px 0 18px; line-height: 1.6; }
+.panel {
+  background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+  padding: 14px 14px 10px; margin-bottom: 16px;
+}
+.panel-title {
+  font-size: 0.72em; color: #7d8590; text-transform: uppercase;
+  letter-spacing: 1px; margin-bottom: 8px;
+}
+canvas { width: 100%; display: block; border-radius: 4px; }
+.bottom { display: grid; grid-template-columns: 1.2fr 0.8fr; gap: 16px; }
+.info-box { font-size: 0.82em; line-height: 1.7; }
+.info-box h3 { font-size: 0.85em; color: #e6edf3; margin: 12px 0 6px; }
+.info-box h3:first-child { margin-top: 0; }
+.formula {
+  font-family: 'Times New Roman', Georgia, serif; font-size: 1.05em;
+  color: #e6edf3; padding: 8px 12px; margin: 6px 0;
+  background: #0d1117; border-radius: 4px; text-align: center;
+}
+.stat-row {
+  display: flex; justify-content: space-between;
+  padding: 4px 0; border-bottom: 1px solid #21262d;
+}
+.stat-label { color: #7d8590; font-size: 0.8em; }
+.stat-value { font-weight: 600; font-size: 0.85em; }
+.sv-blue { color: #79c0ff; }
+.sv-pink { color: #f97583; }
+.sv-green { color: #3fb950; }
+.phase-info {
+  font-size: 0.8em; color: #7d8590; margin-top: 6px; min-height: 1.4em;
+}
+@media (max-width: 768px) { .bottom { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+
+<h1>Constraint Selection: Gamma vs LogNormal</h1>
+<p class="subtitle">
+  Variable γ receives a <span style="color:#f97583">LogNormal(μ,σ)</span> message from z
+  and a <span style="color:#79c0ff">Gamma(α,β)</span> message from observations.<br>
+  Which constraint family for q(γ) gives lower KL? &nbsp;Boundary: <b>ασ² ≈ 1</b>
+</p>
+
+<div class="panel">
+  <div class="panel-title">Phase Diagram — click to explore a point</div>
+  <canvas id="phase-cv"></canvas>
+  <div class="phase-info" id="phase-info">Click on the diagram to compare approximations at a specific (α, σ)</div>
+</div>
+
+<div class="bottom">
+  <div class="panel">
+    <div class="panel-title">Density Comparison at clicked point</div>
+    <canvas id="density-cv"></canvas>
+  </div>
+  <div class="panel info-box">
+    <h3>Clicked Point</h3>
+    <div class="stat-row"><span class="stat-label">α (Gamma shape)</span><span class="stat-value sv-blue" id="st-alpha">—</span></div>
+    <div class="stat-row"><span class="stat-label">σ (LogNorm log-std)</span><span class="stat-value sv-pink" id="st-sigma">—</span></div>
+    <div class="stat-row"><span class="stat-label">ασ²</span><span class="stat-value sv-green" id="st-prod">—</span></div>
+    <div class="stat-row"><span class="stat-label">KL cost of Gamma q &nbsp; f(σ)</span><span class="stat-value sv-blue" id="st-fsig">—</span></div>
+    <div class="stat-row"><span class="stat-label">KL cost of LogNorm q &nbsp; g(α)</span><span class="stat-value sv-pink" id="st-galpha">—</span></div>
+    <div class="stat-row"><span class="stat-label">Winner</span><span class="stat-value" id="st-winner">—</span></div>
+
+    <h3>Why ασ² ≈ 1?</h3>
+    <p>For large α: g(α) ≈ 1/(12α)</p>
+    <p>For small σ: f(σ) ≈ σ²/12</p>
+    <div class="formula">g(α) = f(σ) &nbsp;⟹&nbsp; 1/(12α) = σ²/12 &nbsp;⟹&nbsp; ασ² = 1</div>
+    <p style="margin-top:8px"><span style="color:#79c0ff">Blue</span>: use <b>Gamma</b> constraint (ασ² &lt; 1)<br>
+    <span style="color:#f97583">Pink</span>: use <b>LogNormal</b> constraint (ασ² &gt; 1)</p>
+
+    <h3>KL Comparison</h3>
+    <canvas id="bar-cv" style="max-height:90px"></canvas>
+  </div>
+</div>
+
+<script>
+// ── Special functions ───────────────────────────────────────────
+function logGamma(z) {
+  if (z < 0.5) return Math.log(Math.PI / Math.sin(Math.PI * z)) - logGamma(1 - z);
+  z -= 1;
+  const c = [0.99999999999980993, 676.5203681218851, -1259.1392167224028,
+    771.32342877765313, -176.61502916214059, 12.507343278686905,
+    -0.13857109526572012, 9.9843695780195716e-6, 1.5056327351493116e-7];
+  let x = c[0];
+  for (let i = 1; i < 9; i++) x += c[i] / (z + i);
+  const t = z + 7.5;
+  return 0.5 * Math.log(2 * Math.PI) + (z + 0.5) * Math.log(t) - t + Math.log(x);
+}
+
+function digamma(x) {
+  let r = 0;
+  while (x < 8) { r -= 1 / x; x += 1; }
+  const ix = 1 / x, ix2 = ix * ix;
+  return r + Math.log(x) - 0.5 * ix - ix2 * (1/12 - ix2 * (1/120 - ix2 * (1/252 - ix2 / 240)));
+}
+
+function trigamma(x) {
+  let r = 0;
+  while (x < 8) { r += 1 / (x * x); x += 1; }
+  const ix = 1 / x, ix2 = ix * ix;
+  return r + ix + ix2 * (0.5 + ix * (1/6 + ix2 * (-1/30 + ix2 * (1/42 - ix2 / 30))));
+}
+
+// ── PDFs ────────────────────────────────────────────────────────
+function gammaPDF(x, a, b) {
+  if (x <= 1e-300) return (a < 1) ? 1e6 : (a === 1 ? b : 0);
+  return Math.exp(a * Math.log(b) - logGamma(a) + (a - 1) * Math.log(x) - b * x);
+}
+function lognormPDF(x, mu, sig) {
+  if (x <= 0) return 0;
+  const lnx = Math.log(x);
+  return Math.exp(-0.5 * ((lnx - mu) / sig) ** 2) / (x * sig * Math.sqrt(2 * Math.PI));
+}
+
+// ── KL functions ────────────────────────────────────────────────
+// g(α) = KL(LogNormal* || Gamma_α) = Stirling remainder
+function gAlpha(alpha) {
+  return logGamma(alpha) - (alpha - 0.5) * Math.log(alpha) + alpha - 0.5 * Math.log(2 * Math.PI);
+}
+
+// f(σ) = KL(Gamma* || LogNormal_σ) — find optimal α then evaluate
+function findOptA(sigma) {
+  const s2 = sigma * sigma, approx = 1 / s2;
+  const lo = Math.max(0.05, approx * 0.12), hi = Math.max(3, approx * 7);
+  let bestA = approx, bestV = -Infinity;
+  for (let i = 0; i < 400; i++) {
+    const a = lo * Math.exp(i / 399 * Math.log(hi / lo));
+    const v = a - a * digamma(a) + logGamma(a) - trigamma(a) / (2 * s2);
+    if (v > bestV) { bestV = v; bestA = a; }
+  }
+  return bestA;
+}
+function fSigma(sigma) {
+  const a = findOptA(sigma);
+  const s2 = sigma * sigma;
+  const elbo = a - a * digamma(a) + logGamma(a)
+    - Math.log(sigma) - 0.5 * Math.log(2 * Math.PI) - trigamma(a) / (2 * s2);
+  return Math.max(0, -elbo);
+}
+
+// ── Precompute on grids ─────────────────────────────────────────
+const AMIN = 0.1, AMAX = 15, SMIN = 0.1, SMAX = 2.5;
+const NG = 400;
+const gArr = new Float64Array(NG);
+const fArr = new Float64Array(NG);
+for (let i = 0; i < NG; i++) {
+  gArr[i] = gAlpha(AMIN + (i + 0.5) / NG * (AMAX - AMIN));
+  fArr[i] = fSigma(SMIN + (i + 0.5) / NG * (SMAX - SMIN));
+}
+function gLookup(a) {
+  const t = (a - AMIN) / (AMAX - AMIN) * NG - 0.5;
+  const i = Math.max(0, Math.min(NG - 2, Math.floor(t))), f = t - i;
+  return gArr[i] * (1 - f) + gArr[i + 1] * f;
+}
+function fLookup(s) {
+  const t = (s - SMIN) / (SMAX - SMIN) * NG - 0.5;
+  const i = Math.max(0, Math.min(NG - 2, Math.floor(t))), f = t - i;
+  return fArr[i] * (1 - f) + fArr[i + 1] * f;
+}
+
+// ── Full ELBO for density comparison ────────────────────────────
+// Q = Gamma(a,b), target ∝ Gamma(x;α,β) × LogNormal(x;0,σ)
+function elboGQ(a, b, alpha, beta, sigma) {
+  const psi = digamma(a), eta = psi - Math.log(b), psi1 = trigamma(a);
+  const s2 = sigma * sigma;
+  const eGam = (alpha - 1) * eta - beta * a / b + alpha * Math.log(beta) - logGamma(alpha);
+  const eLN = -eta - Math.log(sigma) - 0.5 * Math.log(2 * Math.PI)
+    - (psi1 + eta * eta) / (2 * s2);
+  const H = a - Math.log(b) + logGamma(a) + (1 - a) * psi;
+  return eGam + eLN + H;
+}
+// Q = LogNormal(m,s), target ∝ Gamma(x;α,β) × LogNormal(x;0,σ)
+function elboLNQ(m, s, alpha, beta, sigma) {
+  const s2 = sigma * sigma, qs2 = s * s;
+  const emsh = m + qs2 / 2;
+  if (emsh > 500) return -Infinity;
+  const eGam = (alpha - 1) * m - beta * Math.exp(emsh) + alpha * Math.log(beta) - logGamma(alpha);
+  const eLN = -m - Math.log(sigma) - 0.5 * Math.log(2 * Math.PI) - (qs2 + m * m) / (2 * s2);
+  const H = m + 0.5 * Math.log(2 * Math.PI * Math.E * qs2);
+  return eGam + eLN + H;
+}
+
+function optimizeGQ(alpha, beta, sigma) {
+  let ba = 1, bb = 1, be = -Infinity;
+  for (let i = 0; i < 120; i++) {
+    const a = 0.05 * Math.exp(i / 119 * Math.log(300 / 0.05));
+    for (let j = 0; j < 120; j++) {
+      const b = 0.005 * Math.exp(j / 119 * Math.log(500 / 0.005));
+      const e = elboGQ(a, b, alpha, beta, sigma);
+      if (e > be) { be = e; ba = a; bb = b; }
+    }
+  }
+  // refine
+  const al = ba * 0.6, ah = ba * 1.6, bl = bb * 0.6, bh = bb * 1.6;
+  for (let i = 0; i < 60; i++) {
+    const a = al + i / 59 * (ah - al);
+    for (let j = 0; j < 60; j++) {
+      const b = bl + j / 59 * (bh - bl);
+      const e = elboGQ(a, b, alpha, beta, sigma);
+      if (e > be) { be = e; ba = a; bb = b; }
+    }
+  }
+  return { a: ba, b: bb, elbo: be };
+}
+
+function optimizeLNQ(alpha, beta, sigma) {
+  let bm = 0, bs = 1, be = -Infinity;
+  for (let i = 0; i < 120; i++) {
+    const m = -5 + i / 119 * 15;
+    for (let j = 0; j < 120; j++) {
+      const s = 0.02 * Math.exp(j / 119 * Math.log(10 / 0.02));
+      const e = elboLNQ(m, s, alpha, beta, sigma);
+      if (e > be) { be = e; bm = m; bs = s; }
+    }
+  }
+  const ml = bm - 0.5, mh = bm + 0.5, sl = bs * 0.6, sh = bs * 1.5;
+  for (let i = 0; i < 60; i++) {
+    const m = ml + i / 59 * (mh - ml);
+    for (let j = 0; j < 60; j++) {
+      const s = sl + j / 59 * (sh - sl);
+      const e = elboLNQ(m, s, alpha, beta, sigma);
+      if (e > be) { be = e; bm = m; bs = s; }
+    }
+  }
+  return { m: bm, s: bs, elbo: be };
+}
+
+// ── Canvas helpers ──────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+const M = { top: 22, right: 20, bottom: 38, left: 55 };
+
+function initCanvas(cv, aspect) {
+  const w = cv.parentElement.clientWidth - 28;
+  const h = Math.round(w * aspect);
+  const dpr = window.devicePixelRatio || 1;
+  cv.width = w * dpr; cv.height = h * dpr;
+  cv.style.width = w + 'px'; cv.style.height = h + 'px';
+  const ctx = cv.getContext('2d');
+  ctx.scale(dpr, dpr);
+  return { ctx, w, h };
+}
+
+function clear(ctx, w, h) { ctx.fillStyle = '#0d1117'; ctx.fillRect(0, 0, w, h); }
+
+function xTicks(ctx, px, py, pw, ph, min, max, n) {
+  ctx.fillStyle = '#484f58'; ctx.font = '10px sans-serif'; ctx.textAlign = 'center';
+  for (let i = 0; i <= n; i++) {
+    const t = i / n, x = px + t * pw, v = min + t * (max - min);
+    ctx.strokeStyle = '#21262d'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(x, py + ph); ctx.lineTo(x, py + ph + 4); ctx.stroke();
+    ctx.fillText(v.toFixed(v >= 10 ? 0 : 1), x, py + ph + 16);
+    if (i > 0 && i < n) {
+      ctx.strokeStyle = '#161b22'; ctx.beginPath(); ctx.moveTo(x, py); ctx.lineTo(x, py + ph); ctx.stroke();
+    }
+  }
+}
+function yTicks(ctx, px, py, pw, ph, min, max, n) {
+  ctx.fillStyle = '#484f58'; ctx.font = '10px sans-serif'; ctx.textAlign = 'right';
+  for (let i = 0; i <= n; i++) {
+    const t = i / n, y = py + ph - t * ph, v = min + t * (max - min);
+    ctx.strokeStyle = '#21262d'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(px - 4, y); ctx.lineTo(px, y); ctx.stroke();
+    ctx.fillText(v.toFixed(1), px - 6, y + 3);
+    if (i > 0 && i < n) {
+      ctx.strokeStyle = '#161b22'; ctx.beginPath(); ctx.moveTo(px, y); ctx.lineTo(px + pw, y); ctx.stroke();
+    }
+  }
+}
+
+function drawLine(ctx, pts, color, width, dash) {
+  if (pts.length < 2) return;
+  ctx.strokeStyle = color; ctx.lineWidth = width; ctx.setLineDash(dash || []);
+  ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+  ctx.stroke(); ctx.setLineDash([]);
+}
+
+function fillUnder(ctx, pts, baseline, color) {
+  if (pts.length < 2) return;
+  ctx.fillStyle = color; ctx.beginPath(); ctx.moveTo(pts[0][0], baseline);
+  for (const p of pts) ctx.lineTo(p[0], p[1]);
+  ctx.lineTo(pts[pts.length - 1][0], baseline); ctx.closePath(); ctx.fill();
+}
+
+// ── Phase diagram ───────────────────────────────────────────────
+let pCtx, pW, pH, pPx, pPy, pPw, pPh;
+const phaseCv = $('phase-cv');
+let clickedA = null, clickedS = null;
+
+function drawPhase() {
+  ({ ctx: pCtx, w: pW, h: pH } = initCanvas(phaseCv, 0.38));
+  clear(pCtx, pW, pH);
+  const px = M.left, py = M.top, pw = pW - M.left - M.right, ph = pH - M.top - M.bottom;
+  pPx = px; pPy = py; pPw = pw; pPh = ph;
+
+  // Axes frame
+  pCtx.strokeStyle = '#30363d'; pCtx.lineWidth = 1;
+  pCtx.beginPath(); pCtx.moveTo(px, py); pCtx.lineTo(px, py + ph); pCtx.lineTo(px + pw, py + ph); pCtx.stroke();
+  pCtx.fillStyle = '#7d8590'; pCtx.font = '11px sans-serif'; pCtx.textAlign = 'center';
+  pCtx.fillText('α  (Gamma shape)', px + pw / 2, pH - 4);
+  pCtx.save(); pCtx.translate(12, py + ph / 2); pCtx.rotate(-Math.PI / 2);
+  pCtx.fillText('σ  (LogNormal log-std)', 0, 0); pCtx.restore();
+
+  // Heatmap
+  const nx = 300, ny = 200;
+  const tmp = document.createElement('canvas'); tmp.width = nx; tmp.height = ny;
+  const tCtx = tmp.getContext('2d');
+  const img = tCtx.createImageData(nx, ny);
+
+  for (let j = 0; j < ny; j++) {
+    const sig = SMAX - j / (ny - 1) * (SMAX - SMIN);
+    const fv = fSigma(sig);
+    for (let i = 0; i < nx; i++) {
+      const alp = AMIN + i / (nx - 1) * (AMAX - AMIN);
+      const gv = gAlpha(alp);
+      // advantage > 0 → Gamma preferred
+      const adv = gv - fv;
+      const t = Math.tanh(adv * 6);
+      let r, g, b;
+      if (t >= 0) {
+        // dark → blue
+        r = 22 + (121 - 22) * t; g = 27 + (192 - 27) * t; b = 34 + (255 - 34) * t;
+      } else {
+        // dark → pink
+        const s = -t;
+        r = 22 + (249 - 22) * s; g = 27 + (117 - 27) * s; b = 34 + (131 - 34) * s;
+      }
+      const k = (j * nx + i) * 4;
+      img.data[k] = r | 0; img.data[k + 1] = g | 0; img.data[k + 2] = b | 0; img.data[k + 3] = 255;
+    }
+  }
+  tCtx.putImageData(img, 0, 0);
+  pCtx.imageSmoothingEnabled = true;
+  pCtx.drawImage(tmp, px, py, pw, ph);
+
+  xTicks(pCtx, px, py, pw, ph, AMIN, AMAX, 6);
+  yTicks(pCtx, px, py, pw, ph, SMIN, SMAX, 5);
+
+  // ── Boundary curve: f(σ) = g(α) ──
+  // For each α, find σ s.t. f(σ) = g(α) via bisection
+  const bndPts = [];
+  for (let i = 0; i < 200; i++) {
+    const alp = AMIN + (i + 0.5) / 200 * (AMAX - AMIN);
+    const target = gAlpha(alp);
+    // f is increasing in σ → bisect
+    let lo = SMIN, hi = SMAX, mid;
+    for (let k = 0; k < 40; k++) {
+      mid = (lo + hi) / 2;
+      if (fSigma(mid) < target) lo = mid; else hi = mid;
+    }
+    if (mid > SMIN + 0.01 && mid < SMAX - 0.01) {
+      const cx = px + (alp - AMIN) / (AMAX - AMIN) * pw;
+      const cy = py + (SMAX - mid) / (SMAX - SMIN) * ph;
+      bndPts.push([cx, cy]);
+    }
+  }
+  drawLine(pCtx, bndPts, 'rgba(255,255,255,0.9)', 2.5);
+
+  // ── Asymptotic: σ = 1/√α ──
+  const asymPts = [];
+  for (let i = 0; i < 200; i++) {
+    const alp = Math.max(0.2, AMIN + (i + 0.5) / 200 * (AMAX - AMIN));
+    const sig = 1 / Math.sqrt(alp);
+    if (sig >= SMIN && sig <= SMAX) {
+      asymPts.push([
+        px + (alp - AMIN) / (AMAX - AMIN) * pw,
+        py + (SMAX - sig) / (SMAX - SMIN) * ph
+      ]);
+    }
+  }
+  drawLine(pCtx, asymPts, 'rgba(255,255,255,0.35)', 1.5, [6, 4]);
+
+  // ── Region labels ──
+  pCtx.font = 'bold 14px sans-serif'; pCtx.textAlign = 'center';
+  // Gamma region: bottom-right (large α, small σ)
+  const gLx = px + pw * 0.72, gLy = py + ph * 0.75;
+  pCtx.fillStyle = 'rgba(121,192,255,0.7)';
+  pCtx.fillText('Use Gamma q', gLx, gLy);
+  pCtx.font = '11px sans-serif';
+  pCtx.fillText('(ασ² < 1)', gLx, gLy + 17);
+  // LogNormal region: top-left (small α, large σ)
+  const lLx = px + pw * 0.25, lLy = py + ph * 0.25;
+  pCtx.fillStyle = 'rgba(249,117,131,0.7)'; pCtx.font = 'bold 14px sans-serif';
+  pCtx.fillText('Use LogNormal q', lLx, lLy);
+  pCtx.font = '11px sans-serif';
+  pCtx.fillText('(ασ² > 1)', lLx, lLy + 17);
+
+  // ── Boundary label ──
+  if (bndPts.length > 30) {
+    const bp = bndPts[Math.floor(bndPts.length * 0.35)];
+    pCtx.fillStyle = 'rgba(255,255,255,0.85)'; pCtx.font = 'bold 11px sans-serif';
+    pCtx.textAlign = 'left';
+    pCtx.fillText('ασ² = 1', bp[0] + 8, bp[1] - 8);
+  }
+
+  // ── Clicked point ──
+  if (clickedA !== null) {
+    const cx = px + (clickedA - AMIN) / (AMAX - AMIN) * pw;
+    const cy = py + (SMAX - clickedS) / (SMAX - SMIN) * ph;
+    pCtx.beginPath(); pCtx.arc(cx, cy, 6, 0, 2 * Math.PI);
+    pCtx.fillStyle = '#e6edf3'; pCtx.fill();
+    pCtx.strokeStyle = '#0d1117'; pCtx.lineWidth = 2; pCtx.stroke();
+  }
+}
+
+// ── Density comparison ──────────────────────────────────────────
+let dCtx, dW, dH;
+const densCv = $('density-cv');
+
+function drawDensity() {
+  ({ ctx: dCtx, w: dW, h: dH } = initCanvas(densCv, 0.5));
+  clear(dCtx, dW, dH);
+
+  if (clickedA === null) {
+    dCtx.fillStyle = '#484f58'; dCtx.font = '12px sans-serif'; dCtx.textAlign = 'center';
+    dCtx.fillText('Click on the phase diagram above', dW / 2, dH / 2 - 8);
+    dCtx.fillText('to see density comparison', dW / 2, dH / 2 + 12);
+    return;
+  }
+
+  const px = M.left, py = M.top, pw = dW - M.left - M.right, ph = dH - M.top - M.bottom;
+  // Axes
+  dCtx.strokeStyle = '#30363d'; dCtx.lineWidth = 1;
+  dCtx.beginPath(); dCtx.moveTo(px, py); dCtx.lineTo(px, py + ph); dCtx.lineTo(px + pw, py + ph); dCtx.stroke();
+  dCtx.fillStyle = '#7d8590'; dCtx.font = '11px sans-serif'; dCtx.textAlign = 'center';
+  dCtx.fillText('x', px + pw / 2, dH - 4);
+
+  const alpha = clickedA, sigma = clickedS;
+  const mu = 0;
+  const beta = alpha * Math.exp(-sigma * sigma / 2); // match means
+
+  // Optimize both families
+  const gOpt = optimizeGQ(alpha, beta, sigma);
+  const lOpt = optimizeLNQ(alpha, beta, sigma);
+
+  // Determine x range
+  const gMean = gOpt.a / gOpt.b, gStd = Math.sqrt(gOpt.a) / gOpt.b;
+  const lMean = Math.exp(lOpt.m + lOpt.s * lOpt.s / 2);
+  const lStd = lMean * Math.sqrt(Math.exp(lOpt.s * lOpt.s) - 1);
+  const xMax = Math.max(gMean + 4 * gStd, lMean + 4 * lStd, alpha / beta + 4 * Math.sqrt(alpha) / beta, 0.5);
+
+  const N = 500;
+  let yMax = 0;
+  const postPts = [], gamQPts = [], lnQPts = [];
+
+  for (let i = 0; i < N; i++) {
+    const x = (i + 0.5) / N * xMax;
+    const pv = gammaPDF(x, alpha, beta) * lognormPDF(x, mu, sigma);
+    const gv = gammaPDF(x, gOpt.a, gOpt.b);
+    const lv = lognormPDF(x, lOpt.m, lOpt.s);
+    postPts.push([x, pv]); gamQPts.push([x, gv]); lnQPts.push([x, lv]);
+    if (pv < 1e5) yMax = Math.max(yMax, pv);
+    if (gv < 1e5) yMax = Math.max(yMax, gv);
+    if (lv < 1e5) yMax = Math.max(yMax, lv);
+  }
+  // Normalize posterior to same peak height
+  let postMax = 0;
+  for (const p of postPts) if (p[1] < 1e5) postMax = Math.max(postMax, p[1]);
+  if (postMax > 0) {
+    const scale = yMax / postMax;
+    for (const p of postPts) p[1] *= scale;
+  }
+  yMax *= 1.12;
+
+  function toC(x, y) {
+    return [px + x / xMax * pw, py + ph - Math.min(y, yMax) / yMax * ph];
+  }
+  const pC = postPts.map(p => toC(p[0], p[1]));
+  const gC = gamQPts.map(p => toC(p[0], p[1]));
+  const lC = lnQPts.map(p => toC(p[0], p[1]));
+
+  xTicks(dCtx, px, py, pw, ph, 0, xMax, 5);
+
+  // Fill posterior
+  fillUnder(dCtx, pC, py + ph, 'rgba(200,200,200,0.08)');
+  drawLine(dCtx, pC, 'rgba(200,200,200,0.6)', 2);
+
+  // Gamma q
+  fillUnder(dCtx, gC, py + ph, 'rgba(121,192,255,0.1)');
+  drawLine(dCtx, gC, '#79c0ff', 2.5);
+
+  // LogNormal q
+  fillUnder(dCtx, lC, py + ph, 'rgba(249,117,131,0.1)');
+  drawLine(dCtx, lC, '#f97583', 2.5);
+
+  // Legend
+  const lx = px + pw - 180, ly = py + 8;
+  dCtx.font = '10px sans-serif'; dCtx.textAlign = 'left';
+  dCtx.strokeStyle = 'rgba(200,200,200,0.6)'; dCtx.lineWidth = 2;
+  dCtx.beginPath(); dCtx.moveTo(lx, ly + 3); dCtx.lineTo(lx + 16, ly + 3); dCtx.stroke();
+  dCtx.fillStyle = '#c9d1d9'; dCtx.fillText('True posterior (∝ prod)', lx + 22, ly + 6);
+  dCtx.fillStyle = '#79c0ff'; dCtx.fillRect(lx, ly + 14, 16, 3);
+  dCtx.fillStyle = '#c9d1d9'; dCtx.fillText('Best Gamma q', lx + 22, ly + 19);
+  dCtx.fillStyle = '#f97583'; dCtx.fillRect(lx, ly + 27, 16, 3);
+  dCtx.fillStyle = '#c9d1d9'; dCtx.fillText('Best LogNormal q', lx + 22, ly + 32);
+
+  // Update stats
+  const fv = fSigma(sigma), gv = gAlpha(alpha);
+  $('st-alpha').textContent = alpha.toFixed(2);
+  $('st-sigma').textContent = sigma.toFixed(2);
+  $('st-prod').textContent = (alpha * sigma * sigma).toFixed(3);
+  $('st-fsig').textContent = fv.toFixed(4);
+  $('st-galpha').textContent = gv.toFixed(4);
+
+  const winner = $('st-winner');
+  const klGam = -gOpt.elbo, klLN = -lOpt.elbo;
+  if (gOpt.elbo > lOpt.elbo) {
+    winner.textContent = `Gamma (ΔKL = ${(klLN - klGam).toFixed(4)})`;
+    winner.style.color = '#79c0ff';
+  } else {
+    winner.textContent = `LogNormal (ΔKL = ${(klGam - klLN).toFixed(4)})`;
+    winner.style.color = '#f97583';
+  }
+
+  drawBarChart(fv, gv, klGam, klLN);
+}
+
+// ── KL bar chart ────────────────────────────────────────────────
+const barCv = $('bar-cv');
+function drawBarChart(fv, gv, klG, klL) {
+  const { ctx, w, h } = initCanvas(barCv, 0.35);
+  clear(ctx, w, h);
+  if (clickedA === null) return;
+
+  const mx = 20, my = 8, pw = w - 2 * mx, ph = h - 2 * my;
+  const maxKL = Math.max(fv, gv, 0.01) * 1.3;
+  const barH = ph / 2 - 4;
+
+  // f(σ) bar — cost of Gamma q
+  const w1 = (fv / maxKL) * pw;
+  ctx.fillStyle = 'rgba(121,192,255,0.6)';
+  ctx.fillRect(mx, my, w1, barH);
+  ctx.strokeStyle = '#79c0ff'; ctx.lineWidth = 1;
+  ctx.strokeRect(mx, my, w1, barH);
+  ctx.fillStyle = '#c9d1d9'; ctx.font = '10px sans-serif'; ctx.textAlign = 'left';
+  ctx.fillText(`f(σ)=${fv.toFixed(4)}  [Gamma cost]`, mx + w1 + 6, my + barH - 3);
+
+  // g(α) bar — cost of LN q
+  const w2 = (gv / maxKL) * pw;
+  const y2 = my + barH + 8;
+  ctx.fillStyle = 'rgba(249,117,131,0.6)';
+  ctx.fillRect(mx, y2, w2, barH);
+  ctx.strokeStyle = '#f97583'; ctx.lineWidth = 1;
+  ctx.strokeRect(mx, y2, w2, barH);
+  ctx.fillStyle = '#c9d1d9';
+  ctx.fillText(`g(α)=${gv.toFixed(4)}  [LogNorm cost]`, mx + w2 + 6, y2 + barH - 3);
+}
+
+// ── Click handler ───────────────────────────────────────────────
+phaseCv.addEventListener('click', (e) => {
+  const rect = phaseCv.getBoundingClientRect();
+  const scaleX = pW / rect.width, scaleY = pH / rect.height;
+  const cx = (e.clientX - rect.left) * scaleX;
+  const cy = (e.clientY - rect.top) * scaleY;
+  if (cx < pPx || cx > pPx + pPw || cy < pPy || cy > pPy + pPh) return;
+
+  clickedA = AMIN + (cx - pPx) / pPw * (AMAX - AMIN);
+  clickedS = SMAX - (cy - pPy) / pPh * (SMAX - SMIN);
+  clickedA = Math.max(AMIN, Math.min(AMAX, clickedA));
+  clickedS = Math.max(SMIN, Math.min(SMAX, clickedS));
+
+  const fv = fSigma(clickedS), gv = gAlpha(clickedA);
+  const pref = gv > fv ? 'Gamma' : 'LogNormal';
+  $('phase-info').innerHTML =
+    `α = ${clickedA.toFixed(2)}, σ = ${clickedS.toFixed(2)}, ` +
+    `ασ² = ${(clickedA * clickedS * clickedS).toFixed(3)} → ` +
+    `prefer <b style="color:${gv > fv ? '#79c0ff' : '#f97583'}">${pref}</b>`;
+
+  drawPhase();
+  drawDensity();
+  // Auto-scroll to show density panel after layout settles
+  setTimeout(() => {
+    densCv.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, 50);
+});
+phaseCv.style.cursor = 'crosshair';
+
+// Hover info
+phaseCv.addEventListener('mousemove', (e) => {
+  if (clickedA !== null) return; // don't override click info
+  const rect = phaseCv.getBoundingClientRect();
+  const scaleX = pW / rect.width, scaleY = pH / rect.height;
+  const cx = (e.clientX - rect.left) * scaleX;
+  const cy = (e.clientY - rect.top) * scaleY;
+  if (cx < pPx || cx > pPx + pPw || cy < pPy || cy > pPy + pPh) return;
+  const a = AMIN + (cx - pPx) / pPw * (AMAX - AMIN);
+  const s = SMAX - (cy - pPy) / pPh * (SMAX - SMIN);
+  const fv = fLookup(s), gv = gLookup(a);
+  const pref = gv > fv ? 'Gamma' : 'LogNormal';
+  $('phase-info').innerHTML =
+    `α = ${a.toFixed(2)}, σ = ${s.toFixed(2)}, ` +
+    `ασ² = ${(a * s * s).toFixed(3)} → ` +
+    `prefer <b style="color:${gv > fv ? '#79c0ff' : '#f97583'}">${pref}</b>`;
+});
+
+// ── Init ────────────────────────────────────────────────────────
+drawPhase();
+drawDensity();
+drawBarChart(0, 0, 0, 0);
+window.addEventListener('resize', () => { drawPhase(); drawDensity(); });
+</script>
+</body>
+</html>

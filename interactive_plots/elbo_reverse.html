@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gamma ≈ LogNormal — ELBO Explorer</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  background: #0d1117; color: #c9d1d9;
+  padding: 20px 24px; max-width: 1200px; margin: 0 auto;
+}
+h1 { font-size: 1.3em; color: #e6edf3; font-weight: 600; }
+.subtitle { font-size: 0.82em; color: #7d8590; margin: 2px 0 18px; }
+.controls {
+  display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-end;
+  margin-bottom: 20px; padding: 16px;
+  background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+}
+.ctrl { flex: 1; min-width: 140px; }
+.ctrl label { display: block; font-size: 0.78em; color: #7d8590; margin-bottom: 5px; }
+.ctrl .val { color: #3fb950; font-weight: 600; }
+.ctrl.disabled label, .ctrl.disabled .val { color: #484f58; }
+input[type="range"] {
+  width: 100%; -webkit-appearance: none; height: 4px;
+  background: #30363d; border-radius: 2px; outline: none;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 14px; height: 14px;
+  background: #3fb950; border-radius: 50%; cursor: pointer;
+}
+input[type="range"].disabled-slider::-webkit-slider-thumb { background: #484f58; }
+.toggle { display: flex; align-items: center; gap: 8px; min-width: 140px; padding-bottom: 2px; }
+.toggle input { accent-color: #3fb950; }
+.toggle label { font-size: 0.78em; color: #7d8590; cursor: pointer; }
+.badge {
+  display: inline-block; padding: 2px 10px; border-radius: 4px;
+  font-size: 0.78em; font-weight: 600; margin-left: 8px;
+}
+.badge-excellent { background: #0d2818; color: #3fb950; }
+.badge-good { background: #2a2000; color: #d29922; }
+.badge-poor { background: #3d0e0e; color: #f85149; }
+.kl-display {
+  min-width: 200px; text-align: right; padding-bottom: 2px; font-size: 0.85em;
+}
+.kl-display .kl-num { font-size: 1.2em; font-weight: 600; color: #3fb950; }
+.plots {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px;
+}
+.panel {
+  background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+  padding: 14px 14px 10px;
+}
+.panel-title {
+  font-size: 0.72em; color: #7d8590; text-transform: uppercase;
+  letter-spacing: 1px; margin-bottom: 8px;
+}
+canvas { width: 100%; display: block; border-radius: 4px; }
+.bottom { display: grid; grid-template-columns: 1.2fr 0.8fr; gap: 16px; }
+.insight { font-size: 0.82em; line-height: 1.7; }
+.insight h3 { font-size: 0.85em; color: #e6edf3; margin: 12px 0 6px; }
+.insight h3:first-child { margin-top: 0; }
+.formula {
+  font-family: 'Times New Roman', Georgia, serif; font-size: 1.05em;
+  color: #e6edf3; padding: 8px 12px; margin: 6px 0;
+  background: #0d1117; border-radius: 4px; text-align: center;
+}
+.stat-row {
+  display: flex; justify-content: space-between;
+  padding: 4px 0; border-bottom: 1px solid #21262d;
+}
+.stat-label { color: #7d8590; font-size: 0.8em; }
+.stat-value { color: #3fb950; font-weight: 600; font-size: 0.85em; }
+@media (max-width: 768px) {
+  .plots, .bottom { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+
+<h1>Gamma Approximation to LogNormal</h1>
+<p class="subtitle">E<sub>Q</sub>[log p] + H[Q] &nbsp;where&nbsp; Q = Gamma(α, β), &nbsp;P = LogNormal(μ, σ²)</p>
+
+<div class="controls">
+  <div class="ctrl">
+    <label>μ (log-mean) = <span class="val" id="mu-val">1.00</span></label>
+    <input type="range" id="mu-slider" min="-3" max="5" step="0.05" value="1.0">
+  </div>
+  <div class="ctrl">
+    <label>σ (log-std) = <span class="val" id="sig-val">0.50</span></label>
+    <input type="range" id="sig-slider" min="0.1" max="3" step="0.05" value="0.5">
+  </div>
+  <div class="toggle">
+    <input type="checkbox" id="auto-cb" checked>
+    <label for="auto-cb">Auto-optimize</label>
+  </div>
+  <div class="ctrl" id="a-ctrl">
+    <label>α (shape) = <span class="val" id="a-val">4.00</span></label>
+    <input type="range" id="a-slider" min="0.1" max="60" step="0.1" value="4.0">
+  </div>
+  <div class="ctrl" id="b-ctrl">
+    <label>β (rate) = <span class="val" id="b-val">1.00</span></label>
+    <input type="range" id="b-slider" min="0.01" max="80" step="0.01" value="1.0">
+  </div>
+  <div class="kl-display">
+    KL = <span class="kl-num" id="kl-val">0.028</span> nats
+    <span class="badge badge-excellent" id="quality-badge">Excellent</span>
+  </div>
+</div>
+
+<div class="plots">
+  <div class="panel">
+    <div class="panel-title">PDF Comparison</div>
+    <canvas id="density-cv"></canvas>
+  </div>
+  <div class="panel">
+    <div class="panel-title">ELBO Landscape — click to set (α, β)</div>
+    <canvas id="elbo-cv"></canvas>
+  </div>
+</div>
+
+<div class="bottom">
+  <div class="panel">
+    <div class="panel-title">Approximation Quality vs σ</div>
+    <canvas id="kl-cv"></canvas>
+  </div>
+  <div class="panel insight">
+    <h3>Optimal Parameters</h3>
+    <div class="stat-row"><span class="stat-label">α*</span><span class="stat-value" id="opt-a">—</span></div>
+    <div class="stat-row"><span class="stat-label">β*</span><span class="stat-value" id="opt-b">—</span></div>
+    <div class="stat-row"><span class="stat-label">LN mean e<sup>μ+σ²/2</sup></span><span class="stat-value" id="ln-mean">—</span></div>
+    <div class="stat-row"><span class="stat-label">Gamma mean α/β</span><span class="stat-value" id="g-mean">—</span></div>
+    <div class="stat-row"><span class="stat-label">LN variance</span><span class="stat-value" id="ln-var">—</span></div>
+    <div class="stat-row"><span class="stat-label">Gamma variance</span><span class="stat-value" id="g-var">—</span></div>
+
+    <h3>Key Insight</h3>
+    <p>Quality depends <b>only on σ</b>, not on μ. The log-mean just shifts both distributions on log-scale.</p>
+    <div class="formula">α* ≈ 1/σ² &nbsp;&nbsp; β* = exp(ψ(α*) − μ)</div>
+    <p>The Gamma's <b>exponential tail</b> limits the fit: when σ is large, the LogNormal's heavier tail can't be captured.</p>
+    <p style="margin-top:8px;">σ ≤ 0.3 → KL &lt; 0.01 (excellent)<br>
+       σ ≈ 0.6 → KL ≈ 0.03 (good)<br>
+       σ &gt; 1.0 → poor (tail mismatch)</p>
+  </div>
+</div>
+
+<script>
+// ── Special functions ───────────────────────────────────────────
+function logGamma(z) {
+  if (z < 0.5) return Math.log(Math.PI / Math.sin(Math.PI * z)) - logGamma(1 - z);
+  z -= 1;
+  const c = [0.99999999999980993, 676.5203681218851, -1259.1392167224028,
+    771.32342877765313, -176.61502916214059, 12.507343278686905,
+    -0.13857109526572012, 9.9843695780195716e-6, 1.5056327351493116e-7];
+  let x = c[0];
+  for (let i = 1; i < 9; i++) x += c[i] / (z + i);
+  const t = z + 7.5;
+  return 0.5 * Math.log(2 * Math.PI) + (z + 0.5) * Math.log(t) - t + Math.log(x);
+}
+
+function digamma(x) {
+  let result = 0;
+  while (x < 8) { result -= 1 / x; x += 1; }
+  const ix = 1 / x, ix2 = ix * ix;
+  result += Math.log(x) - 0.5 * ix
+    - ix2 * (1/12 - ix2 * (1/120 - ix2 * (1/252 - ix2 / 240)));
+  return result;
+}
+
+function trigamma(x) {
+  let result = 0;
+  while (x < 8) { result += 1 / (x * x); x += 1; }
+  const ix = 1 / x, ix2 = ix * ix;
+  result += ix + ix2 * (0.5 + ix * (1/6 + ix2 * (-1/30 + ix2 * (1/42 - ix2 / 30))));
+  return result;
+}
+
+// ── PDFs ────────────────────────────────────────────────────────
+function gammaPDF(x, a, b) {
+  if (x <= 1e-300) return (a < 1) ? 1e6 : (a === 1 ? b : 0);
+  return Math.exp(a * Math.log(b) - logGamma(a) + (a - 1) * Math.log(x) - b * x);
+}
+
+function lognormPDF(x, mu, sig) {
+  if (x <= 0) return 0;
+  const lnx = Math.log(x);
+  return Math.exp(-0.5 * ((lnx - mu) / sig) ** 2) / (x * sig * Math.sqrt(2 * Math.PI));
+}
+
+// ── ELBO: Q=Gamma(α,β), P=LogNormal(μ,σ) ──────────────────────
+function computeELBO(alpha, beta, mu, sigma) {
+  if (alpha <= 0 || beta <= 0 || sigma <= 0) return -Infinity;
+  const psi = digamma(alpha);
+  const eta = psi - Math.log(beta); // E_Q[ln x]
+  const psi1 = trigamma(alpha);     // Var_Q[ln x]
+  const s2 = sigma * sigma;
+
+  // E_Q[log p(x)] where p = LogNormal(μ,σ)
+  const eq_logp = -eta - Math.log(sigma) - 0.5 * Math.log(2 * Math.PI)
+    - (psi1 + (eta - mu) * (eta - mu)) / (2 * s2);
+
+  // H[Gamma(α,β)]
+  const entropy = alpha - Math.log(beta) + logGamma(alpha) + (1 - alpha) * psi;
+
+  return eq_logp + entropy;
+}
+
+// ── Optimal parameters ──────────────────────────────────────────
+function findOptimalAlpha(sigma) {
+  // Maximize: f(α) = α − α·ψ(α) + logΓ(α) − ψ₁(α)/(2σ²)
+  const s2 = sigma * sigma;
+  const approx = 1 / s2;
+  const lo = Math.max(0.05, approx * 0.15);
+  const hi = Math.max(2, approx * 6);
+  let bestA = approx, bestV = -Infinity;
+  const n = 300;
+  for (let i = 0; i < n; i++) {
+    const t = i / (n - 1);
+    const a = lo * Math.exp(t * Math.log(hi / lo));
+    const v = a - a * digamma(a) + logGamma(a) - trigamma(a) / (2 * s2);
+    if (v > bestV) { bestV = v; bestA = a; }
+  }
+  return bestA;
+}
+
+function optimalBeta(alpha, mu) {
+  return Math.exp(digamma(alpha) - mu);
+}
+
+function findOptimal(mu, sigma) {
+  const alpha = findOptimalAlpha(sigma);
+  const beta = optimalBeta(alpha, mu);
+  return { alpha, beta };
+}
+
+// KL at optimal as function of sigma only
+function klAtOptimal(sigma) {
+  const alpha = findOptimalAlpha(sigma);
+  const s2 = sigma * sigma;
+  const elbo = alpha - alpha * digamma(alpha) + logGamma(alpha)
+    - Math.log(sigma) - 0.5 * Math.log(2 * Math.PI)
+    - trigamma(alpha) / (2 * s2);
+  return -elbo;
+}
+
+// ── State ───────────────────────────────────────────────────────
+const S = { mu: 1.0, sig: 0.5, alpha: 4.0, beta: 1.0, auto: true };
+
+// ── DOM refs ────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+const muSlider = $('mu-slider'), sigSlider = $('sig-slider');
+const aSlider = $('a-slider'), bSlider = $('b-slider');
+const autoCb = $('auto-cb');
+const densityCv = $('density-cv'), elboCv = $('elbo-cv'), klCv = $('kl-cv');
+
+// ── Canvas setup ────────────────────────────────────────────────
+function initCanvas(cv, aspect) {
+  const w = cv.parentElement.clientWidth - 28;
+  const h = Math.round(w * aspect);
+  const dpr = window.devicePixelRatio || 1;
+  cv.width = w * dpr; cv.height = h * dpr;
+  cv.style.width = w + 'px'; cv.style.height = h + 'px';
+  const ctx = cv.getContext('2d');
+  ctx.scale(dpr, dpr);
+  return { ctx, w, h };
+}
+
+let dCtx, dW, dH, eCtx, eW, eH, kCtx, kW, kH;
+const M = { top: 22, right: 18, bottom: 38, left: 55 };
+
+function setupCanvases() {
+  ({ ctx: dCtx, w: dW, h: dH } = initCanvas(densityCv, 0.65));
+  ({ ctx: eCtx, w: eW, h: eH } = initCanvas(elboCv, 0.65));
+  ({ ctx: kCtx, w: kW, h: kH } = initCanvas(klCv, 0.55));
+}
+
+// ── Viridis ─────────────────────────────────────────────────────
+const VIR = [[68,1,84],[72,35,116],[64,67,135],[52,94,141],[33,113,141],
+  [33,145,140],[53,183,121],[109,205,89],[180,222,44],[253,231,37]];
+function viridis(t) {
+  t = Math.max(0, Math.min(0.999, t));
+  const i = t * (VIR.length - 1), lo = Math.floor(i), f = i - lo;
+  return [
+    VIR[lo][0] + f * (VIR[lo+1][0] - VIR[lo][0]),
+    VIR[lo][1] + f * (VIR[lo+1][1] - VIR[lo][1]),
+    VIR[lo][2] + f * (VIR[lo+1][2] - VIR[lo][2])
+  ];
+}
+
+// ── Drawing helpers ─────────────────────────────────────────────
+function clear(ctx, w, h) { ctx.fillStyle = '#0d1117'; ctx.fillRect(0, 0, w, h); }
+
+function drawAxes(ctx, w, h, xLbl, yLbl) {
+  const px = M.left, py = M.top, pw = w - M.left - M.right, ph = h - M.top - M.bottom;
+  ctx.strokeStyle = '#30363d'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(px, py + ph); ctx.lineTo(px + pw, py + ph); ctx.stroke();
+  ctx.fillStyle = '#7d8590'; ctx.font = '11px sans-serif'; ctx.textAlign = 'center';
+  if (xLbl) ctx.fillText(xLbl, px + pw / 2, h - 4);
+  if (yLbl) {
+    ctx.save(); ctx.translate(12, py + ph / 2); ctx.rotate(-Math.PI / 2);
+    ctx.fillText(yLbl, 0, 0); ctx.restore();
+  }
+  return { px, py, pw, ph };
+}
+
+function xTicks(ctx, px, py, pw, ph, min, max, n) {
+  ctx.fillStyle = '#484f58'; ctx.font = '10px sans-serif'; ctx.textAlign = 'center';
+  for (let i = 0; i <= n; i++) {
+    const t = i / n, x = px + t * pw, v = min + t * (max - min);
+    ctx.strokeStyle = '#21262d';
+    ctx.beginPath(); ctx.moveTo(x, py + ph); ctx.lineTo(x, py + ph + 4); ctx.stroke();
+    ctx.fillText(v.toFixed(v >= 10 ? 0 : v >= 1 ? 1 : 2), x, py + ph + 15);
+    if (i > 0 && i < n) {
+      ctx.strokeStyle = '#161b22'; ctx.beginPath(); ctx.moveTo(x, py); ctx.lineTo(x, py + ph); ctx.stroke();
+    }
+  }
+}
+
+function yTicks(ctx, px, py, pw, ph, min, max, n) {
+  ctx.fillStyle = '#484f58'; ctx.font = '10px sans-serif'; ctx.textAlign = 'right';
+  for (let i = 0; i <= n; i++) {
+    const t = i / n, y = py + ph - t * ph, v = min + t * (max - min);
+    ctx.strokeStyle = '#21262d';
+    ctx.beginPath(); ctx.moveTo(px - 4, y); ctx.lineTo(px, y); ctx.stroke();
+    ctx.fillText(v.toFixed(v >= 10 ? 0 : v >= 1 ? 1 : 2), px - 6, y + 3);
+    if (i > 0 && i < n) {
+      ctx.strokeStyle = '#161b22'; ctx.beginPath(); ctx.moveTo(px, y); ctx.lineTo(px + pw, y); ctx.stroke();
+    }
+  }
+}
+
+function drawLine(ctx, pts, color, width) {
+  if (pts.length < 2) return;
+  ctx.strokeStyle = color; ctx.lineWidth = width;
+  ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+  ctx.stroke();
+}
+
+function fillUnder(ctx, pts, baseline, color) {
+  if (pts.length < 2) return;
+  ctx.fillStyle = color; ctx.beginPath(); ctx.moveTo(pts[0][0], baseline);
+  for (const p of pts) ctx.lineTo(p[0], p[1]);
+  ctx.lineTo(pts[pts.length - 1][0], baseline); ctx.closePath(); ctx.fill();
+}
+
+// ── Density plot ────────────────────────────────────────────────
+function drawDensity() {
+  clear(dCtx, dW, dH);
+  const { px, py, pw, ph } = drawAxes(dCtx, dW, dH, 'x', 'p(x)');
+  const { mu, sig, alpha, beta } = S;
+
+  const lnMean = Math.exp(mu + sig * sig / 2);
+  const lnStd = lnMean * Math.sqrt(Math.exp(sig * sig) - 1);
+  const gMean = alpha / beta, gStd = Math.sqrt(alpha) / beta;
+  const xMax = Math.max(lnMean + 4 * lnStd, gMean + 4 * gStd, 0.5);
+
+  const N = 500;
+  let yMax = 0;
+  const lPts = [], gPts = [];
+  for (let i = 0; i < N; i++) {
+    const x = (i + 0.5) / N * xMax;
+    const lv = lognormPDF(x, mu, sig);
+    const gv = gammaPDF(x, alpha, beta);
+    lPts.push([x, lv]); gPts.push([x, gv]);
+    if (lv < 1e5) yMax = Math.max(yMax, lv);
+    if (gv < 1e5) yMax = Math.max(yMax, gv);
+  }
+  yMax *= 1.12; if (yMax < 0.01) yMax = 1;
+
+  function toCanvas(x, y) {
+    return [px + x / xMax * pw, py + ph - Math.min(y, yMax) / yMax * ph];
+  }
+  const lC = lPts.map(p => toCanvas(p[0], p[1]));
+  const gC = gPts.map(p => toCanvas(p[0], p[1]));
+
+  xTicks(dCtx, px, py, pw, ph, 0, xMax, 5);
+  yTicks(dCtx, px, py, pw, ph, 0, yMax, 4);
+
+  fillUnder(dCtx, lC, py + ph, 'rgba(248,113,131,0.12)');
+  fillUnder(dCtx, gC, py + ph, 'rgba(121,192,255,0.12)');
+  drawLine(dCtx, lC, '#f97583', 2.5);
+  drawLine(dCtx, gC, '#79c0ff', 2.5);
+
+  // Legend
+  const lx = px + pw - 150, ly = py + 10;
+  dCtx.font = '11px sans-serif';
+  dCtx.fillStyle = '#f97583'; dCtx.fillRect(lx, ly, 16, 3);
+  dCtx.fillStyle = '#c9d1d9'; dCtx.textAlign = 'left';
+  dCtx.fillText('LogNorm(μ,σ) target', lx + 22, ly + 5);
+  dCtx.fillStyle = '#79c0ff'; dCtx.fillRect(lx, ly + 16, 16, 3);
+  dCtx.fillStyle = '#c9d1d9';
+  dCtx.fillText('Gamma(α,β) approx', lx + 22, ly + 21);
+}
+
+// ── ELBO heatmap ────────────────────────────────────────────────
+let hmAMin, hmAMax, hmBMin, hmBMax, hmPx, hmPy, hmPw, hmPh;
+
+function drawELBOHeatmap() {
+  clear(eCtx, eW, eH);
+  const { px, py, pw, ph } = drawAxes(eCtx, eW, eH, 'α', 'β');
+  hmPx = px; hmPy = py; hmPw = pw; hmPh = ph;
+  const { mu, sig } = S;
+  const opt = findOptimal(mu, sig);
+
+  // Adaptive ranges centered on optimal
+  const aPad = Math.max(opt.alpha * 0.8, 1);
+  hmAMin = Math.max(0.1, opt.alpha - aPad * 2.5);
+  hmAMax = opt.alpha + aPad * 2.5;
+  const bPad = Math.max(opt.beta * 0.8, 0.5);
+  hmBMin = Math.max(0.01, opt.beta - bPad * 2.5);
+  hmBMax = opt.beta + bPad * 2.5;
+
+  const nx = 100, ny = 70;
+  const vals = new Float64Array(nx * ny);
+  let vMax = -Infinity;
+  for (let j = 0; j < ny; j++) {
+    const b = hmBMax - j / (ny - 1) * (hmBMax - hmBMin);
+    for (let i = 0; i < nx; i++) {
+      const a = hmAMin + i / (nx - 1) * (hmAMax - hmAMin);
+      const v = computeELBO(a, b, mu, sig);
+      vals[j * nx + i] = v;
+      if (isFinite(v) && v > vMax) vMax = v;
+    }
+  }
+  const vMin = vMax - 8;
+
+  const tmp = document.createElement('canvas');
+  tmp.width = nx; tmp.height = ny;
+  const tCtx = tmp.getContext('2d');
+  const img = tCtx.createImageData(nx, ny);
+  for (let k = 0; k < nx * ny; k++) {
+    const t = Math.max(0, Math.min(1, (vals[k] - vMin) / (vMax - vMin)));
+    const [r, g, b2] = viridis(isFinite(vals[k]) ? t : 0);
+    img.data[k * 4] = r; img.data[k * 4 + 1] = g;
+    img.data[k * 4 + 2] = b2; img.data[k * 4 + 3] = 255;
+  }
+  tCtx.putImageData(img, 0, 0);
+  eCtx.imageSmoothingEnabled = true;
+  eCtx.drawImage(tmp, px, py, pw, ph);
+
+  xTicks(eCtx, px, py, pw, ph, hmAMin, hmAMax, 5);
+  yTicks(eCtx, px, py, pw, ph, hmBMin, hmBMax, 4);
+
+  // Optimal crosshair
+  const ox = px + (opt.alpha - hmAMin) / (hmAMax - hmAMin) * pw;
+  const oy = py + (hmBMax - opt.beta) / (hmBMax - hmBMin) * ph;
+  eCtx.strokeStyle = '#fff'; eCtx.lineWidth = 1.5;
+  eCtx.beginPath(); eCtx.moveTo(ox - 8, oy); eCtx.lineTo(ox + 8, oy); eCtx.stroke();
+  eCtx.beginPath(); eCtx.moveTo(ox, oy - 8); eCtx.lineTo(ox, oy + 8); eCtx.stroke();
+  eCtx.fillStyle = '#fff'; eCtx.font = '10px sans-serif'; eCtx.textAlign = 'left';
+  eCtx.fillText('optimal', ox + 10, oy - 4);
+
+  // Current point if manual
+  if (!S.auto) {
+    const cx = px + (S.alpha - hmAMin) / (hmAMax - hmAMin) * pw;
+    const cy = py + (hmBMax - S.beta) / (hmBMax - hmBMin) * ph;
+    eCtx.beginPath(); eCtx.arc(cx, cy, 5, 0, 2 * Math.PI);
+    eCtx.fillStyle = '#f97583'; eCtx.fill();
+    eCtx.strokeStyle = '#fff'; eCtx.lineWidth = 1; eCtx.stroke();
+  }
+
+  // Color bar
+  const cbx = px + pw + 6, cby = py, cbw = 10, cbh = ph;
+  for (let j = 0; j < cbh; j++) {
+    const t = 1 - j / cbh;
+    const [r, g, b2] = viridis(t);
+    eCtx.fillStyle = `rgb(${r|0},${g|0},${b2|0})`;
+    eCtx.fillRect(cbx, cby + j, cbw, 1);
+  }
+  eCtx.fillStyle = '#484f58'; eCtx.font = '9px sans-serif'; eCtx.textAlign = 'left';
+  eCtx.fillText(vMax.toFixed(1), cbx + cbw + 3, cby + 8);
+  eCtx.fillText(vMin.toFixed(1), cbx + cbw + 3, cby + cbh);
+}
+
+// ── Pre-compute KL vs σ curve ───────────────────────────────────
+const klCurveN = 300;
+const klCurveData = new Float64Array(klCurveN);
+const klSigMin = 0.1, klSigMax = 3.0;
+(function precomputeKL() {
+  for (let i = 0; i < klCurveN; i++) {
+    const sig = klSigMin + (i + 0.5) / klCurveN * (klSigMax - klSigMin);
+    klCurveData[i] = klAtOptimal(sig);
+  }
+})();
+
+// ── KL vs σ plot ────────────────────────────────────────────────
+function drawKLCurve() {
+  clear(kCtx, kW, kH);
+  const { px, py, pw, ph } = drawAxes(kCtx, kW, kH, 'σ (log-std)', 'KL (nats)');
+  const klMax = 1.0;
+
+  // Quality bands
+  const y001 = py + ph - 0.01 / klMax * ph;
+  const y005 = py + ph - 0.05 / klMax * ph;
+  const y01  = py + ph - 0.1  / klMax * ph;
+  kCtx.fillStyle = 'rgba(63,185,80,0.06)';
+  kCtx.fillRect(px, y001, pw, py + ph - y001);
+  kCtx.fillStyle = 'rgba(210,153,34,0.06)';
+  kCtx.fillRect(px, y01, pw, y001 - y01);
+  kCtx.fillStyle = 'rgba(248,81,73,0.06)';
+  kCtx.fillRect(px, py, pw, y01 - py);
+
+  kCtx.font = '9px sans-serif'; kCtx.textAlign = 'right';
+  kCtx.fillStyle = 'rgba(63,185,80,0.5)';
+  kCtx.fillText('excellent', px + pw - 4, py + ph - 4);
+  kCtx.fillStyle = 'rgba(210,153,34,0.5)';
+  kCtx.fillText('good', px + pw - 4, (y001 + y01) / 2 + 3);
+  kCtx.fillStyle = 'rgba(248,81,73,0.5)';
+  kCtx.fillText('poor', px + pw - 4, Math.max(py + 12, y01 - 6));
+
+  kCtx.strokeStyle = 'rgba(63,185,80,0.2)'; kCtx.setLineDash([4, 4]);
+  kCtx.beginPath(); kCtx.moveTo(px, y001); kCtx.lineTo(px + pw, y001); kCtx.stroke();
+  kCtx.strokeStyle = 'rgba(210,153,34,0.2)';
+  kCtx.beginPath(); kCtx.moveTo(px, y01); kCtx.lineTo(px + pw, y01); kCtx.stroke();
+  kCtx.setLineDash([]);
+
+  xTicks(kCtx, px, py, pw, ph, klSigMin, klSigMax, 5);
+  yTicks(kCtx, px, py, pw, ph, 0, klMax, 4);
+
+  // Curve
+  const pts = [];
+  for (let i = 0; i < klCurveN; i++) {
+    const sig = klSigMin + (i + 0.5) / klCurveN * (klSigMax - klSigMin);
+    const kl = klCurveData[i];
+    const x = px + (sig - klSigMin) / (klSigMax - klSigMin) * pw;
+    const y = py + ph - Math.min(kl, klMax) / klMax * ph;
+    pts.push([x, y]);
+  }
+  drawLine(kCtx, pts, '#58a6ff', 2.5);
+
+  // Current σ dot
+  const curKL = klAtOptimal(S.sig);
+  const cx = px + (S.sig - klSigMin) / (klSigMax - klSigMin) * pw;
+  const cy = py + ph - Math.min(curKL, klMax) / klMax * ph;
+  kCtx.beginPath(); kCtx.arc(cx, cy, 6, 0, 2 * Math.PI);
+  kCtx.fillStyle = '#58a6ff'; kCtx.fill();
+  kCtx.strokeStyle = '#fff'; kCtx.lineWidth = 1.5; kCtx.stroke();
+  kCtx.fillStyle = '#e6edf3'; kCtx.font = '10px sans-serif'; kCtx.textAlign = 'left';
+  kCtx.fillText(`σ=${S.sig.toFixed(2)}, KL=${curKL.toFixed(4)}`, cx + 10, cy - 6);
+}
+
+// ── Stats ───────────────────────────────────────────────────────
+function updateStats() {
+  const opt = findOptimal(S.mu, S.sig);
+  const kl = -computeELBO(S.alpha, S.beta, S.mu, S.sig);
+
+  $('mu-val').textContent = S.mu.toFixed(2);
+  $('sig-val').textContent = S.sig.toFixed(2);
+  $('a-val').textContent = S.alpha.toFixed(2);
+  $('b-val').textContent = S.beta.toFixed(2);
+  $('kl-val').textContent = (isFinite(kl) && kl >= 0 ? kl : 999).toFixed(4);
+  $('opt-a').textContent = opt.alpha.toFixed(4);
+  $('opt-b').textContent = opt.beta.toFixed(4);
+
+  const lnMean = Math.exp(S.mu + S.sig * S.sig / 2);
+  const lnVar = (Math.exp(S.sig * S.sig) - 1) * Math.exp(2 * S.mu + S.sig * S.sig);
+  $('ln-mean').textContent = lnMean.toFixed(4);
+  $('ln-var').textContent = lnVar.toFixed(4);
+  $('g-mean').textContent = (S.alpha / S.beta).toFixed(4);
+  $('g-var').textContent = (S.alpha / (S.beta * S.beta)).toFixed(4);
+
+  const badge = $('quality-badge');
+  const klOpt = klAtOptimal(S.sig);
+  const klShow = S.auto ? klOpt : kl;
+  if (klShow < 0.01) { badge.textContent = 'Excellent'; badge.className = 'badge badge-excellent'; }
+  else if (klShow < 0.1) { badge.textContent = 'Good'; badge.className = 'badge badge-good'; }
+  else { badge.textContent = 'Poor'; badge.className = 'badge badge-poor'; }
+
+  const aCtrl = $('a-ctrl'), bCtrl = $('b-ctrl');
+  if (S.auto) {
+    aCtrl.classList.add('disabled'); bCtrl.classList.add('disabled');
+    aSlider.classList.add('disabled-slider'); bSlider.classList.add('disabled-slider');
+  } else {
+    aCtrl.classList.remove('disabled'); bCtrl.classList.remove('disabled');
+    aSlider.classList.remove('disabled-slider'); bSlider.classList.remove('disabled-slider');
+  }
+}
+
+// ── Update ──────────────────────────────────────────────────────
+function update() {
+  if (S.auto) {
+    const opt = findOptimal(S.mu, S.sig);
+    S.alpha = opt.alpha; S.beta = opt.beta;
+    aSlider.value = Math.min(60, S.alpha);
+    bSlider.value = Math.min(80, S.beta);
+  }
+  drawDensity();
+  drawELBOHeatmap();
+  drawKLCurve();
+  updateStats();
+}
+
+// ── Events ──────────────────────────────────────────────────────
+muSlider.addEventListener('input', () => { S.mu = parseFloat(muSlider.value); update(); });
+sigSlider.addEventListener('input', () => { S.sig = parseFloat(sigSlider.value); update(); });
+aSlider.addEventListener('input', () => { if (!S.auto) { S.alpha = parseFloat(aSlider.value); update(); } });
+bSlider.addEventListener('input', () => { if (!S.auto) { S.beta = parseFloat(bSlider.value); update(); } });
+autoCb.addEventListener('change', () => { S.auto = autoCb.checked; update(); });
+
+// Click on ELBO heatmap
+elboCv.addEventListener('click', (e) => {
+  if (S.auto) { autoCb.checked = false; S.auto = false; }
+  const rect = elboCv.getBoundingClientRect();
+  const scaleX = eW / rect.width, scaleY = eH / rect.height;
+  const cx = (e.clientX - rect.left) * scaleX;
+  const cy = (e.clientY - rect.top) * scaleY;
+  if (cx < hmPx || cx > hmPx + hmPw || cy < hmPy || cy > hmPy + hmPh) return;
+  const a = hmAMin + (cx - hmPx) / hmPw * (hmAMax - hmAMin);
+  const b = hmBMax - (cy - hmPy) / hmPh * (hmBMax - hmBMin);
+  if (a < 0.1 || b < 0.01) return;
+  S.alpha = a; S.beta = b;
+  aSlider.value = Math.min(60, a); bSlider.value = Math.min(80, b);
+  update();
+});
+elboCv.style.cursor = 'crosshair';
+
+// ── Init ────────────────────────────────────────────────────────
+setupCanvases();
+update();
+window.addEventListener('resize', () => { setupCanvases(); update(); });
+</script>
+</body>
+</html>
