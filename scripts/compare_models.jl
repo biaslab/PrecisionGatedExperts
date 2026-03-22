@@ -27,8 +27,15 @@ using StableRNGs
 using LinearAlgebra: diag
 using Statistics
 
-const RESULTS_DIR = joinpath(@__DIR__, "..", "paper", "results")
+const RESULTS_DIR = joinpath(@__DIR__, "..", "paper", "results_vae")
 const PREDICTION_ITERATIONS = 3
+const RESULT_MODEL_SPECS = [
+    ("Static", "static"),
+    ("Noisy Diagonal", "noisy_experts_diagonal"),
+]
+const RESULT_MODEL_DIRS = Dict(
+    "noisy_experts_diagonal" => "noisy_diagonal",
+)
 
 # ── CLI parsing ──────────────────────────────────────────────────────────────
 
@@ -66,13 +73,23 @@ end
 # ── File discovery ───────────────────────────────────────────────────────────
 
 function find_result_file(dataset::String, horizon::Int, model_type::String)
-    dir = joinpath(RESULTS_DIR, model_type)
+    dir_name = get(RESULT_MODEL_DIRS, model_type, model_type)
+    dir = joinpath(RESULTS_DIR, dir_name)
     isdir(dir) || return nothing
 
     for f in readdir(dir)
         endswith(f, ".jld2") || continue
-        # Match pattern: dataset_h{horizon}_{suffix}_{model_type}.jld2
-        if startswith(f, "$(dataset)_h$(horizon)_") && endswith(f, "_$(model_type).jld2")
+        stem = replace(f, ".jld2" => "")
+        stem_parts = split(stem, "_")
+        model_parts = split(model_type, "_")
+        has_exact_suffix =
+            length(stem_parts) >= length(model_parts) &&
+            stem_parts[(end - length(model_parts) + 1):end] == model_parts
+        has_hashed_suffix =
+            length(stem_parts) >= length(model_parts) + 1 &&
+            stem_parts[(end - length(model_parts)):(end - 1)] == model_parts
+
+        if startswith(f, "$(dataset)_h$(horizon)_") && (has_exact_suffix || has_hashed_suffix)
             return joinpath(dir, f)
         end
     end
@@ -258,6 +275,10 @@ function plot_influence_static!(p, influence, forecaster_labels, n_f, expert_col
     return maximum(norm_means)
 end
 
+function is_time_varying_influence(influence)
+    return ndims(influence) > 1
+end
+
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 function main()
@@ -267,14 +288,17 @@ function main()
     dim = args.dim
     show_val = args.show_val
 
-    dynamic_path = find_result_file(dataset, horizon, "dynamic")
-    static_path = find_result_file(dataset, horizon, "static")
     neural_path = find_neural_result_file(dataset, horizon)
 
-    if isnothing(dynamic_path) && isnothing(static_path) && isnothing(neural_path)
+    bayes_paths = Dict{String,Union{Nothing,String}}(
+        label => find_result_file(dataset, horizon, model_type)
+        for (label, model_type) in RESULT_MODEL_SPECS
+    )
+
+    if all(isnothing, values(bayes_paths)) && isnothing(neural_path)
         println(stderr, "No result files found for dataset=$dataset horizon=$horizon")
         println(stderr, "Available files in paper/results/:")
-        for d in ["dynamic", "static", "neural_ensemble"]
+        for d in ["static", "noisy_diagonal", "neural_ensemble"]
             dir = joinpath(RESULTS_DIR, d)
             isdir(dir) && for f in readdir(dir)
                 println(stderr, "  $d/$f")
@@ -283,15 +307,13 @@ function main()
         exit(1)
     end
 
-    # Run predictions for dynamic/static (RxInfer-based)
+    # Run predictions for Bayesian ensemble models (RxInfer-based)
     results = Dict{String,Any}()
-    if !isnothing(dynamic_path)
-        @info "Loading dynamic model: $(basename(dynamic_path))"
-        results["Dynamic"] = run_prediction(dynamic_path)
-    end
-    if !isnothing(static_path)
-        @info "Loading static model: $(basename(static_path))"
-        results["Static"] = run_prediction(static_path)
+    for (label, _) in RESULT_MODEL_SPECS
+        path = bayes_paths[label]
+        isnothing(path) && continue
+        @info "Loading $(label) model: $(basename(path))"
+        results[label] = run_prediction(path)
     end
 
     # Run neural ensemble prediction (separate because data shape differs)
@@ -362,6 +384,8 @@ function main()
         t_test = 1:n_test
     end
 
+    subplot_order = [label for (label, _) in RESULT_MODEL_SPECS if haskey(results, label)]
+
     # ── Top plot: predictions comparison ─────────────────────────────────
     p1 = plot(1:length(y_plot), y_plot, label="Ground Truth", color=:black, linewidth=2,
         legend=:topright, ylabel="Value",
@@ -372,8 +396,12 @@ function main()
             label="Val / Test boundary")
     end
 
-    model_colors = Dict("Dynamic" => :blue, "Static" => :red)
-    for (name, res) in results
+    model_colors = Dict(
+        "Static" => :red,
+        "Noisy Diagonal" => :goldenrod,
+    )
+    for name in subplot_order
+        res = results[name]
         μ, σ = get_mean_std(res.ensemble_preds, prediction_type, dim)
         c = model_colors[name]
         m = res.ensemble_metrics
@@ -398,21 +426,22 @@ function main()
     # ── Bottom plots: influence per model ────────────────────────────────
     subplots = [p1]
 
-    for (name, res) in sort(collect(results), by=x->x[1])  # alphabetical: Dynamic, Static
+    for name in subplot_order
+        res = results[name]
         n_f = res.n_forecasters
         labels = build_forecaster_labels(res.experts, res.selected_quantiles, n_f)
         expert_colors = distinguishable_colors(n_f, [RGB(1,1,1), RGB(0,0,0)], dropseed=true)
 
-        if name == "Dynamic"
+        if is_time_varying_influence(res.influence)
             n_t = size(res.influence, 2)
-            p_inf = plot(title="Dynamic — Gammas",
+            p_inf = plot(title="$(name) — Gammas",
                 ylabel="Normalized influence", xlabel="Time Step",
                 legend=:topright, legendfontsize=8)
             top_share = plot_influence_dynamic!(p_inf, res.influence, labels, n_f, n_t, expert_colors)
             push!(subplots, p_inf)
 
             p_ts = plot(1:n_t, top_share,
-                title="Dynamic — TopShare",
+                title="$(name) — TopShare",
                 xlabel="Time Step", ylabel="Top-1 normalized γ",
                 color=:darkblue, linewidth=2, ylims=(0.0, 1.0),
                 label="max γᵢ / Σγ", legend=:topright)
@@ -461,8 +490,7 @@ function main()
         l = @layout [a; b; c d; e]
         p = plot(subplots..., layout=l, size=(2400, 2200), margin=6Plots.mm, dpi=600)
     else
-        l = @layout [a; b; c d; e f]
-        p = plot(subplots..., layout=l, size=(2400, 2400), margin=6Plots.mm, dpi=600)
+        p = plot(subplots..., layout=(n_sub, 1), size=(2400, 600 * n_sub), margin=6Plots.mm, dpi=600)
     end
 
     outfile = "compare_$(dataset)_h$(horizon)_dim$(dim).png"
