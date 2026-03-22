@@ -191,27 +191,47 @@ function plot_metric_frontier!(ax, metric_label::String, points)
     frontier = pareto_frontier(points)
     frontier_x = [point.params for point in frontier]
     frontier_y = [point.score for point in frontier]
+    all_x = [point.params for point in points]
+    all_y = [point.score for point in points]
+
+    x_min = minimum(all_x)
+    x_max = maximum(all_x)
+    y_min = minimum(all_y)
+    y_max = maximum(all_y)
+    y_span = max(y_max - y_min, 1.0)
+
+    # Add explicit plot padding so labels can stay inside the axes.
+    xlims!(ax, x_min / 1.8, x_max * 2.4)
+    ylims!(ax, max(0.0, y_min - 0.18 * y_span), y_max + 0.22 * y_span)
 
     scatter!(
         ax,
-        [point.params for point in points],
-        [point.score for point in points];
+        all_x,
+        all_y;
         color = [MODEL_COLORS[point.model_type] for point in points],
-        markersize = 18,
+        markersize = 22,
         strokecolor = :black,
         strokewidth = 1,
     )
-    lines!(ax, frontier_x, frontier_y; color = :black, linewidth = 2, linestyle = :dash)
+    lines!(ax, frontier_x, frontier_y; color = :black, linewidth = 3, linestyle = :dash)
 
     for point in points
+        x_ratio = x_max == x_min ? 0.5 : (log10(point.params) - log10(x_min)) / (log10(x_max) - log10(x_min))
+        y_ratio = y_max == y_min ? 0.5 : (point.score - y_min) / (y_max - y_min)
+
+        x_align = x_ratio > 0.65 ? :right : :left
+        y_align = y_ratio > 0.75 ? :top : :bottom
+        x_offset = x_align == :right ? -10 : 10
+        y_offset = y_align == :top ? -8 : 8
+
         text!(
             ax,
             point.params,
             point.score;
             text = point.label,
-            fontsize = 12,
-            align = (:left, :bottom),
-            offset = (8, 6),
+            fontsize = 24,
+            align = (x_align, y_align),
+            offset = (x_offset, y_offset),
         )
     end
 
@@ -219,6 +239,12 @@ function plot_metric_frontier!(ax, metric_label::String, points)
     ax.xlabel = "Parameter count"
     ax.ylabel = "Radar area (% of max)"
     ax.xscale = log10
+    ax.titlegap = 12
+    ax.titlesize = 24
+    ax.xlabelsize = 20
+    ax.ylabelsize = 20
+    ax.xticklabelsize = 16
+    ax.yticklabelsize = 16
 end
 
 function build_pareto_frontier(; models = ENSEMBLE_MODEL_TYPES, output_suffix = "models")
@@ -257,7 +283,7 @@ function build_pareto_frontier(; models = ENSEMBLE_MODEL_TYPES, output_suffix = 
         )
     end
 
-    fig = Figure(size = (1500, 700), fontsize = 14)
+    fig = Figure(size = (1900, 900), fontsize = 18)
     ax_mse = Axis(fig[1, 1])
     ax_nll = Axis(fig[1, 2])
 
@@ -267,9 +293,9 @@ function build_pareto_frontier(; models = ENSEMBLE_MODEL_TYPES, output_suffix = 
     Label(
         fig[0, 1:2],
         "Pareto frontier: model size vs radar-area score";
-        fontsize = 20,
+        fontsize = 28,
         font = :bold,
-        padding = (0, 0, 10, 0),
+        padding = (0, 0, 16, 0),
     )
 
     mkpath(FIGURES_DIR)

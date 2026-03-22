@@ -11,11 +11,11 @@ const HORIZONS = [96, 192, 336, 720]
 # Datasets to include in the radar chart (change this list to add/remove datasets)
 # Each entry: (internal_name, display_label, prediction_type)
 const DATASETS_DEFAULT = [
-    ("ETTh1",         "ETTh1",         :univariate),
-    ("ETTh2",         "ETTh2",         :univariate),
-    ("exchange_rate", "Exchange Rate", :multivariate),
     ("electricity",   "Electricity",   :multivariate),
-    ("traffic",       "Traffic",       :multivariate),  # uncomment for 5-axis pentagon
+    ("traffic",       "Traffic",       :multivariate),
+    ("ETTh2",         "ETTh2",         :univariate),
+    ("ETTh1",         "ETTh1",         :univariate),
+    ("exchange_rate", "Exchange Rate", :multivariate),  # uncomment for 5-axis pentagon
 ]
 
 const ENSEMBLE_MODEL_TYPES = [
@@ -314,7 +314,7 @@ function build_radar_chart(metric::Symbol;
         title = "Log $metric_upper — Average over Horizons",
         titlefontsize = 14,
         legend = :outertopright,
-        legendfontsize = 10,
+        legendfontsize = 18,
     )
 
     # Draw models (best model last for z-ordering)
@@ -382,11 +382,12 @@ function build_radar_chart(metric::Symbol;
 
     # 10. Save
     mkpath(FIGURES_DIR)
-    outpath = joinpath(FIGURES_DIR, "radar_$(metric).pdf")
+    filename_suffix = models == ENSEMBLE_BAYES_MODEL_TYPES ? "_bayes" : ""
+    outpath = joinpath(FIGURES_DIR, "radar_$(metric)$(filename_suffix).pdf")
     savefig(p, outpath)
     println("\nSaved: $outpath")
 
-    outpath_png = joinpath(FIGURES_DIR, "radar_$(metric).png")
+    outpath_png = joinpath(FIGURES_DIR, "radar_$(metric)$(filename_suffix).png")
     savefig(p, outpath_png)
     println("Saved: $outpath_png")
 
