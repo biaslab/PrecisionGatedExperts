@@ -178,7 +178,8 @@ function build_radar_chart(metric::Symbol;
                            datasets = DATASETS_DEFAULT,
                            cap = VALUE_CAP,
                            models = ENSEMBLE_MODEL_TYPES,
-                           log_metric = true)
+                           log_metric = true,
+                           show_title = true)
     N = length(datasets)
     dataset_labels = [d[2] for d in datasets]
 
@@ -311,7 +312,7 @@ function build_radar_chart(metric::Symbol;
         right_margin = 25mm,
         top_margin = 15mm,
         bottom_margin = 20mm,
-        title = "Log $metric_upper — Average over Horizons",
+        title = show_title ? "Log $metric_upper — Average over Horizons" : "",
         titlefontsize = 14,
         legend = :outertopright,
         legendfontsize = 18,
@@ -395,7 +396,9 @@ function build_radar_chart(metric::Symbol;
 end
 
 # ─── Generate Charts ──────────────────────────────────────────────────────────
-build_radar_chart(:mse, models = ENSEMBLE_BAYES_MODEL_TYPES)
-build_radar_chart(:nll, models = ENSEMBLE_BAYES_MODEL_TYPES)
-build_radar_chart(:mse)
-build_radar_chart(:nll)
+const SHOW_TITLE = !("--no-title" in ARGS)
+
+build_radar_chart(:mse, models = ENSEMBLE_BAYES_MODEL_TYPES, show_title = SHOW_TITLE)
+build_radar_chart(:nll, models = ENSEMBLE_BAYES_MODEL_TYPES, show_title = SHOW_TITLE)
+build_radar_chart(:mse, show_title = SHOW_TITLE)
+build_radar_chart(:nll, show_title = SHOW_TITLE)
