@@ -41,19 +41,16 @@ const RESULT_MODEL_DIRS = Dict(
 
 function parse_args()
     if length(ARGS) < 2
-        println(
-            stderr,
-            """
-Usage: julia --project scripts/compare_models.jl <dataset> <horizon> [--dim <d>] [--show-val]
+        println(stderr, """
+        Usage: julia --project scripts/compare_models.jl <dataset> <horizon> [--dim <d>] [--show-val]
 
-Datasets: ETTh1, ETTh2, exchange_rate, electricity, traffic
-Horizons: 96, 192, 336, 720
+        Datasets: ETTh1, ETTh2, exchange_rate, electricity, traffic
+        Horizons: 96, 192, 336, 720
 
-Options:
-  --dim <d>   Dimension to plot for multivariate datasets (default: 1)
-  --show-val  Prepend validation ground truth with a vertical boundary line
-"""
-        )
+        Options:
+          --dim <d>   Dimension to plot for multivariate datasets (default: 1)
+          --show-val  Prepend validation ground truth with a vertical boundary line
+        """)
         exit(1)
     end
 
@@ -87,10 +84,10 @@ function find_result_file(dataset::String, horizon::Int, model_type::String)
         model_parts = split(model_type, "_")
         has_exact_suffix =
             length(stem_parts) >= length(model_parts) &&
-            stem_parts[(end-length(model_parts)+1):end] == model_parts
+            stem_parts[(end - length(model_parts) + 1):end] == model_parts
         has_hashed_suffix =
             length(stem_parts) >= length(model_parts) + 1 &&
-            stem_parts[(end-length(model_parts)):(end-1)] == model_parts
+            stem_parts[(end - length(model_parts)):(end - 1)] == model_parts
 
         if startswith(f, "$(dataset)_h$(horizon)_") && (has_exact_suffix || has_hashed_suffix)
             return joinpath(dir, f)
@@ -135,20 +132,22 @@ function run_prediction(path::String)
     features_test = features_test_all
 
     n_forecasters = size(predictions_test, 1)
+    prediction_array = [missing for _ = 1:n_steps]
+
     priors = ProbabilisticEnsembling.extract_prediction_priors(model_type, saved)
-    @info "Running prediction for $(basename(path))..." prediction_mode =
-        ProbabilisticEnsembling.prediction_mode_name(spec_for_data.prediction_mode)
-    ensemble_preds, test_posteriors = ProbabilisticEnsembling._predict_test(
-        spec_for_data.prediction_mode,
+    @info "Running prediction for $(basename(path))..."
+    infer_test = ProbabilisticEnsembling.predict_with_model(
         prediction_type, model_type, priors;
-        n_forecasters=n_forecasters,
-        n_test=n_steps,
-        predictions_test=predictions_test,
-        features_test=features_test,
-        prediction_iterations=PREDICTION_ITERATIONS,
+        n_forecasters = n_forecasters,
+        n_steps = n_steps,
+        prediction_array = prediction_array,
+        predictions_test = predictions_test,
+        features_test = features_test,
+        prediction_iterations = PREDICTION_ITERATIONS,
     )
 
-    influence = test_posteriors[:γ]
+    influence = infer_test.posteriors[:γ][end]
+    ensemble_preds = infer_test.predictions[:y][end]
 
     Y_for_metrics = ProbabilisticEnsembling.prepare_y_for_metrics(prediction_type, y_test)
 
@@ -278,58 +277,6 @@ end
 
 function is_time_varying_influence(influence)
     return ndims(influence) > 1
-end
-
-function orient_series_over_time(values, n_series, label)
-    if ndims(values) != 2
-        error("$label must be a 2D array, got ndims=$(ndims(values))")
-    elseif size(values, 1) == n_series
-        return values
-    elseif size(values, 2) == n_series
-        @warn "$label appears transposed; correcting orientation for plotting" size = size(values)
-        return permutedims(values)
-    else
-        error(
-            "$label shape $(size(values)) does not match n_series=$n_series; expected one axis to equal the number of plotted series",
-        )
-    end
-end
-
-function neural_expert_prediction_matrix(predictions_test_vec, prediction_type, dim)
-    n_f, n_t = size(predictions_test_vec)
-    preds = Matrix{Float64}(undef, n_f, n_t)
-    for i in 1:n_f, j in 1:n_t
-        pred_ij = predictions_test_vec[i, j]
-        preds[i, j] = is_multivariate(prediction_type) ? pred_ij[dim] : pred_ij[1]
-    end
-    return preds
-end
-
-function normalized_contribution_shares(weights, expert_preds)
-    contributions = weights .* expert_preds
-    scale = sum(abs.(contributions); dims=1)
-    shares = similar(contributions)
-    for j in axes(contributions, 2)
-        denom = scale[1, j]
-        if iszero(denom)
-            shares[:, j] .= 0.0
-        else
-            shares[:, j] .= abs.(contributions[:, j]) ./ denom
-        end
-    end
-    return shares
-end
-
-function print_moe_softmax_debug(weights, labels; n_steps_to_print=10)
-    n_f, n_t = size(weights)
-    col_sums = vec(sum(weights; dims=1))
-    @info "MoE softmax summary" n_f n_t minimum = minimum(weights) maximum = maximum(weights) colsum_min = minimum(col_sums) colsum_max = maximum(col_sums)
-
-    n_show = min(n_steps_to_print, n_t)
-    for t in 1:n_show
-        parts = ["$(labels[i])=$(round(weights[i, t], digits=6))" for i in 1:n_f]
-        println("MOE_SOFTMAX|t=$(t)|" * join(parts, "|"))
-    end
 end
 
 # ── Main ─────────────────────────────────────────────────────────────────────
@@ -483,7 +430,7 @@ function main()
         res = results[name]
         n_f = res.n_forecasters
         labels = build_forecaster_labels(res.experts, res.selected_quantiles, n_f)
-        expert_colors = distinguishable_colors(n_f, [RGB(1, 1, 1), RGB(0, 0, 0)], dropseed=true)
+        expert_colors = distinguishable_colors(n_f, [RGB(1,1,1), RGB(0,0,0)], dropseed=true)
 
         if is_time_varying_influence(res.influence)
             n_t = size(res.influence, 2)
@@ -510,30 +457,17 @@ function main()
 
     # Add neural ensemble gating weights subplot
     if !isnothing(neural_result)
-        gw = orient_series_over_time(
-            neural_result.gating_weights,
-            neural_result.n_forecasters,
-            "MoE gating weights",
-        )
+        gw = neural_result.gating_weights  # n_experts × n_test (already softmax-normalized)
         n_f = neural_result.n_forecasters
         n_t = size(gw, 2)
         labels = build_forecaster_labels(neural_result.experts, neural_result.selected_quantiles, n_f)
-        expert_colors = distinguishable_colors(n_f, [RGB(1, 1, 1), RGB(0, 0, 0)], dropseed=true)
-        x_gating = collect(t_test)
-        if length(x_gating) != n_t
-            @warn "MoE gating weights length does not match plotted test horizon; falling back to local time index" n_t n_test = length(x_gating)
-            x_gating = collect(1:n_t)
-        end
+        expert_colors = distinguishable_colors(n_f, [RGB(1,1,1), RGB(0,0,0)], dropseed=true)
 
         p_gating = plot(title="MoE — Gating Weights",
-            ylabel="Gate weight", xlabel="Time Step",
-            legend=:topright, legendfontsize=8, ylims=(0.0, 1.0))
-        if show_val && !isempty(x_gating) && first(x_gating) > 1
-            vline!(p_gating, [first(x_gating) - 0.5], color=:gray, linestyle=:dash, linewidth=2,
-                label="Val / Test boundary")
-        end
+            ylabel="Softmax prob.", xlabel="Time Step",
+            legend=:topright, legendfontsize=8)
         for i in 1:n_f
-            plot!(p_gating, x_gating, gw[i, :],
+            plot!(p_gating, 1:n_t, gw[i, :],
                 label=labels[i], color=expert_colors[i], linewidth=1.5)
         end
         push!(subplots, p_gating)
