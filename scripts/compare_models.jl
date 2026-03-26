@@ -59,11 +59,17 @@ function parse_args()
 
     dim = 1
     show_val = false
-    for i in 3:length(ARGS)
+    i = 3
+    while i <= length(ARGS)
         if ARGS[i] == "--dim" && i + 1 <= length(ARGS)
             dim = parse(Int, ARGS[i+1])
+            i += 2
         elseif ARGS[i] == "--show-val"
             show_val = true
+            i += 1
+        else
+            println(stderr, "Unknown or incomplete argument: $(ARGS[i])")
+            exit(1)
         end
     end
 
@@ -132,22 +138,24 @@ function run_prediction(path::String)
     features_test = features_test_all
 
     n_forecasters = size(predictions_test, 1)
-    prediction_array = [missing for _ = 1:n_steps]
 
     priors = ProbabilisticEnsembling.extract_prediction_priors(model_type, saved)
-    @info "Running prediction for $(basename(path))..."
-    infer_test = ProbabilisticEnsembling.predict_with_model(
-        prediction_type, model_type, priors;
+    ProbabilisticEnsembling.prepare_priors!(prediction_type, model_type, priors, predictions_test)
+    @info "Running prediction for $(basename(path))..." prediction_mode =
+        ProbabilisticEnsembling.prediction_mode_name(spec_for_data.prediction_mode)
+    ensemble_preds, test_posteriors = ProbabilisticEnsembling._predict_test(
+        spec_for_data.prediction_mode,
+        prediction_type,
+        model_type,
+        priors;
         n_forecasters = n_forecasters,
-        n_steps = n_steps,
-        prediction_array = prediction_array,
+        n_test = n_steps,
         predictions_test = predictions_test,
         features_test = features_test,
         prediction_iterations = PREDICTION_ITERATIONS,
     )
 
-    influence = infer_test.posteriors[:γ][end]
-    ensemble_preds = infer_test.predictions[:y][end]
+    influence = test_posteriors[:γ]
 
     Y_for_metrics = ProbabilisticEnsembling.prepare_y_for_metrics(prediction_type, y_test)
 
@@ -216,10 +224,14 @@ function shorten_expert_name(path::String)
     name = replace(basename(path), ".jld2" => "")
     # Extract architecture from patterns like ETTh1_h96_s96_CNN_enzyme
     m = match(r"_s\d+_(\w+?)_", name)
-    !isnothing(m) && return m.captures[1]
+    if !isnothing(m)
+        model_name = m.captures[1]
+        return model_name == "MLP" ? "NLinear" : model_name
+    end
     # Fallback: last meaningful part
     parts = split(name, "_")
-    return length(parts) >= 2 ? parts[end-1] : name
+    model_name = length(parts) >= 2 ? parts[end-1] : name
+    return model_name == "MLP" ? "NLinear" : model_name
 end
 
 function build_forecaster_labels(experts, selected_quantiles, n_forecasters)
@@ -493,9 +505,12 @@ function main()
         p = plot(subplots..., layout=(n_sub, 1), size=(2400, 600 * n_sub), margin=6Plots.mm, dpi=600)
     end
 
-    outfile = "compare_$(dataset)_h$(horizon)_dim$(dim).png"
-    savefig(p, outfile)
-    @info "Saved plot to $outfile"
+    outstem = "compare_$(dataset)_h$(horizon)_dim$(dim)"
+    outfile_png = "$(outstem).png"
+    outfile_pdf = "$(outstem).pdf"
+    savefig(p, outfile_png)
+    savefig(p, outfile_pdf)
+    @info "Saved plots" png = outfile_png pdf = outfile_pdf
     display(p)
 end
 
