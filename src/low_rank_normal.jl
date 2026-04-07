@@ -1,4 +1,4 @@
-using LinearAlgebra: BLAS, copytri!
+using LinearAlgebra: BLAS, Diagonal, Symmetric, copytri!
 using BayesBase
 using ExponentialFamily
 using LowRankMatrices
@@ -65,6 +65,34 @@ function BayesBase.prod(
     BLAS.syr!('U', right.scale, right.u, Λ)
     copytri!(Λ, 'U')
     return left
+end
+
+function _dense_product(left::MvNormalWeightedMeanPrecision, right::LR)
+    T = promote_type(eltype(weightedmean(left)), eltype(right))
+    xi = Vector{T}(weightedmean(left))
+    xi .+= right.xi
+
+    Λ = Matrix{T}(Matrix(invcov(left)))
+    BLAS.syr!('U', T(right.scale), Vector{T}(right.u), Λ)
+    copytri!(Λ, 'U')
+
+    return MvNormalWeightedMeanPrecision(xi, Λ)
+end
+
+function BayesBase.prod(
+    ::PreserveTypeProd{Distribution},
+    left::MvNormalWeightedMeanPrecision{T,V,M},
+    right::LR,
+) where {T,V,M<:Diagonal}
+    return _dense_product(left, right)
+end
+
+function BayesBase.prod(
+    ::PreserveTypeProd{Distribution},
+    left::MvNormalWeightedMeanPrecision{T,V,M},
+    right::LR,
+) where {T,V,M<:Symmetric}
+    return _dense_product(left, right)
 end
 
 BayesBase.default_prod_rule(::Type{<:LR}, ::Type{<:MvNormalWeightedMeanPrecision}) =

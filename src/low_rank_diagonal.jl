@@ -1,4 +1,4 @@
-using LinearAlgebra: Diagonal, dot
+using LinearAlgebra: Diagonal, Symmetric, dot
 
 # ─── LowRankDiagonalUpdate: rank-1 message for diagonal-precision accumulation ─
 #
@@ -137,6 +137,28 @@ function BayesBase.prod(
     return left
 end
 
+function BayesBase.prod(
+    ::PreserveTypeProd{Distribution},
+    left::MvNormalWeightedMeanPrecision{T,V,M},
+    right::LRD,
+) where {T,V,M<:Matrix}
+    return _dense_product(
+        left,
+        LowRankNormalWeightedMeanPrecision(right.xi, right.u, right.scale),
+    )
+end
+
+function BayesBase.prod(
+    ::PreserveTypeProd{Distribution},
+    left::MvNormalWeightedMeanPrecision{T,V,M},
+    right::LRD,
+) where {T,V,M<:Symmetric}
+    return _dense_product(
+        left,
+        LowRankNormalWeightedMeanPrecision(right.xi, right.u, right.scale),
+    )
+end
+
 # --- Commutative: LRD × MvNormalWeightedMeanPrecision{Diagonal} ---
 
 BayesBase.default_prod_rule(::Type{<:LRD}, ::Type{<:MvNormalWeightedMeanPrecision}) =
@@ -147,5 +169,21 @@ function BayesBase.prod(
     left::LRD,
     right::MvNormalWeightedMeanPrecision{T,V,M},
 ) where {T,V,M<:Diagonal}
+    return prod(PreserveTypeProd(Distribution), right, left)
+end
+
+function BayesBase.prod(
+    ::PreserveTypeProd{Distribution},
+    left::LRD,
+    right::MvNormalWeightedMeanPrecision{T,V,M},
+) where {T,V,M<:Matrix}
+    return prod(PreserveTypeProd(Distribution), right, left)
+end
+
+function BayesBase.prod(
+    ::PreserveTypeProd{Distribution},
+    left::LRD,
+    right::MvNormalWeightedMeanPrecision{T,V,M},
+) where {T,V,M<:Symmetric}
     return prod(PreserveTypeProd(Distribution), right, left)
 end
