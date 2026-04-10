@@ -5,6 +5,7 @@ using StableRNGs
 
 include("utils.jl")
 include("log.jl")
+include("relu.jl")
 include("extra.jl")
 include("models.jl")
 
@@ -33,6 +34,11 @@ include("model_zoo/dynamic/model_type.jl")
 include("model_zoo/dynamic/univariate.jl")
 include("model_zoo/dynamic/multivariate.jl")
 include("model_zoo/dynamic/pipeline.jl")
+
+# dynamic_relu
+include("model_zoo/dynamic_relu/model_type.jl")
+include("model_zoo/dynamic_relu/univariate.jl")
+include("model_zoo/dynamic_relu/pipeline.jl")
 
 # dynamic_diagonal
 include("model_zoo/dynamic_diagonal/model_type.jl")
