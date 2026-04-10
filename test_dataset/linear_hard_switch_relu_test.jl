@@ -11,6 +11,7 @@ using Enzyme
 using RxInfer
 using BayesBase
 using Statistics
+using Plots
 
 # -----------------------------------------------------------------------
 # Test: DynamicReLU ensemble on hard-switch dataset
@@ -110,3 +111,5 @@ if weights_r2[2] > weights_r2[1]
 else
     @warn "Regime 2: Expert A dominates (unexpected)" w_A = weights_r2[1] w_B = weights_r2[2]
 end
+
+plot(1:40, result.free_energy)
