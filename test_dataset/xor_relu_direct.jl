@@ -1,15 +1,3 @@
-#!/usr/bin/env julia
-
-# XOR with direct precision-weighted ReLU gating (no NormalMixture).
-#
-# 4 neurons, each with:
-#   μ_k[j] ~ softdot(features, w_mean[k], τ)   -- learned mean
-#   za_k[j] ~ softdot(features, w_a[k], τ)      -- learned gate pre-activation
-#   γ_k[j] ~ ReLU(za_k[j])                       -- precision = max(0, za)
-#   y[j] ~ NormalMeanPrecision(μ_k[j], γ_k[j])   -- each neuron contributes to y
-#
-# Symmetry breaking: asymmetric weight initialization (biases ±2, gate dirs Q1-Q4)
-
 using CSV
 using DataFrames
 using ExponentialFamily
@@ -23,8 +11,6 @@ using LinearAlgebra
 using StableRNGs
 using Random
 using Plots
-
-const N_NEURONS = 4
 
 @model function xor_relu_direct(n_neurons, features, y, priors)
     local w_mean, w_a, z_mean, za, γ, τ, out
@@ -63,13 +49,11 @@ end
 
 end
 
-function make_priors(; n_features::Int = 3, seed::Int = 42)
+function make_priors(; n_neurons=4, n_features::Int = 3, seed::Int = 42)
     rng = StableRNG(seed)
 
-    # Tight prior on w_mean (precision=10) — prevents biases from collapsing away from ±2
-    # Loose prior on w_a (precision=0.01) — allows gate weights to grow large
-    w_mean = [MvNormalWeightedMeanPrecision(randn(rng, n_features), Diagonal(fill(1e-4, n_features))) for _ in 1:N_NEURONS]
-    w_a = [MvNormalWeightedMeanPrecision(randn(rng, n_features), Diagonal(fill(1e-2, n_features))) for _ in 1:N_NEURONS]
+    w_mean = [MvNormalWeightedMeanPrecision(randn(rng, n_features), Diagonal(fill(1e-4, n_features))) for _ in 1:n_neurons]
+    w_a = [MvNormalWeightedMeanPrecision(randn(rng, n_features), Diagonal(fill(1e-2, n_features))) for _ in 1:n_neurons]
 
     return Dict{Symbol,Any}(
         :w_mean => w_mean,
@@ -90,24 +74,24 @@ end
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
-
+n_neurons = 8
 df = CSV.read("test_dataset/xor_simple_dataset.csv", DataFrame)
 df_train, df_test = split_dataset(df; seed = 2027)
 
 println("=" ^ 70)
-println("XOR ReLU Direct: precision-weighted, $(N_NEURONS) neurons")
+println("XOR ReLU Direct: precision-weighted, $(n_neurons) neurons")
 println("  n_train=$(nrow(df_train)), n_test=$(nrow(df_test))")
 println("=" ^ 70)
 
-priors = make_priors()
+priors = make_priors(n_neurons = n_neurons)
 features_train = build_features(df_train)
 
 result = infer(
-    model = xor_relu_direct(n_neurons = N_NEURONS, priors = priors),
+    model = xor_relu_direct(n_neurons = n_neurons, priors = priors),
     data = (y = df_train.OT, features = features_train),
     constraints = xor_relu_direct_constraints(),
     initialization = xor_relu_direct_init(priors),
-    iterations = 50,
+    iterations = 100,
     free_energy = true,
     showprogress = true,
     options = (limit_stack_depth = 100,),
@@ -117,7 +101,7 @@ fe = result.free_energy
 plot(1:length(fe), fe)
 
 println("\nLearned weights:")
-for k in 1:N_NEURONS
+for k in 1:n_neurons
     wm = round.(mean(result.posteriors[:w_mean][end][k]); digits = 4)
     wa = round.(mean(result.posteriors[:w_a][end][k]); digits = 4)
     println("  neuron $k: w_mean=$wm  w_a=$wa")
@@ -125,15 +109,19 @@ end
 
 # Evaluate
 features_test = build_features(df_test)
-w_means_post = [mean(result.posteriors[:w_mean][end][k]) for k in 1:N_NEURONS]
-w_a_post = [mean(result.posteriors[:w_a][end][k]) for k in 1:N_NEURONS]
+w_means_post = [mean(result.posteriors[:w_mean][end][k]) for k in 1:n_neurons]
+w_a_post = [mean(result.posteriors[:w_a][end][k]) for k in 1:n_neurons]
+
+function predict_point(x1, x2, w_means, w_as)
+    f = [1.0, x1, x2]
+    μs = [dot(w_means[k], f) for k in 1:n_neurons]
+    γs = [max(0.0, dot(w_as[k], f)) for k in 1:n_neurons]
+    total = sum(γs) + 1e-6
+    return sum(γs .* μs) / total
+end
 
 y_pred = map(features_test) do f
-    μs = [dot(w_means_post[k], f) for k in 1:N_NEURONS]
-    γs = [max(0.0, dot(w_a_post[k], f)) for k in 1:N_NEURONS]
-    total = sum(γs)
-    total < 1e-10 && return 0.0
-    sum(γs .* μs) / total
+    predict_point(f[2], f[3], w_means_post, w_a_post)
 end
 
 y_test = df_test.OT
@@ -143,16 +131,6 @@ println("(Baseline: predicting 0 gives MSE ≈ 4.0)")
 
 x_test_coords = [features_test[i][2] for i in 1:length(features_test)]
 y_test_coords = [features_test[i][3] for i in 1:length(features_test)]
-
-# Contour plot over a dense grid
-function predict_point(x1, x2, w_means, w_as)
-    f = [1.0, x1, x2]
-    μs = [dot(w_means[k], f) for k in 1:N_NEURONS]
-    γs = [max(0.0, dot(w_as[k], f)) for k in 1:N_NEURONS]
-    total = sum(γs)
-    total < 1e-10 && return 0.0
-    return sum(γs .* μs) / total
-end
 
 grid_x = range(minimum(x_test_coords) - 0.5, maximum(x_test_coords) + 0.5; length = 200)
 grid_y = range(minimum(y_test_coords) - 0.5, maximum(y_test_coords) + 0.5; length = 200)
