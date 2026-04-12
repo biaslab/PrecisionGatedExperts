@@ -95,6 +95,54 @@ function generate_xor_data(
     )
 end
 
+# ── 3. XOR-simple target (target itself has XOR structure) ───────────────────
+
+function generate_xor_simple_data(
+    rng;
+    n::Int = 1600,
+    obs_noise::Float64 = 0.08,
+    regime_noise::Float64 = 0.20,
+)
+    x1 = rand(rng, n) .* 4 .- 2
+    x2 = rand(rng, n) .* 4 .- 2
+
+    # Keep the same regime logic as old XOR dataset:
+    # regime 1 when signs match, regime 2 otherwise (with noisy boundary).
+    signed = x1 .* x2
+    signed_noisy = signed .+ regime_noise .* randn(rng, n)
+    regime = ifelse.(signed_noisy .> 0.0, 1, 2)
+
+    # XOR-like target in [0, 1]:
+    #   regime 1 -> around 0
+    #   regime 2 -> around 1
+    y_base = ifelse.(regime .== 1, 0.0, 1.0)
+    y = clamp.(y_base .+ obs_noise .* randn(rng, n), 0.0, 1.0)
+
+    # Experts follow the same regime preferences as before:
+    # pred_a good in regime 1, pred_b good in regime 2.
+    pred_a = Vector{Float64}(undef, n)
+    pred_b = Vector{Float64}(undef, n)
+    for i in 1:n
+        if regime[i] == 1
+            pred_a[i] = clamp(0.06 * randn(rng), 0.0, 1.0)
+            pred_b[i] = clamp(0.78 + 0.16 * randn(rng), 0.0, 1.0)
+        else
+            pred_a[i] = clamp(0.22 + 0.16 * randn(rng), 0.0, 1.0)
+            pred_b[i] = clamp(1.0 + 0.06 * randn(rng), 0.0, 1.0)
+        end
+    end
+
+    return DataFrame(;
+        x1 = x1,
+        x2 = x2,
+        dist_to_line = signed,
+        regime = regime,
+        OT = y,
+        pred_a = pred_a,
+        pred_b = pred_b,
+    )
+end
+
 # ── Generic heatmap (works for any dataset) ──────────────────────────────────
 
 function plot_regime_heatmap(df; title_str = "", boundary_fn = nothing)
@@ -139,6 +187,128 @@ function plot_regime_heatmap(df; title_str = "", boundary_fn = nothing)
     return p
 end
 
+function plot_xor_simple_quality(df; title_prefix = "XOR-simple")
+    margin = 0.15
+    xl = (minimum(df.x1) - margin, maximum(df.x1) + margin)
+    yl = (minimum(df.x2) - margin, maximum(df.x2) + margin)
+
+    p_target = scatter(
+        df.x1, df.x2;
+        marker_z = df.OT,
+        color = :viridis,
+        clims = (0.0, 1.0),
+        markersize = 3.2,
+        alpha = 0.9,
+        markerstrokewidth = 0,
+        xlabel = "x₁",
+        ylabel = "x₂",
+        xlims = xl,
+        ylims = yl,
+        colorbar_title = "OT",
+        title = "$(title_prefix): target",
+        label = "",
+    )
+    plot!(p_target, range(xl[1], xl[2]; length = 300), zero.(range(xl[1], xl[2]; length = 300));
+        linewidth = 2.2, color = :black, linestyle = :dash, label = "")
+    vline!(p_target, [0.0];
+        linewidth = 2.2, color = :black, linestyle = :dash, label = "x₁=0,x₂=0")
+
+    p_regime = scatter(
+        df.x1, df.x2;
+        marker_z = df.regime,
+        color = cgrad([:navy, :gold]),
+        clims = (1.0, 2.0),
+        markersize = 3.2,
+        alpha = 0.9,
+        markerstrokewidth = 0,
+        xlabel = "x₁",
+        ylabel = "x₂",
+        xlims = xl,
+        ylims = yl,
+        colorbar_title = "regime",
+        title = "$(title_prefix): regime",
+        label = "",
+    )
+    plot!(p_regime, range(xl[1], xl[2]; length = 300), zero.(range(xl[1], xl[2]; length = 300));
+        linewidth = 2.2, color = :black, linestyle = :dash, label = "")
+    vline!(p_regime, [0.0];
+        linewidth = 2.2, color = :black, linestyle = :dash, label = "x₁=0,x₂=0")
+
+    p_adv = plot_regime_heatmap(df;
+        title_str = "$(title_prefix): expert advantage",
+        boundary_fn = (p, xs) -> begin
+            plot!(p, xs, zero.(xs); linewidth = 2.2, color = :black, linestyle = :dash, label = "")
+            vline!(p, [0.0]; linewidth = 2.2, color = :black, linestyle = :dash, label = "boundary")
+        end,
+    )
+
+    return plot(p_target, p_regime, p_adv; layout = (1, 3), size = (1700, 500), margin = 5Plots.mm)
+end
+
+function plot_xor_quality(df; title_prefix = "XOR")
+    margin = 0.15
+    xl = (minimum(df.x1) - margin, maximum(df.x1) + margin)
+    yl = (minimum(df.x2) - margin, maximum(df.x2) + margin)
+
+    tmin, tmax = extrema(df.OT)
+    if tmax <= tmin
+        tmin, tmax = tmin - 1e-6, tmax + 1e-6
+    end
+
+    p_target = scatter(
+        df.x1, df.x2;
+        marker_z = df.OT,
+        color = :viridis,
+        clims = (tmin, tmax),
+        markersize = 3.2,
+        alpha = 0.9,
+        markerstrokewidth = 0,
+        xlabel = "x₁",
+        ylabel = "x₂",
+        xlims = xl,
+        ylims = yl,
+        colorbar_title = "OT",
+        title = "$(title_prefix): target",
+        label = "",
+    )
+    xs = range(xl[1], xl[2]; length = 300)
+    plot!(p_target, xs, zero.(xs);
+        linewidth = 2.2, color = :black, linestyle = :dash, label = "")
+    vline!(p_target, [0.0];
+        linewidth = 2.2, color = :black, linestyle = :dash, label = "x₁=0,x₂=0")
+
+    p_regime = scatter(
+        df.x1, df.x2;
+        marker_z = df.regime,
+        color = cgrad([:navy, :gold]),
+        clims = (1.0, 2.0),
+        markersize = 3.2,
+        alpha = 0.9,
+        markerstrokewidth = 0,
+        xlabel = "x₁",
+        ylabel = "x₂",
+        xlims = xl,
+        ylims = yl,
+        colorbar_title = "regime",
+        title = "$(title_prefix): regime",
+        label = "",
+    )
+    plot!(p_regime, xs, zero.(xs);
+        linewidth = 2.2, color = :black, linestyle = :dash, label = "")
+    vline!(p_regime, [0.0];
+        linewidth = 2.2, color = :black, linestyle = :dash, label = "x₁=0,x₂=0")
+
+    p_adv = plot_regime_heatmap(df;
+        title_str = "$(title_prefix): expert advantage",
+        boundary_fn = (p, xs) -> begin
+            plot!(p, xs, zero.(xs); linewidth = 2.2, color = :black, linestyle = :dash, label = "")
+            vline!(p, [0.0]; linewidth = 2.2, color = :black, linestyle = :dash, label = "boundary")
+        end,
+    )
+
+    return plot(p_target, p_regime, p_adv; layout = (1, 3), size = (1700, 500), margin = 5Plots.mm)
+end
+
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 function main()
@@ -170,9 +340,29 @@ function main()
             vline!(p, [0.0]; linewidth = 2.5, color = :black, linestyle = :dash, label = "boundary")
         end,
     )
+    p_xor_quality = plot_xor_quality(df_xor)
+    savefig(p_xor_quality, "test_dataset/viz/xor_quality.png")
+    @info "XOR quality plot saved" path = "test_dataset/viz/xor_quality.png"
+
+    # 3. XOR-simple (target itself is XOR-like)
+    df_xor_simple = generate_xor_simple_data(rng; n = 1600)
+    CSV.write("test_dataset/xor_simple_dataset.csv", df_xor_simple)
+    @info "XOR-simple dataset saved" n = nrow(df_xor_simple) mean_OT = mean(df_xor_simple.OT)
+
+    p3 = plot_regime_heatmap(df_xor_simple;
+        title_str = "XOR-simple boundary",
+        boundary_fn = (p, xs) -> begin
+            plot!(p, xs, zero.(xs); linewidth = 2.5, color = :black, linestyle = :dash, label = "")
+            vline!(p, [0.0]; linewidth = 2.5, color = :black, linestyle = :dash, label = "boundary")
+        end,
+    )
+
+    p_xor_simple_quality = plot_xor_simple_quality(df_xor_simple)
+    savefig(p_xor_simple_quality, "test_dataset/viz/xor_simple_quality.png")
+    @info "XOR-simple quality plot saved" path = "test_dataset/viz/xor_simple_quality.png"
 
     # Combined plot
-    p_all = plot(p1, p2; layout = (1, 2), size = (1200, 550), margin = 5Plots.mm)
+    p_all = plot(p1, p2, p3; layout = (1, 3), size = (1800, 550), margin = 5Plots.mm)
     savefig(p_all, "test_dataset/viz/regime_heatmaps_all.png")
     @info "Combined heatmap saved" path = "test_dataset/viz/regime_heatmaps_all.png"
 end
