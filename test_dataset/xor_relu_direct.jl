@@ -43,7 +43,7 @@ const N_NEURONS = 4
             γ[k, j] ~ ReLU(za[k, j])
             out[j] ~ NormalMeanPrecision(z_mean[k, j], γ[k, j])
         end
-        y[j] ~ NormalMeanPrecision(out[j], 1)
+        y[j] ~ NormalMeanPrecision(out[j], 1000)
     end
 end
 
@@ -60,6 +60,7 @@ end
     q(za) = GammaShapeScale(2.0, 1.0)
     q(γ) = GammaShapeScale(2.0, 1.0)
     q(τ) = priors[:τ]
+
 end
 
 function make_priors(; n_features::Int = 3, seed::Int = 42)
@@ -67,13 +68,13 @@ function make_priors(; n_features::Int = 3, seed::Int = 42)
 
     # Tight prior on w_mean (precision=10) — prevents biases from collapsing away from ±2
     # Loose prior on w_a (precision=0.01) — allows gate weights to grow large
-    w_mean = [MvNormalWeightedMeanPrecision(randn(rng, n_features), Diagonal(fill(1e-3, n_features))) for _ in 1:N_NEURONS]
-    w_a = [MvNormalWeightedMeanPrecision(randn(rng, n_features), Diagonal(fill(1e-3, n_features))) for _ in 1:N_NEURONS]
+    w_mean = [MvNormalWeightedMeanPrecision(randn(rng, n_features), Diagonal(fill(1e-4, n_features))) for _ in 1:N_NEURONS]
+    w_a = [MvNormalWeightedMeanPrecision(randn(rng, n_features), Diagonal(fill(1e-2, n_features))) for _ in 1:N_NEURONS]
 
     return Dict{Symbol,Any}(
         :w_mean => w_mean,
         :w_a => w_a,
-        :τ => GammaShapeRate(1000.0, 1.0),
+        :τ => GammaShapeRate(1e6, 1.0),
     )
 end
 
@@ -92,7 +93,6 @@ end
 
 df = CSV.read("test_dataset/xor_simple_dataset.csv", DataFrame)
 df_train, df_test = split_dataset(df; seed = 2027)
-df_train = df_train[1:min(500, nrow(df_train)), :]
 
 println("=" ^ 70)
 println("XOR ReLU Direct: precision-weighted, $(N_NEURONS) neurons")
@@ -169,3 +169,4 @@ contourf(
     title = "XOR ReLU Direct — Contour",
     linewidth = 0,
 )
+savefig("test_dataset/viz/heatmap_relu.png")
