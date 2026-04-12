@@ -22,6 +22,7 @@ using Statistics
 using LinearAlgebra
 using StableRNGs
 using Random
+using Plots
 
 const N_NEURONS = 4
 
@@ -101,29 +102,19 @@ println("=" ^ 70)
 priors = make_priors()
 features_train = build_features(df_train)
 
-# # Use SubsampledData to prevent full-batch variance collapse
-# # Small batches give different gradient signals to different neurons
-# subsample_size = 30
-# y_sub = ProbabilisticEnsembling.SubsampledData(collect(df_train.OT), subsample_size)
-# features_sub = ProbabilisticEnsembling.SubsampledData(features_train, subsample_size)
-
 result = infer(
     model = xor_relu_direct(n_neurons = N_NEURONS, priors = priors),
     data = (y = df_train.OT, features = features_train),
     constraints = xor_relu_direct_constraints(),
     initialization = xor_relu_direct_init(priors),
     iterations = 50,
-    free_energy = false,
+    free_energy = true,
     showprogress = true,
     options = (limit_stack_depth = 100,),
 )
 
-try
-    fe = result.free_energy
-    println("\nFree energy: first=$(round(fe[1]; digits=2)) last=$(round(fe[end]; digits=2))")
-catch
-    println("\n(Free energy not computed)")
-end
+fe = result.free_energy
+plot(1:length(fe), fe)
 
 println("\nLearned weights:")
 for k in 1:N_NEURONS
@@ -150,14 +141,31 @@ mse = mean((y_pred .- y_test) .^ 2)
 println("\nTest MSE (precision-weighted) = $(round(mse; digits=4))")
 println("(Baseline: predicting 0 gives MSE ≈ 4.0)")
 
-for (q, cond, label) in [
-    (1, (r) -> r.x1 > 0 && r.x2 > 0, "Q1 → +2"),
-    (2, (r) -> r.x1 < 0 && r.x2 > 0, "Q2 → -2"),
-    (3, (r) -> r.x1 < 0 && r.x2 < 0, "Q3 → +2"),
-    (4, (r) -> r.x1 > 0 && r.x2 < 0, "Q4 → -2"),
-]
-    mask = [cond(df_test[i, :]) for i in 1:nrow(df_test)]
-    yp = y_pred[mask]
-    yt = y_test[mask]
-    println("  $label: avg_pred=$(round(mean(yp);digits=3)) avg_true=$(round(mean(yt);digits=3)) MSE=$(round(mean((yp.-yt).^2);digits=4))")
+x_test_coords = [features_test[i][2] for i in 1:length(features_test)]
+y_test_coords = [features_test[i][3] for i in 1:length(features_test)]
+
+# Contour plot over a dense grid
+function predict_point(x1, x2, w_means, w_as)
+    f = [1.0, x1, x2]
+    μs = [dot(w_means[k], f) for k in 1:N_NEURONS]
+    γs = [max(0.0, dot(w_as[k], f)) for k in 1:N_NEURONS]
+    total = sum(γs)
+    total < 1e-10 && return 0.0
+    return sum(γs .* μs) / total
 end
+
+grid_x = range(minimum(x_test_coords) - 0.5, maximum(x_test_coords) + 0.5; length = 200)
+grid_y = range(minimum(y_test_coords) - 0.5, maximum(y_test_coords) + 0.5; length = 200)
+z_grid = [predict_point(x, y, w_means_post, w_a_post) for y in grid_y, x in grid_x]
+
+contourf(
+    grid_x, grid_y, z_grid,
+    c = :RdBu,
+    clims = (-maximum(abs.(z_grid)), maximum(abs.(z_grid))),
+    levels = 20,
+    xlabel = "x1",
+    ylabel = "x2",
+    colorbar_title = "y_pred",
+    title = "XOR ReLU Direct — Contour",
+    linewidth = 0,
+)
