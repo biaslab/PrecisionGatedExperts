@@ -5,6 +5,7 @@ using StableRNGs
 
 include("utils.jl")
 include("log.jl")
+include("exp.jl")
 include("relu.jl")
 include("extra.jl")
 include("models.jl")
