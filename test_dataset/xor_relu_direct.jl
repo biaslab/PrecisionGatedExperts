@@ -91,7 +91,7 @@ result = infer(
     data = (y = df_train.OT, features = features_train),
     constraints = xor_relu_direct_constraints(),
     initialization = xor_relu_direct_init(priors),
-    iterations = 100,
+    iterations = 4,
     free_energy = true,
     showprogress = true,
     options = (limit_stack_depth = 100,),
@@ -201,5 +201,5 @@ anim = @animate for iter in 1:n_iters
          plot_title = "XOR ReLU — variational iteration $iter")
 end
 
-gif(anim, "test_dataset/viz/relu_iterations.gif", fps = 5)
+gif(anim, "test_dataset/viz/relu_iterations.gif", fps = 1)
 println("Animation saved to test_dataset/viz/relu_iterations.gif")
