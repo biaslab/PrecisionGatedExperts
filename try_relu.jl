@@ -24,10 +24,10 @@ using Plots
 #     = sigmoid(2Sx) * x
 #
 # This is a smooth, hardening approximation to max(0, x).
-const RELU_GATE_WEIGHT = [8.0, 0.0]
+const RELU_GATE_WEIGHT = [320.0, 0.0]
 const RELU_IDENTITY_WEIGHT = [1.0, 0.0]
 const RELU_ZERO_WEIGHT = [0.0, 0.0]
-const TAU_SOFTDOT = 2000.0
+const TAU_SOFTDOT = 1e6
 
 relu_gate_approx(x; scale = RELU_GATE_WEIGHT[1]) = x / (1.0 + exp(-2.0 * scale * x))
 
@@ -45,14 +45,6 @@ end
 
 @constraints function relu_gate_constraints()
     q(z_identity, z_zero) = q(z_identity)q(z_zero)
-    q(z_identity)::ProjectedTo(
-        NormalMeanVariance,
-        parameters = ProjectionParameters(strategy = ClosedFormStrategy()),
-    )
-    q(z_zero)::ProjectedTo(
-        NormalMeanVariance,
-        parameters = ProjectionParameters(strategy = ClosedFormStrategy()),
-    )
 end
 
 @initialization function relu_gate_init()
@@ -114,7 +106,7 @@ function run_relu_demo()
 end
 
 function plot_relu_difference(; outpath = "test_dataset/viz/fixed_relu_gate_vs_relu.png")
-    xs = collect(range(-1.0, 1.0; length = 1000))
+    xs = collect(range(-10.0, 10.0; length = 5000))
     true_relu = max.(0.0, xs)
     approx = relu_gate_approx.(xs)
     residual = approx .- true_relu
