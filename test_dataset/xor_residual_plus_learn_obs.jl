@@ -16,7 +16,7 @@ using Printf
 const DATASET = get(ENV, "XOR_DATASET", "test_dataset/xor_simple_dataset.csv")
 const OUTPUT_PREFIX = get(ENV, "OUTPUT_PREFIX", "test_dataset/viz/xor_residual_plus_learn_obs_clean")
 const N_NEURONS = parse(Int, get(ENV, "N_NEURONS", "8"))
-const N_ITERATIONS = parse(Int, get(ENV, "N_ITERATIONS", "4"))
+const N_ITERATIONS = parse(Int, get(ENV, "N_ITERATIONS", "10"))
 const TRAIN_FRACTION = parse(Float64, get(ENV, "TRAIN_FRACTION", "0.3"))
 const VALIDATION_FRACTION = parse(Float64, get(ENV, "VALIDATION_FRACTION", "0.0"))
 const OBS_TAU_SHAPE = parse(Float64, get(ENV, "OBS_TAU_SHAPE", "100.0"))
@@ -58,7 +58,7 @@ end
 
 @constraints function xor_residual_plus_learn_obs_constraints()
     q(w_base, w_delta, w_gate, base, delta, mu, za, gamma, tau, obs_tau, out) =
-        q(w_base, base)q(w_delta, delta)q(w_gate)q(mu)q(za, gamma)q(tau)q(obs_tau)q(out)
+        q(w_base, base, w_delta, delta, mu, out)q(w_gate)q(za, gamma)q(tau)q(obs_tau)
 
     q(base)::ProjectedTo(
         NormalMeanVariance,
