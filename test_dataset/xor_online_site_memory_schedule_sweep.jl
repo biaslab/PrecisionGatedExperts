@@ -1,4 +1,213 @@
-include("xor_online_site_memory_refine_sweep.jl")
+include("xor_relu_direct_projection_niterations.jl")
+
+const BASELINE_MSE = 0.221875
+
+struct GaussianNaturalTerm
+    xi::Vector{Float64}
+    precision::Matrix{Float64}
+end
+
+function zero_term(n_features)
+    return GaussianNaturalTerm(zeros(n_features), zeros(n_features, n_features))
+end
+
+function natural_term(dist)
+    return GaussianNaturalTerm(
+        Vector{Float64}(weightedmean(dist)),
+        Matrix{Float64}(invcov(dist)),
+    )
+end
+
+function term_distribution(term::GaussianNaturalTerm)
+    precision = Symmetric(0.5 .* (term.precision .+ term.precision'))
+    return MvNormalWeightedMeanPrecision(term.xi, Matrix(precision))
+end
+
+add_terms(a::GaussianNaturalTerm, b::GaussianNaturalTerm) = GaussianNaturalTerm(
+    a.xi .+ b.xi,
+    a.precision .+ b.precision,
+)
+
+subtract_terms(a::GaussianNaturalTerm, b::GaussianNaturalTerm) = GaussianNaturalTerm(
+    a.xi .- b.xi,
+    a.precision .- b.precision,
+)
+
+damp_terms(old::GaussianNaturalTerm, new::GaussianNaturalTerm, alpha) = GaussianNaturalTerm(
+    (1 - alpha) .* old.xi .+ alpha .* new.xi,
+    (1 - alpha) .* old.precision .+ alpha .* new.precision,
+)
+
+function terms_from_priors(priors, n_neurons)
+    return (
+        w_mean = [natural_term(priors[:w_mean][k]) for k in 1:n_neurons],
+        w_a = [natural_term(priors[:w_a][k]) for k in 1:n_neurons],
+        tau = deepcopy(priors[:tau]),
+    )
+end
+
+function priors_from_terms(terms, n_neurons)
+    return Dict{Symbol,Any}(
+        :w_mean => [term_distribution(terms.w_mean[k]) for k in 1:n_neurons],
+        :w_a => [term_distribution(terms.w_a[k]) for k in 1:n_neurons],
+        :tau => deepcopy(terms.tau),
+    )
+end
+
+function zero_site(n_neurons, n_features)
+    return (
+        w_mean = [zero_term(n_features) for _ in 1:n_neurons],
+        w_a = [zero_term(n_features) for _ in 1:n_neurons],
+    )
+end
+
+function subtract_site(global_terms, site_terms, n_neurons)
+    return (
+        w_mean = [
+            subtract_terms(global_terms.w_mean[k], site_terms.w_mean[k])
+            for k in 1:n_neurons
+        ],
+        w_a = [
+            subtract_terms(global_terms.w_a[k], site_terms.w_a[k])
+            for k in 1:n_neurons
+        ],
+        tau = deepcopy(global_terms.tau),
+    )
+end
+
+function add_site(cavity_terms, site_terms, tau, n_neurons)
+    return (
+        w_mean = [
+            add_terms(cavity_terms.w_mean[k], site_terms.w_mean[k])
+            for k in 1:n_neurons
+        ],
+        w_a = [
+            add_terms(cavity_terms.w_a[k], site_terms.w_a[k])
+            for k in 1:n_neurons
+        ],
+        tau = deepcopy(tau),
+    )
+end
+
+function posterior_site_terms(posterior_terms, cavity_terms, n_neurons)
+    return (
+        w_mean = [
+            subtract_terms(posterior_terms.w_mean[k], cavity_terms.w_mean[k])
+            for k in 1:n_neurons
+        ],
+        w_a = [
+            subtract_terms(posterior_terms.w_a[k], cavity_terms.w_a[k])
+            for k in 1:n_neurons
+        ],
+    )
+end
+
+function damp_site_terms(old_site, new_site, alpha_mean, alpha_gate, n_neurons)
+    return (
+        w_mean = [
+            damp_terms(old_site.w_mean[k], new_site.w_mean[k], alpha_mean)
+            for k in 1:n_neurons
+        ],
+        w_a = [
+            damp_terms(old_site.w_a[k], new_site.w_a[k], alpha_gate)
+            for k in 1:n_neurons
+        ],
+    )
+end
+
+function make_online_metrics()
+    return DataFrame(
+        update = Int[],
+        epoch = Int[],
+        batch = Int[],
+        batch_size = Int[],
+        free_energy = Float64[],
+        test_mse = Float64[],
+        invalid_predictions = Int[],
+        mean_gate_mass = Float64[],
+        min_gate_mass = Float64[],
+        min_var_w_mean = Float64[],
+        median_var_w_mean = Float64[],
+        max_var_w_mean = Float64[],
+        min_var_w_a = Float64[],
+        median_var_w_a = Float64[],
+        max_var_w_a = Float64[],
+        max_precision_w_mean = Float64[],
+        max_precision_w_a = Float64[],
+        mean_w_mean_slope_norm = Float64[],
+        max_w_mean_slope_norm = Float64[],
+        mean_w_a_slope_norm = Float64[],
+        max_w_a_slope_norm = Float64[],
+        mean_abs_w_a_bias = Float64[],
+        w_a_bias_slope_ratio = Float64[],
+        gate_active_fraction = Float64[],
+        mean_effective_gate_count = Float64[],
+    )
+end
+
+function tail_rows(df, n)
+    first_row = max(1, nrow(df) - n + 1)
+    return df[first_row:end, :]
+end
+
+function best_row_after(metrics, first_update)
+    rows = metrics[metrics.update .>= first_update, :]
+    if nrow(rows) == 0
+        return nothing
+    end
+
+    return best_metric_row(rows)
+end
+
+function scheduled_summary_dataframe()
+    return DataFrame(
+        name = String[],
+        epochs = Int[],
+        updates = Int[],
+        batch_size = Int[],
+        batch_iterations = Int[],
+        examples_seen = Int[],
+        inner_steps = Int[],
+        obs_precision = Float64[],
+        alpha_mean = Float64[],
+        alpha_gate = Float64[],
+        schedule = String[],
+        final_mse = Float64[],
+        best_mse = Float64[],
+        best_update = Union{Missing,Int}[],
+        best_after10_mse = Float64[],
+        best_after10_update = Union{Missing,Int}[],
+        tail20_mean_mse = Float64[],
+        tail20_min_mse = Float64[],
+        tail20_std_mse = Float64[],
+        tail20_below_baseline_fraction = Float64[],
+        final_min_var_w_mean = Float64[],
+        final_min_var_w_a = Float64[],
+        final_median_var_w_a = Float64[],
+        final_mean_w_mean_slope_norm = Float64[],
+        final_mean_w_a_slope_norm = Float64[],
+        final_gate_active_fraction = Float64[],
+        final_effective_gate_count = Float64[],
+        metrics_path = String[],
+        log_path = String[],
+    )
+end
+
+function print_case_result(row)
+    @printf(
+        "updates=%d final=%.6f best=%.6f@%s best10=%.6f tail20=%.6f below_tail=%.2f minvar_a=%.3g slope_a=%.4g gates=%.2f\n",
+        row.updates,
+        row.final_mse,
+        row.best_mse,
+        string(row.best_update),
+        row.best_after10_mse,
+        row.tail20_mean_mse,
+        row.tail20_below_baseline_fraction,
+        row.final_min_var_w_a,
+        row.final_mean_w_a_slope_norm,
+        row.final_effective_gate_count,
+    )
+end
 
 function scheduled_alphas(case, epoch)
     if case.schedule == "constant"
@@ -174,14 +383,8 @@ function summarize_scheduled_site_case!(summary, case)
     return summary
 end
 
-function scheduled_summary_dataframe()
-    df = site_summary_dataframe()
-    insertcols!(df, 11, :schedule => String[])
-    return df
-end
-
 function main()
-    output_dir = "test_dataset/viz/online_sweep_site_memory_schedule"
+    output_dir = "docs/bong_online_vmp/results/site_memory_schedule"
     mkpath(output_dir)
 
     common = (
@@ -245,6 +448,44 @@ function main()
         :final_effective_gate_count,
     ]], allcols = true, allrows = true)
     println()
+
+    best_case = cases[findfirst(==(summary.name[1]), [case.name for case in cases])]
+    visual_prefix = "$output_dir/best_sqrt_site_b24_amean0p5_agate0p05"
+    visual_case = merge(best_case, (
+        output_prefix = visual_prefix,
+        log_path = "$visual_prefix.log",
+    ))
+
+    println("\nRe-running best case to save heatmap...")
+    final_priors, best_metrics, w_mean_history, w_a_history = run_scheduled_site_memory_case(visual_case)
+    CSV.write("$(visual_prefix)_metrics.csv", best_metrics)
+
+    df = CSV.read("test_dataset/xor_simple_dataset.csv", DataFrame)
+    _, df_test = split_dataset(df; train_fraction = 0.3, seed = 2027)
+    features_test = build_features(df_test)
+    visual_config = Dict{Symbol,Any}(
+        :output_prefix => visual_prefix,
+        :projection_niterations => 1,
+        :save_animation => false,
+    )
+    save_visuals_from_history(
+        w_mean_history,
+        w_a_history,
+        visual_config,
+        features_test;
+        frame_label = "site update",
+    )
+
+    final_row = best_metrics[end, :]
+    best_row = best_metric_row(best_metrics)
+    @printf("Best visual final MSE = %.6f\n", final_row.test_mse)
+    if !isnothing(best_row)
+        @printf("Best visual best MSE = %.6f at update %d\n", best_row.test_mse, best_row.update)
+    end
+
+    w_means, w_as = weights_from_priors(final_priors, 16)
+    geometry = weight_geometry_metrics(w_means, w_as, features_test)
+    @printf("Best visual mean gate slope norm = %.6f\n", geometry.mean_w_a_slope_norm)
 end
 
 if abspath(PROGRAM_FILE) == abspath(@__FILE__)

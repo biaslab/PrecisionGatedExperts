@@ -13,6 +13,7 @@ using Random
 using Printf
 using Plots
 using ProgressMeter
+import BayesBase: weightedmean, invcov
 
 function print_usage()
     println("""
@@ -28,6 +29,20 @@ function print_usage()
       --sampling=epoch|random    Online batch schedule. Default: epoch.
       --random-subsample         Alias for --sampling=random.
       --updates=N                Number of random-subsample online updates.
+      --obs-precision=X          Fixed observation precision. Default: 1e6.
+      --prior-forgetting-rho=X   Scale posterior natural parameters before the next online update. Default: 1.0.
+      --w-mean-forgetting-rho=X  Override forgetting rho for w_mean only. Default: --prior-forgetting-rho.
+      --w-a-forgetting-rho=X     Override forgetting rho for w_a only. Default: --prior-forgetting-rho.
+      --posterior-damping-alpha=X
+                                  Natural-parameter posterior step size for w_mean and w_a. Default: 1.0.
+      --w-mean-damping-alpha=X   Override damping alpha for w_mean only. Default: --posterior-damping-alpha.
+      --w-a-damping-alpha=X      Override damping alpha for w_a only. Default: --posterior-damping-alpha.
+      --svi-likelihood-scaling   Scale online candidate obs precision by n_train / batch_size.
+      --likelihood-scale=X       Extra multiplier for online candidate obs precision. Default: 1.0.
+      --likelihood-tempering-beta=X
+                                  Extra tempering multiplier for online candidate obs precision. Default: 1.0.
+      --candidate-prior=current|initial
+                                  Prior used inside each mini-batch candidate inference. Default: current.
       --early-stop-window=K      Stop if FE improves too little over K steps. Default: 0 disables.
       --early-stop-rtol=X        Relative FE improvement threshold. Default: 1e-4.
       --early-stop-atol=X        Absolute FE improvement threshold. Default: 0.0.
@@ -38,10 +53,15 @@ function print_usage()
       --dataset=PATH             Dataset CSV. Default: test_dataset/xor_simple_dataset.csv.
       --train-fraction=X         Train fraction. Default: 0.3.
       --prior-seed=N             Prior seed. Default: 42.
+      --prior-parameterization=weighted|mean|zero
+                                  Weighted keeps old behavior. Mean treats random init as ordinary mean. Zero uses zero mean. Default: weighted.
+      --w-mean-prior-precision=X Diagonal precision for w_mean priors. Default: 1e-4.
+      --w-a-prior-precision=X    Diagonal precision for w_a priors. Default: 1e-3.
       --split-seed=N             Train/test split seed. Default: 2027.
       --output-prefix=PATH       Output path prefix. Default: test_dataset/viz/relu_projection_niter_N.
       --no-shuffle               Preserve train split order in mini-batch mode.
       --no-progress              Disable the online-mode progress bar.
+      --report-every=N           With --no-progress, print every N updates. Use 0 for only summary. Default: 1.
       --no-plots                 Skip heatmap and GIF generation.
       --no-animation             Save heatmap only.
       --help                     Show this message.
@@ -51,14 +71,28 @@ function print_usage()
       julia --project=. test_dataset/xor_relu_direct_projection_niterations.jl --projection-iterations=5 --outer-iterations=100
       julia --project=. test_dataset/xor_relu_direct_projection_niterations.jl --projection-iterations=1 --batch-size=32
       julia --project=. test_dataset/xor_relu_direct_projection_niterations.jl --projection-iterations=1 --batch-size=32 --sampling=random --updates=100
+      julia --project=. test_dataset/xor_relu_direct_projection_niterations.jl --projection-iterations=1 --batch-size=32 --obs-precision=1e4 --prior-forgetting-rho=0.9
       julia --project=. test_dataset/xor_relu_direct_projection_niterations.jl --projection-iterations=1 --early-stop-window=5 --early-stop-rtol=1e-3
       julia --project=. test_dataset/xor_relu_direct_projection_niterations.jl --projection-iterations=1 --batch-size=32 --batch-iterations=5 --sampling=random --epochs=100 --early-stop-window=75 --early-stop-min-steps=750 --early-stop-patience=10
     """)
 end
 
+function numeric_path_token(value)
+    token = @sprintf("%.4g", Float64(value))
+    token = replace(token, "." => "p")
+    token = replace(token, "+" => "")
+    token = replace(token, "-" => "m")
+    return token
+end
+
 function parse_cli(args)
     batch_size_env = get(ENV, "BATCH_SIZE", "")
     updates_env = get(ENV, "UPDATES", "")
+    w_mean_forgetting_env = get(ENV, "W_MEAN_FORGETTING_RHO", "")
+    w_a_forgetting_env = get(ENV, "W_A_FORGETTING_RHO", "")
+    posterior_damping_env = get(ENV, "POSTERIOR_DAMPING_ALPHA", "1.0")
+    w_mean_damping_env = get(ENV, "W_MEAN_DAMPING_ALPHA", "")
+    w_a_damping_env = get(ENV, "W_A_DAMPING_ALPHA", "")
     config = Dict{Symbol,Any}(
         :projection_niterations => parse(Int, get(ENV, "PROJECTION_NITERATIONS", "100")),
         :outer_iterations => parse(Int, get(ENV, "OUTER_ITERATIONS", "100")),
@@ -67,6 +101,17 @@ function parse_cli(args)
         :epochs => parse(Int, get(ENV, "EPOCHS", "1")),
         :batch_sampling => get(ENV, "BATCH_SAMPLING", "epoch"),
         :updates => isempty(updates_env) ? nothing : parse(Int, updates_env),
+        :obs_precision => parse(Float64, get(ENV, "OBS_PRECISION", "1e6")),
+        :prior_forgetting_rho => parse(Float64, get(ENV, "PRIOR_FORGETTING_RHO", "1.0")),
+        :w_mean_forgetting_rho => isempty(w_mean_forgetting_env) ? nothing : parse(Float64, w_mean_forgetting_env),
+        :w_a_forgetting_rho => isempty(w_a_forgetting_env) ? nothing : parse(Float64, w_a_forgetting_env),
+        :posterior_damping_alpha => parse(Float64, posterior_damping_env),
+        :w_mean_damping_alpha => isempty(w_mean_damping_env) ? nothing : parse(Float64, w_mean_damping_env),
+        :w_a_damping_alpha => isempty(w_a_damping_env) ? nothing : parse(Float64, w_a_damping_env),
+        :svi_likelihood_scaling => get(ENV, "SVI_LIKELIHOOD_SCALING", "false") in ("1", "true", "TRUE", "yes"),
+        :likelihood_scale => parse(Float64, get(ENV, "LIKELIHOOD_SCALE", "1.0")),
+        :likelihood_tempering_beta => parse(Float64, get(ENV, "LIKELIHOOD_TEMPERING_BETA", "1.0")),
+        :candidate_prior => get(ENV, "CANDIDATE_PRIOR", "current"),
         :early_stop_window => parse(Int, get(ENV, "EARLY_STOP_WINDOW", "0")),
         :early_stop_rtol => parse(Float64, get(ENV, "EARLY_STOP_RTOL", "1e-4")),
         :early_stop_atol => parse(Float64, get(ENV, "EARLY_STOP_ATOL", "0.0")),
@@ -76,10 +121,14 @@ function parse_cli(args)
         :dataset => get(ENV, "XOR_DATASET", "test_dataset/xor_simple_dataset.csv"),
         :train_fraction => parse(Float64, get(ENV, "TRAIN_FRACTION", "0.3")),
         :prior_seed => parse(Int, get(ENV, "PRIOR_SEED", "42")),
+        :prior_parameterization => get(ENV, "PRIOR_PARAMETERIZATION", "weighted"),
+        :w_mean_prior_precision => parse(Float64, get(ENV, "W_MEAN_PRIOR_PRECISION", "1e-4")),
+        :w_a_prior_precision => parse(Float64, get(ENV, "W_A_PRIOR_PRECISION", "1e-3")),
         :split_seed => parse(Int, get(ENV, "SPLIT_SEED", "2027")),
         :output_prefix => nothing,
         :shuffle_batches => true,
         :show_progress => true,
+        :report_every => parse(Int, get(ENV, "REPORT_EVERY", "1")),
         :save_plots => true,
         :save_animation => true,
     )
@@ -105,6 +154,28 @@ function parse_cli(args)
             config[:batch_sampling] = "random"
         elseif startswith(arg, "--updates=")
             config[:updates] = parse(Int, split(arg, "=", limit = 2)[2])
+        elseif startswith(arg, "--obs-precision=")
+            config[:obs_precision] = parse(Float64, split(arg, "=", limit = 2)[2])
+        elseif startswith(arg, "--prior-forgetting-rho=")
+            config[:prior_forgetting_rho] = parse(Float64, split(arg, "=", limit = 2)[2])
+        elseif startswith(arg, "--w-mean-forgetting-rho=")
+            config[:w_mean_forgetting_rho] = parse(Float64, split(arg, "=", limit = 2)[2])
+        elseif startswith(arg, "--w-a-forgetting-rho=")
+            config[:w_a_forgetting_rho] = parse(Float64, split(arg, "=", limit = 2)[2])
+        elseif startswith(arg, "--posterior-damping-alpha=")
+            config[:posterior_damping_alpha] = parse(Float64, split(arg, "=", limit = 2)[2])
+        elseif startswith(arg, "--w-mean-damping-alpha=")
+            config[:w_mean_damping_alpha] = parse(Float64, split(arg, "=", limit = 2)[2])
+        elseif startswith(arg, "--w-a-damping-alpha=")
+            config[:w_a_damping_alpha] = parse(Float64, split(arg, "=", limit = 2)[2])
+        elseif arg == "--svi-likelihood-scaling"
+            config[:svi_likelihood_scaling] = true
+        elseif startswith(arg, "--likelihood-scale=")
+            config[:likelihood_scale] = parse(Float64, split(arg, "=", limit = 2)[2])
+        elseif startswith(arg, "--likelihood-tempering-beta=")
+            config[:likelihood_tempering_beta] = parse(Float64, split(arg, "=", limit = 2)[2])
+        elseif startswith(arg, "--candidate-prior=")
+            config[:candidate_prior] = split(arg, "=", limit = 2)[2]
         elseif startswith(arg, "--early-stop-window=")
             config[:early_stop_window] = parse(Int, split(arg, "=", limit = 2)[2])
         elseif startswith(arg, "--early-stop-rtol=")
@@ -125,6 +196,12 @@ function parse_cli(args)
             config[:train_fraction] = parse(Float64, split(arg, "=", limit = 2)[2])
         elseif startswith(arg, "--prior-seed=")
             config[:prior_seed] = parse(Int, split(arg, "=", limit = 2)[2])
+        elseif startswith(arg, "--prior-parameterization=")
+            config[:prior_parameterization] = split(arg, "=", limit = 2)[2]
+        elseif startswith(arg, "--w-mean-prior-precision=")
+            config[:w_mean_prior_precision] = parse(Float64, split(arg, "=", limit = 2)[2])
+        elseif startswith(arg, "--w-a-prior-precision=")
+            config[:w_a_prior_precision] = parse(Float64, split(arg, "=", limit = 2)[2])
         elseif startswith(arg, "--split-seed=")
             config[:split_seed] = parse(Int, split(arg, "=", limit = 2)[2])
         elseif startswith(arg, "--output-prefix=")
@@ -133,6 +210,8 @@ function parse_cli(args)
             config[:shuffle_batches] = false
         elseif arg == "--no-progress"
             config[:show_progress] = false
+        elseif startswith(arg, "--report-every=")
+            config[:report_every] = parse(Int, split(arg, "=", limit = 2)[2])
         elseif arg == "--no-plots"
             config[:save_plots] = false
             config[:save_animation] = false
@@ -152,22 +231,99 @@ function parse_cli(args)
         error("Unexpected positional arguments: $(join(positional[2:end], ", "))")
     end
 
+    if !(isfinite(config[:obs_precision]) && config[:obs_precision] > 0)
+        error("--obs-precision must be finite and positive")
+    end
+    if !(isfinite(config[:prior_forgetting_rho]) && 0 < config[:prior_forgetting_rho] <= 1)
+        error("--prior-forgetting-rho must be finite and in (0, 1]")
+    end
+    if isnothing(config[:w_mean_forgetting_rho])
+        config[:w_mean_forgetting_rho] = config[:prior_forgetting_rho]
+    end
+    if isnothing(config[:w_a_forgetting_rho])
+        config[:w_a_forgetting_rho] = config[:prior_forgetting_rho]
+    end
+    if !(isfinite(config[:w_mean_forgetting_rho]) && 0 < config[:w_mean_forgetting_rho] <= 1)
+        error("--w-mean-forgetting-rho must be finite and in (0, 1]")
+    end
+    if !(isfinite(config[:w_a_forgetting_rho]) && 0 < config[:w_a_forgetting_rho] <= 1)
+        error("--w-a-forgetting-rho must be finite and in (0, 1]")
+    end
+    if isnothing(config[:w_mean_damping_alpha])
+        config[:w_mean_damping_alpha] = config[:posterior_damping_alpha]
+    end
+    if isnothing(config[:w_a_damping_alpha])
+        config[:w_a_damping_alpha] = config[:posterior_damping_alpha]
+    end
+    if !(isfinite(config[:posterior_damping_alpha]) && 0 <= config[:posterior_damping_alpha] <= 1)
+        error("--posterior-damping-alpha must be finite and in [0, 1]")
+    end
+    if !(isfinite(config[:w_mean_damping_alpha]) && 0 <= config[:w_mean_damping_alpha] <= 1)
+        error("--w-mean-damping-alpha must be finite and in [0, 1]")
+    end
+    if !(isfinite(config[:w_a_damping_alpha]) && 0 <= config[:w_a_damping_alpha] <= 1)
+        error("--w-a-damping-alpha must be finite and in [0, 1]")
+    end
+    if !(isfinite(config[:likelihood_scale]) && config[:likelihood_scale] > 0)
+        error("--likelihood-scale must be finite and positive")
+    end
+    if !(isfinite(config[:likelihood_tempering_beta]) && config[:likelihood_tempering_beta] > 0)
+        error("--likelihood-tempering-beta must be finite and positive")
+    end
+    if !(config[:candidate_prior] in ("current", "initial"))
+        error("--candidate-prior must be current or initial")
+    end
+    if config[:report_every] < 0
+        error("--report-every must be non-negative")
+    end
+    if !(config[:prior_parameterization] in ("weighted", "mean", "zero"))
+        error("--prior-parameterization must be weighted, mean, or zero")
+    end
+    if !(isfinite(config[:w_mean_prior_precision]) && config[:w_mean_prior_precision] > 0)
+        error("--w-mean-prior-precision must be finite and positive")
+    end
+    if !(isfinite(config[:w_a_prior_precision]) && config[:w_a_prior_precision] > 0)
+        error("--w-a-prior-precision must be finite and positive")
+    end
+
     if isnothing(config[:output_prefix])
         niter = config[:projection_niterations]
+        prior_token = config[:prior_parameterization]
         if isnothing(config[:batch_size])
-            config[:output_prefix] = "test_dataset/viz/relu_projection_niter_$(niter)"
+            obs_token = numeric_path_token(config[:obs_precision])
+            config[:output_prefix] = "test_dataset/viz/relu_projection_niter_$(niter)_obs_$(obs_token)_prior_$(prior_token)"
         else
             batch_size = config[:batch_size]
             batch_iterations = config[:batch_iterations]
             sampling = config[:batch_sampling]
-            config[:output_prefix] = "test_dataset/viz/relu_projection_niter_$(niter)_batch_$(batch_size)_biter_$(batch_iterations)_$(sampling)"
+            obs_token = numeric_path_token(config[:obs_precision])
+            rho_token = numeric_path_token(config[:prior_forgetting_rho])
+            extra_tokens = String[]
+            if config[:w_mean_damping_alpha] != 1.0 || config[:w_a_damping_alpha] != 1.0
+                push!(extra_tokens, "amean_$(numeric_path_token(config[:w_mean_damping_alpha]))")
+                push!(extra_tokens, "agate_$(numeric_path_token(config[:w_a_damping_alpha]))")
+            end
+            if config[:svi_likelihood_scaling]
+                push!(extra_tokens, "sviscale")
+            end
+            if config[:likelihood_scale] != 1.0
+                push!(extra_tokens, "lscale_$(numeric_path_token(config[:likelihood_scale]))")
+            end
+            if config[:likelihood_tempering_beta] != 1.0
+                push!(extra_tokens, "beta_$(numeric_path_token(config[:likelihood_tempering_beta]))")
+            end
+            if config[:candidate_prior] != "current"
+                push!(extra_tokens, "candidate_$(config[:candidate_prior])")
+            end
+            extra = isempty(extra_tokens) ? "" : "_" * join(extra_tokens, "_")
+            config[:output_prefix] = "test_dataset/viz/relu_projection_niter_$(niter)_batch_$(batch_size)_biter_$(batch_iterations)_$(sampling)_obs_$(obs_token)_rho_$(rho_token)_prior_$(prior_token)$(extra)"
         end
     end
 
     return config
 end
 
-@model function xor_relu_direct_projection_niterations(n_neurons, features, y, priors)
+@model function xor_relu_direct_projection_niterations(n_neurons, features, y, priors, obs_precision)
     local w_mean, w_a, z_mean, za, gamma, tau, out
 
     tau ~ priors[:tau]
@@ -184,7 +340,7 @@ end
             gamma[k, j] ~ ReLU(za[k, j])
             out[j] ~ NormalMeanPrecision(z_mean[k, j], gamma[k, j])
         end
-        y[j] ~ NormalMeanPrecision(out[j], 1e6)
+        y[j] ~ NormalMeanPrecision(out[j], obs_precision)
     end
 end
 
@@ -215,15 +371,36 @@ end
     q(tau) = priors[:tau]
 end
 
-function make_priors(; n_neurons = 4, n_features::Int = 3, seed::Int = 42)
+function make_weight_prior(rng, n_features, precision, parameterization)
+    Λ = Diagonal(fill(precision, n_features))
+    if parameterization == "weighted"
+        return MvNormalWeightedMeanPrecision(randn(rng, n_features), Λ)
+    elseif parameterization == "mean"
+        μ = randn(rng, n_features)
+        return MvNormalWeightedMeanPrecision(Λ * μ, Λ)
+    elseif parameterization == "zero"
+        return MvNormalWeightedMeanPrecision(zeros(n_features), Λ)
+    end
+
+    error("Unknown prior parameterization: $parameterization")
+end
+
+function make_priors(;
+    n_neurons = 4,
+    n_features::Int = 3,
+    seed::Int = 42,
+    parameterization = "weighted",
+    w_mean_prior_precision = 1e-4,
+    w_a_prior_precision = 1e-3,
+)
     rng = StableRNG(seed)
 
     w_mean = [
-        MvNormalWeightedMeanPrecision(randn(rng, n_features), Diagonal(fill(1e-4, n_features)))
+        make_weight_prior(rng, n_features, w_mean_prior_precision, parameterization)
         for _ in 1:n_neurons
     ]
     w_a = [
-        MvNormalWeightedMeanPrecision(randn(rng, n_features), Diagonal(fill(1e-3, n_features)))
+        make_weight_prior(rng, n_features, w_a_prior_precision, parameterization)
         for _ in 1:n_neurons
     ]
 
@@ -271,6 +448,83 @@ function finite_mse(y_pred, y_true)
     return mean((y_pred .- y_true) .^ 2), 0
 end
 
+function precision_diagonal_values(dist)
+    Λ = invcov(dist)
+    if Λ isa Diagonal
+        return Float64.(Λ.diag)
+    end
+    return Float64.(diag(Matrix(Λ)))
+end
+
+function posterior_variance_values(dist)
+    return Float64.(var(dist))
+end
+
+function weight_uncertainty_metrics(w_mean_dists, w_a_dists)
+    w_mean_vars = Float64[]
+    w_a_vars = Float64[]
+    w_mean_precs = Float64[]
+    w_a_precs = Float64[]
+
+    for dist in w_mean_dists
+        append!(w_mean_vars, posterior_variance_values(dist))
+        append!(w_mean_precs, precision_diagonal_values(dist))
+    end
+    for dist in w_a_dists
+        append!(w_a_vars, posterior_variance_values(dist))
+        append!(w_a_precs, precision_diagonal_values(dist))
+    end
+
+    return (
+        min_var_w_mean = minimum(w_mean_vars),
+        median_var_w_mean = median(w_mean_vars),
+        max_var_w_mean = maximum(w_mean_vars),
+        min_var_w_a = minimum(w_a_vars),
+        median_var_w_a = median(w_a_vars),
+        max_var_w_a = maximum(w_a_vars),
+        max_precision_w_mean = maximum(w_mean_precs),
+        max_precision_w_a = maximum(w_a_precs),
+    )
+end
+
+function effective_gate_count(gate_values)
+    total = sum(gate_values)
+    if total <= eps(Float64)
+        return 0.0
+    end
+    squared_sum = sum(abs2, gate_values)
+    return squared_sum <= eps(Float64) ? 0.0 : total^2 / squared_sum
+end
+
+function weight_geometry_metrics(w_means, w_as, features)
+    w_mean_slope_norms = [norm(w[2:end]) for w in w_means]
+    w_a_slope_norms = [norm(w[2:end]) for w in w_as]
+    w_a_abs_biases = [abs(w[1]) for w in w_as]
+    gate_values = Float64[]
+    effective_counts = Float64[]
+
+    for f in features
+        gates = [max(0.0, dot(w_a, f)) for w_a in w_as]
+        append!(gate_values, gates)
+        push!(effective_counts, effective_gate_count(gates))
+    end
+
+    active_fraction = isempty(gate_values) ? NaN : count(>(0.0), gate_values) / length(gate_values)
+    mean_effective_count = isempty(effective_counts) ? NaN : mean(effective_counts)
+    mean_w_a_slope = mean(w_a_slope_norms)
+
+    return (
+        mean_w_mean_slope_norm = mean(w_mean_slope_norms),
+        max_w_mean_slope_norm = maximum(w_mean_slope_norms),
+        mean_w_a_slope_norm = mean_w_a_slope,
+        max_w_a_slope_norm = maximum(w_a_slope_norms),
+        mean_abs_w_a_bias = mean(w_a_abs_biases),
+        w_a_bias_slope_ratio = mean(w_a_abs_biases) / max(mean_w_a_slope, eps(Float64)),
+        gate_active_fraction = active_fraction,
+        mean_effective_gate_count = mean_effective_count,
+    )
+end
+
 function per_iteration_metrics(result, features_test, y_test, n_neurons)
     n_iters = length(result.posteriors[:w_mean])
     free_energy = result.free_energy
@@ -282,25 +536,45 @@ function per_iteration_metrics(result, features_test, y_test, n_neurons)
         invalid_predictions = Int[],
         mean_gate_mass = Float64[],
         min_gate_mass = Float64[],
+        min_var_w_mean = Float64[],
+        median_var_w_mean = Float64[],
+        max_var_w_mean = Float64[],
+        min_var_w_a = Float64[],
+        median_var_w_a = Float64[],
+        max_var_w_a = Float64[],
+        max_precision_w_mean = Float64[],
+        max_precision_w_a = Float64[],
+        mean_w_mean_slope_norm = Float64[],
+        max_w_mean_slope_norm = Float64[],
+        mean_w_a_slope_norm = Float64[],
+        max_w_a_slope_norm = Float64[],
+        mean_abs_w_a_bias = Float64[],
+        w_a_bias_slope_ratio = Float64[],
+        gate_active_fraction = Float64[],
+        mean_effective_gate_count = Float64[],
     )
 
     for iter in 1:n_iters
-        w_means = [mean(result.posteriors[:w_mean][iter][k]) for k in 1:n_neurons]
-        w_as = [mean(result.posteriors[:w_a][iter][k]) for k in 1:n_neurons]
+        w_mean_dists = result.posteriors[:w_mean][iter]
+        w_a_dists = result.posteriors[:w_a][iter]
+        w_means = [mean(w_mean_dists[k]) for k in 1:n_neurons]
+        w_as = [mean(w_a_dists[k]) for k in 1:n_neurons]
 
         y_pred = predict_features(features_test, w_means, w_as)
         mse, invalid = finite_mse(y_pred, y_test)
         masses = gate_masses(features_test, w_as)
         fe = iter <= length(free_energy) ? Float64(free_energy[iter]) : NaN
+        uncertainty = weight_uncertainty_metrics(w_mean_dists, w_a_dists)
+        geometry = weight_geometry_metrics(w_means, w_as, features_test)
 
-        push!(rows, (
+        push!(rows, merge((
             iteration = iter,
             free_energy = fe,
             test_mse = mse,
             invalid_predictions = invalid,
             mean_gate_mass = mean(masses),
             min_gate_mass = minimum(masses),
-        ))
+        ), uncertainty, geometry))
     end
 
     return rows
@@ -570,12 +844,324 @@ function save_visuals(result, config, features_test, y_test, n_neurons)
     )
 end
 
-function update_priors_from_result(result)
+function finite_mean(values)
+    finite_values = Float64[]
+    for value in values
+        x = Float64(value)
+        isfinite(x) && push!(finite_values, x)
+    end
+    return isempty(finite_values) ? NaN : mean(finite_values)
+end
+
+function save_online_free_energy_plots(metrics, config)
+    output_prefix = config[:output_prefix]
+    mkpath(dirname(output_prefix))
+
+    finite_update_indices = findall(isfinite, metrics.free_energy)
+    if isempty(finite_update_indices)
+        println("Skipped free-energy plots: no finite FE values were recorded.")
+        return nothing
+    end
+
+    fe_updates_path = "$(output_prefix)_fe_updates.png"
+    plot(
+        metrics.update[finite_update_indices],
+        metrics.free_energy[finite_update_indices],
+        xlabel = "Online update",
+        ylabel = "Free energy",
+        title = "Free energy by online update",
+        legend = false,
+        linewidth = 1.5,
+        marker = :circle,
+        markersize = 2,
+    )
+    savefig(fe_updates_path)
+    println("Free-energy update plot saved to $fe_updates_path")
+
+    epochs = sort(unique(metrics.epoch))
+    epoch_mean_fe = Float64[]
+    for epoch in epochs
+        push!(epoch_mean_fe, finite_mean(metrics.free_energy[metrics.epoch .== epoch]))
+    end
+
+    finite_epoch_indices = findall(isfinite, epoch_mean_fe)
+    if isempty(finite_epoch_indices)
+        println("Skipped epoch-average free-energy plot: no finite epoch averages were recorded.")
+        return nothing
+    end
+
+    fe_epoch_path = "$(output_prefix)_fe_epoch_mean.png"
+    plot(
+        epochs[finite_epoch_indices],
+        epoch_mean_fe[finite_epoch_indices],
+        xlabel = "Epoch",
+        ylabel = "Mean free energy",
+        title = "Mean free energy by epoch",
+        legend = false,
+        linewidth = 2,
+        marker = :circle,
+        markersize = 3,
+    )
+    savefig(fe_epoch_path)
+    println("Epoch-average free-energy plot saved to $fe_epoch_path")
+
+    return nothing
+end
+
+function save_online_diagnostic_plots(metrics, config)
+    output_prefix = config[:output_prefix]
+    mkpath(dirname(output_prefix))
+
+    if nrow(metrics) == 0
+        println("Skipped online diagnostic plots: no metrics were recorded.")
+        return nothing
+    end
+
+    mse_path = "$(output_prefix)_mse_updates.png"
+    plot(
+        metrics.update,
+        metrics.test_mse,
+        xlabel = "Online update",
+        ylabel = "Test MSE",
+        title = "Test MSE by online update",
+        legend = false,
+        linewidth = 1.5,
+        marker = :circle,
+        markersize = 2,
+    )
+    savefig(mse_path)
+    println("Test-MSE update plot saved to $mse_path")
+
+    variance_path = "$(output_prefix)_variance_updates.png"
+    plot(
+        metrics.update,
+        metrics.min_var_w_mean,
+        xlabel = "Online update",
+        ylabel = "Marginal variance",
+        label = "min var w_mean",
+        yscale = :log10,
+        linewidth = 1.5,
+    )
+    plot!(
+        metrics.update,
+        metrics.min_var_w_a,
+        label = "min var w_a",
+        linewidth = 1.5,
+    )
+    plot!(
+        metrics.update,
+        metrics.median_var_w_a,
+        label = "median var w_a",
+        linewidth = 1.2,
+        linestyle = :dash,
+    )
+    savefig(variance_path)
+    println("Posterior-variance update plot saved to $variance_path")
+
+    gate_path = "$(output_prefix)_gate_geometry_updates.png"
+    plot(
+        metrics.update,
+        metrics.mean_w_a_slope_norm,
+        xlabel = "Online update",
+        ylabel = "Gate geometry",
+        label = "mean slope norm w_a",
+        linewidth = 1.5,
+    )
+    plot!(
+        metrics.update,
+        metrics.mean_abs_w_a_bias,
+        label = "mean |bias| w_a",
+        linewidth = 1.5,
+    )
+    plot!(
+        metrics.update,
+        metrics.mean_effective_gate_count,
+        label = "mean effective gates",
+        linewidth = 1.2,
+        linestyle = :dash,
+    )
+    savefig(gate_path)
+    println("Gate-geometry update plot saved to $gate_path")
+
+    collapse_path = "$(output_prefix)_collapse_diagnostic.png"
+    p1 = plot(
+        metrics.update,
+        metrics.test_mse,
+        xlabel = "Online update",
+        ylabel = "Test MSE",
+        title = "Prediction quality",
+        legend = false,
+        linewidth = 1.5,
+    )
+    p2 = plot(
+        metrics.update,
+        metrics.min_var_w_a,
+        xlabel = "Online update",
+        ylabel = "min var w_a",
+        title = "Gate posterior uncertainty",
+        legend = false,
+        yscale = :log10,
+        linewidth = 1.5,
+    )
+    p3 = plot(
+        metrics.update,
+        metrics.mean_w_a_slope_norm,
+        xlabel = "Online update",
+        ylabel = "mean slope norm",
+        title = "Gate nonlinearity",
+        legend = false,
+        linewidth = 1.5,
+    )
+    plot(p1, p2, p3, layout = (3, 1), size = (900, 900))
+    savefig(collapse_path)
+    println("Collapse diagnostic plot saved to $collapse_path")
+
+    epochs = sort(unique(metrics.epoch))
+    epoch_min_var_w_a = Float64[]
+    epoch_median_var_w_a = Float64[]
+    epoch_mse = Float64[]
+    for epoch in epochs
+        epoch_rows = metrics[metrics.epoch .== epoch, :]
+        push!(epoch_min_var_w_a, finite_mean(epoch_rows.min_var_w_a))
+        push!(epoch_median_var_w_a, finite_mean(epoch_rows.median_var_w_a))
+        push!(epoch_mse, finite_mean(epoch_rows.test_mse))
+    end
+
+    epoch_path = "$(output_prefix)_epoch_mean_diagnostics.png"
+    p_epoch_1 = plot(
+        epochs,
+        epoch_mse,
+        xlabel = "Epoch",
+        ylabel = "Mean test MSE",
+        title = "Epoch mean test MSE",
+        legend = false,
+        linewidth = 2,
+        marker = :circle,
+        markersize = 3,
+    )
+    p_epoch_2 = plot(
+        epochs,
+        epoch_min_var_w_a,
+        xlabel = "Epoch",
+        ylabel = "Mean variance",
+        title = "Epoch mean gate variance",
+        label = "min var w_a",
+        yscale = :log10,
+        linewidth = 2,
+        marker = :circle,
+        markersize = 3,
+    )
+    plot!(
+        p_epoch_2,
+        epochs,
+        epoch_median_var_w_a,
+        label = "median var w_a",
+        linewidth = 2,
+        marker = :circle,
+        markersize = 3,
+    )
+    plot(p_epoch_1, p_epoch_2, layout = (2, 1), size = (900, 650))
+    savefig(epoch_path)
+    println("Epoch-mean diagnostic plot saved to $epoch_path")
+
+    return nothing
+end
+
+function forget_gaussian_prior(dist, rho)
+    if rho == 1.0
+        return deepcopy(dist)
+    end
+
+    xi = rho .* Vector{Float64}(weightedmean(dist))
+    Λ = invcov(dist)
+    if Λ isa Diagonal
+        return MvNormalWeightedMeanPrecision(xi, Diagonal(rho .* Vector{Float64}(Λ.diag)))
+    end
+    return MvNormalWeightedMeanPrecision(xi, rho .* Matrix{Float64}(Λ))
+end
+
+function apply_prior_forgetting(priors, w_mean_rho, w_a_rho)
+    if w_mean_rho == 1.0 && w_a_rho == 1.0
+        return deepcopy(priors)
+    end
+
+    return Dict{Symbol,Any}(
+        :w_mean => [forget_gaussian_prior(prior, w_mean_rho) for prior in priors[:w_mean]],
+        :w_a => [forget_gaussian_prior(prior, w_a_rho) for prior in priors[:w_a]],
+        :tau => deepcopy(priors[:tau]),
+    )
+end
+
+function posterior_priors_from_result(result)
     return Dict{Symbol,Any}(
         :w_mean => deepcopy(result.posteriors[:w_mean][end]),
         :w_a => deepcopy(result.posteriors[:w_a][end]),
         :tau => deepcopy(result.posteriors[:tau][end]),
     )
+end
+
+function precision_as_matrix(Λ)
+    return Λ isa Diagonal ? Matrix{Float64}(Λ) : Matrix{Float64}(Λ)
+end
+
+function damp_gaussian_prior(old_dist, post_dist, alpha)
+    if alpha == 1.0
+        return deepcopy(post_dist)
+    elseif alpha == 0.0
+        return deepcopy(old_dist)
+    end
+
+    xi_old = Vector{Float64}(weightedmean(old_dist))
+    xi_post = Vector{Float64}(weightedmean(post_dist))
+    xi = (1 - alpha) .* xi_old .+ alpha .* xi_post
+
+    Λ_old = invcov(old_dist)
+    Λ_post = invcov(post_dist)
+    if Λ_old isa Diagonal && Λ_post isa Diagonal
+        diag_old = Vector{Float64}(Λ_old.diag)
+        diag_post = Vector{Float64}(Λ_post.diag)
+        return MvNormalWeightedMeanPrecision(
+            xi,
+            Diagonal((1 - alpha) .* diag_old .+ alpha .* diag_post),
+        )
+    end
+
+    Λ = (1 - alpha) .* precision_as_matrix(Λ_old) .+ alpha .* precision_as_matrix(Λ_post)
+    return MvNormalWeightedMeanPrecision(xi, Λ)
+end
+
+function damp_posterior_priors(old_priors, posterior_priors, w_mean_alpha, w_a_alpha)
+    return Dict{Symbol,Any}(
+        :w_mean => [
+            damp_gaussian_prior(old_priors[:w_mean][k], posterior_priors[:w_mean][k], w_mean_alpha)
+            for k in eachindex(old_priors[:w_mean])
+        ],
+        :w_a => [
+            damp_gaussian_prior(old_priors[:w_a][k], posterior_priors[:w_a][k], w_a_alpha)
+            for k in eachindex(old_priors[:w_a])
+        ],
+        :tau => deepcopy(posterior_priors[:tau]),
+    )
+end
+
+function update_priors_from_result(result, w_mean_rho = 1.0, w_a_rho = w_mean_rho)
+    posterior_priors = posterior_priors_from_result(result)
+
+    return apply_prior_forgetting(posterior_priors, w_mean_rho, w_a_rho)
+end
+
+function update_priors_from_result(
+    result,
+    old_priors,
+    w_mean_rho,
+    w_a_rho,
+    w_mean_alpha,
+    w_a_alpha,
+)
+    posterior_priors = posterior_priors_from_result(result)
+    damped_priors = damp_posterior_priors(old_priors, posterior_priors, w_mean_alpha, w_a_alpha)
+
+    return apply_prior_forgetting(damped_priors, w_mean_rho, w_a_rho)
 end
 
 function weights_from_priors(priors, n_neurons)
@@ -595,12 +1181,15 @@ function append_online_metric!(
     y_test,
     w_means,
     w_as,
+    posterior_priors,
 )
     y_pred = predict_features(features_test, w_means, w_as)
     mse, invalid = finite_mse(y_pred, y_test)
     masses = gate_masses(features_test, w_as)
+    uncertainty = weight_uncertainty_metrics(posterior_priors[:w_mean], posterior_priors[:w_a])
+    geometry = weight_geometry_metrics(w_means, w_as, features_test)
 
-    push!(metrics, (
+    push!(metrics, merge((
         update = update,
         epoch = epoch,
         batch = batch,
@@ -610,7 +1199,7 @@ function append_online_metric!(
         invalid_predictions = invalid,
         mean_gate_mass = mean(masses),
         min_gate_mass = minimum(masses),
-    ))
+    ), uncertainty, geometry))
 end
 
 function online_update_plan(config, n_train)
@@ -626,14 +1215,37 @@ function online_update_plan(config, n_train)
     return n_updates, updates_per_epoch
 end
 
+function online_likelihood_scale(config, n_train, batch_size)
+    scale = config[:likelihood_scale] * config[:likelihood_tempering_beta]
+    if config[:svi_likelihood_scaling]
+        scale *= n_train / batch_size
+    end
+
+    return scale
+end
+
+function online_candidate_priors(config, current_priors, initial_priors)
+    if config[:candidate_prior] == "current"
+        return current_priors
+    elseif config[:candidate_prior] == "initial"
+        return initial_priors
+    end
+
+    error("Unknown candidate prior mode: $(config[:candidate_prior])")
+end
+
 function infer_callbacks(early_stopper)
     return isnothing(early_stopper) ? nothing : (after_iteration = early_stopper,)
 end
 
-function report_online_update!(progress, row, completed_iterations, total_updates)
+function report_online_update!(progress, row, completed_iterations, total_updates, report_every)
     if isnothing(progress)
+        if report_every == 0 || (row.update != 1 && row.update != total_updates && row.update % report_every != 0)
+            return nothing
+        end
+
         @printf(
-            "update=%03d/%03d epoch=%d batch=%d n=%d inner=%d fe=%.4f test_mse=%.6f invalid=%d\n",
+            "update=%03d/%03d epoch=%d batch=%d n=%d inner=%d fe=%.4f test_mse=%.6f invalid=%d min_var_w_a=%.3g mean_w_a_slope=%.4g\n",
             row.update,
             total_updates,
             row.epoch,
@@ -643,6 +1255,8 @@ function report_online_update!(progress, row, completed_iterations, total_update
             row.free_energy,
             row.test_mse,
             row.invalid_predictions,
+            row.min_var_w_a,
+            row.mean_w_a_slope_norm,
         )
         return nothing
     end
@@ -655,6 +1269,8 @@ function report_online_update!(progress, row, completed_iterations, total_update
         (:inner, completed_iterations),
         (:test_mse, row.test_mse),
         (:invalid, row.invalid_predictions),
+        (:min_var_w_a, row.min_var_w_a),
+        (:mean_w_a_slope, row.mean_w_a_slope_norm),
     ]
 
     for _ in 1:completed_iterations
@@ -678,6 +1294,12 @@ function run_online_minibatch_inference(
     batch_iterations = config[:batch_iterations]
     epochs = config[:epochs]
     batch_sampling = config[:batch_sampling]
+    obs_precision = config[:obs_precision]
+    w_mean_forgetting_rho = config[:w_mean_forgetting_rho]
+    w_a_forgetting_rho = config[:w_a_forgetting_rho]
+    w_mean_damping_alpha = config[:w_mean_damping_alpha]
+    w_a_damping_alpha = config[:w_a_damping_alpha]
+    report_every = config[:report_every]
     early_stopper = make_early_stopper(config)
     callbacks = infer_callbacks(early_stopper)
 
@@ -716,6 +1338,22 @@ function run_online_minibatch_inference(
         invalid_predictions = Int[],
         mean_gate_mass = Float64[],
         min_gate_mass = Float64[],
+        min_var_w_mean = Float64[],
+        median_var_w_mean = Float64[],
+        max_var_w_mean = Float64[],
+        min_var_w_a = Float64[],
+        median_var_w_a = Float64[],
+        max_var_w_a = Float64[],
+        max_precision_w_mean = Float64[],
+        max_precision_w_a = Float64[],
+        mean_w_mean_slope_norm = Float64[],
+        max_w_mean_slope_norm = Float64[],
+        mean_w_a_slope_norm = Float64[],
+        max_w_a_slope_norm = Float64[],
+        mean_abs_w_a_bias = Float64[],
+        w_a_bias_slope_ratio = Float64[],
+        gate_active_fraction = Float64[],
+        mean_effective_gate_count = Float64[],
     )
 
     current_priors = deepcopy(initial_priors)
@@ -727,6 +1365,8 @@ function run_online_minibatch_inference(
     if n_updates <= 0
         error("planned online update count must be positive")
     end
+    likelihood_scale = online_likelihood_scale(config, n_train, batch_size)
+    candidate_obs_precision = obs_precision * likelihood_scale
     total_inner_steps = n_updates * batch_iterations
     progress = config[:show_progress] ? Progress(
         total_inner_steps;
@@ -747,15 +1387,17 @@ function run_online_minibatch_inference(
 
             batch_features = features_train[batch_indices]
             batch_y = Vector(df_train.OT[batch_indices])
+            candidate_priors = online_candidate_priors(config, current_priors, initial_priors)
 
             result = infer(
                 model = xor_relu_direct_projection_niterations(
                     n_neurons = n_neurons,
-                    priors = current_priors,
+                    priors = candidate_priors,
+                    obs_precision = candidate_obs_precision,
                 ),
                 data = (y = batch_y, features = batch_features),
                 constraints = xor_relu_direct_projection_niterations_constraints(projection_niterations),
-                initialization = xor_relu_direct_projection_niterations_init(current_priors),
+                initialization = xor_relu_direct_projection_niterations_init(candidate_priors),
                 iterations = batch_iterations,
                 free_energy = true,
                 showprogress = false,
@@ -763,7 +1405,14 @@ function run_online_minibatch_inference(
                 options = (limit_stack_depth = 100,),
             )
 
-            current_priors = update_priors_from_result(result)
+            current_priors = update_priors_from_result(
+                result,
+                current_priors,
+                w_mean_forgetting_rho,
+                w_a_forgetting_rho,
+                w_mean_damping_alpha,
+                w_a_damping_alpha,
+            )
             w_means, w_as = weights_from_priors(current_priors, n_neurons)
             push!(w_mean_history, w_means)
             push!(w_a_history, w_as)
@@ -781,10 +1430,11 @@ function run_online_minibatch_inference(
                 y_test,
                 w_means,
                 w_as,
+                current_priors,
             )
 
             row = metrics[end, :]
-            report_online_update!(progress, row, completed_iterations, n_updates)
+            report_online_update!(progress, row, completed_iterations, n_updates, report_every)
             if !isnothing(early_stopper) && early_stopper.stopped
                 !isnothing(progress) && ProgressMeter.cancel(progress, "Early stopped")
                 println(early_stopper.reason)
@@ -810,15 +1460,17 @@ function run_online_minibatch_inference(
 
             batch_features = features_train[batch_indices]
             batch_y = Vector(df_train.OT[batch_indices])
+            candidate_priors = online_candidate_priors(config, current_priors, initial_priors)
 
             result = infer(
                 model = xor_relu_direct_projection_niterations(
                     n_neurons = n_neurons,
-                    priors = current_priors,
+                    priors = candidate_priors,
+                    obs_precision = candidate_obs_precision,
                 ),
                 data = (y = batch_y, features = batch_features),
                 constraints = xor_relu_direct_projection_niterations_constraints(projection_niterations),
-                initialization = xor_relu_direct_projection_niterations_init(current_priors),
+                initialization = xor_relu_direct_projection_niterations_init(candidate_priors),
                 iterations = batch_iterations,
                 free_energy = true,
                 showprogress = false,
@@ -826,7 +1478,14 @@ function run_online_minibatch_inference(
                 options = (limit_stack_depth = 100,),
             )
 
-            current_priors = update_priors_from_result(result)
+            current_priors = update_priors_from_result(
+                result,
+                current_priors,
+                w_mean_forgetting_rho,
+                w_a_forgetting_rho,
+                w_mean_damping_alpha,
+                w_a_damping_alpha,
+            )
             w_means, w_as = weights_from_priors(current_priors, n_neurons)
             push!(w_mean_history, w_means)
             push!(w_a_history, w_as)
@@ -844,10 +1503,11 @@ function run_online_minibatch_inference(
                 y_test,
                 w_means,
                 w_as,
+                current_priors,
             )
 
             row = metrics[end, :]
-            report_online_update!(progress, row, completed_iterations, n_updates)
+            report_online_update!(progress, row, completed_iterations, n_updates, report_every)
             if !isnothing(early_stopper) && early_stopper.stopped
                 !isnothing(progress) && ProgressMeter.cancel(progress, "Early stopped")
                 println(early_stopper.reason)
@@ -882,20 +1542,33 @@ function main(args)
         println("  neurons=$n_neurons, batch_size=$(config[:batch_size]), batch_iterations=$(config[:batch_iterations])")
         println("  sampling=$(config[:batch_sampling]), epochs=$(config[:epochs]), updates=$(config[:updates])")
         println("  planned_online_updates=$planned_updates, progress_steps=$(planned_updates * config[:batch_iterations])")
+        println("  obs_precision=$(config[:obs_precision]), prior_forgetting_rho=$(config[:prior_forgetting_rho])")
+        println("  w_mean_forgetting_rho=$(config[:w_mean_forgetting_rho]), w_a_forgetting_rho=$(config[:w_a_forgetting_rho])")
+        candidate_scale = online_likelihood_scale(config, nrow(df_train), config[:batch_size])
+        println("  w_mean_damping_alpha=$(config[:w_mean_damping_alpha]), w_a_damping_alpha=$(config[:w_a_damping_alpha])")
+        println("  candidate_prior=$(config[:candidate_prior]), likelihood_scale=$candidate_scale, candidate_obs_precision=$(config[:obs_precision] * candidate_scale)")
     else
         println("XOR ReLU Direct: full-batch VMP")
         println("  projection_niterations=$projection_niterations")
         println("  neurons=$n_neurons, outer_iterations=$outer_iterations")
+        println("  obs_precision=$(config[:obs_precision])")
     end
     if early_stopping_enabled(config)
         println("  early_stop_window=$(config[:early_stop_window]), early_stop_rtol=$(config[:early_stop_rtol]), early_stop_atol=$(config[:early_stop_atol])")
         println("  early_stop_min_steps=$(config[:early_stop_min_steps]), early_stop_patience=$(config[:early_stop_patience])")
     end
+    println("  prior_parameterization=$(config[:prior_parameterization]), w_mean_prior_precision=$(config[:w_mean_prior_precision]), w_a_prior_precision=$(config[:w_a_prior_precision])")
     println("  n_train=$(nrow(df_train)), n_test=$(nrow(df_test))")
     println("  dataset=$(config[:dataset])")
     println("=" ^ 78)
 
-    priors = make_priors(n_neurons = n_neurons, seed = config[:prior_seed])
+    priors = make_priors(
+        n_neurons = n_neurons,
+        seed = config[:prior_seed],
+        parameterization = config[:prior_parameterization],
+        w_mean_prior_precision = config[:w_mean_prior_precision],
+        w_a_prior_precision = config[:w_a_prior_precision],
+    )
     features_train = build_features(df_train)
     features_test = build_features(df_test)
     y_test = df_test.OT
@@ -939,6 +1612,8 @@ function main(args)
         println("Metrics saved to $metrics_path")
 
         if config[:save_plots]
+            save_online_free_energy_plots(metrics, config)
+            save_online_diagnostic_plots(metrics, config)
             save_visuals_from_history(
                 w_mean_history,
                 w_a_history,
@@ -956,6 +1631,7 @@ function main(args)
         model = xor_relu_direct_projection_niterations(
             n_neurons = n_neurons,
             priors = priors,
+            obs_precision = config[:obs_precision],
         ),
         data = (y = df_train.OT, features = features_train),
         constraints = xor_relu_direct_projection_niterations_constraints(projection_niterations),
@@ -1000,4 +1676,6 @@ function main(args)
     end
 end
 
-main(ARGS)
+if abspath(PROGRAM_FILE) == abspath(@__FILE__)
+    main(ARGS)
+end
