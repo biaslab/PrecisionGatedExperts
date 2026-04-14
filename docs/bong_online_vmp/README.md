@@ -50,5 +50,12 @@ The same script also reruns the best row at the end and writes the best heatmap.
 Heatmap:
 
 ```text
-test_dataset/viz/online_sweep_site_memory_schedule/best_sqrt_site_b24_amean0p5_agate0p05_heatmap.png
+docs/bong_online_vmp/results/site_memory_schedule/best_sqrt_site_b24_amean0p5_agate0p05_heatmap.png
+```
+
+Archived CSVs:
+
+```text
+docs/bong_online_vmp/results/site_memory_schedule/summary.csv
+docs/bong_online_vmp/results/site_memory_schedule/best_sqrt_site_b24_amean0p5_agate0p05_metrics.csv
 ```

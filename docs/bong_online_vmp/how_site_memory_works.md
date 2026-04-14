@@ -238,9 +238,30 @@ Final mean gate slope norm = 32.141263
 Generated files:
 
 ```text
-test_dataset/viz/online_sweep_site_memory_schedule/summary.csv
-test_dataset/viz/online_sweep_site_memory_schedule/best_sqrt_site_b24_amean0p5_agate0p05_metrics.csv
-test_dataset/viz/online_sweep_site_memory_schedule/best_sqrt_site_b24_amean0p5_agate0p05_heatmap.png
+docs/bong_online_vmp/results/site_memory_schedule/summary.csv
+docs/bong_online_vmp/results/site_memory_schedule/best_sqrt_site_b24_amean0p5_agate0p05_metrics.csv
+docs/bong_online_vmp/results/site_memory_schedule/best_sqrt_site_b24_amean0p5_agate0p05_heatmap.png
+```
+
+The archived `summary.csv` should contain this best row:
+
+```text
+schedule = sqrt_epoch
+batch_size = 24
+batch_iterations = 5
+alpha_mean = 0.5
+alpha_gate = 0.05
+final_mse = 0.197937
+best_mse = 0.197937
+tail20_mean_mse = 0.198223
+tail20_below_baseline_fraction = 1.0
+```
+
+This points to the conclusion:
+
+```text
+fixed-batch site memory plus sqrt-decayed site damping retains nonlinear structure;
+plain posterior-as-prior online VMP did not.
 ```
 
 ## Main Takeaway
