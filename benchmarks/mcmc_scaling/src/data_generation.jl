@@ -14,11 +14,13 @@ function generate_synthetic_data(;
     n_experts::Int = 7,
     d::Int = 65,
     rng = StableRNG(42),
+    τ_range::Tuple{<:Real, <:Real} = (100.0, 2000.0),
+    β_range::Tuple{<:Real, <:Real} = (0.001, 0.01),
 )
     # Ground truth parameters (realistic scale, NOT prior scale)
     w_true = [randn(rng, d) * 0.1 for _ in 1:n_experts]
-    τ_true = [rand(rng, Uniform(100.0, 2000.0)) for _ in 1:n_experts]
-    β_true = [rand(rng, Uniform(0.001, 0.01)) for _ in 1:n_experts]
+    τ_true = [rand(rng, Uniform(τ_range[1], τ_range[2])) for _ in 1:n_experts]
+    β_true = [rand(rng, Uniform(β_range[1], β_range[2])) for _ in 1:n_experts]
 
     # Features: [1.0; randn(64)] mimics 65-dim VAE output
     features = [vcat(1.0, randn(rng, d - 1)) for _ in 1:N]
