@@ -57,7 +57,6 @@ const MODEL_COLORS = Dict(
 const VALUE_CAP = 1e40
 const DATASET_LABEL_FONTSIZE = 16
 const DATASET_LABEL_COLOR = :black
-const DATASET_LABEL_BOLD_OFFSET = 0.01
 const RADAR_TICK_LABEL_COLOR = :gray15
 
 # Models to exclude from axis range calculation (they distort the scale)
@@ -387,9 +386,8 @@ function build_radar_chart(metric::Symbol;
         if dataset_labels[i] == "Electricity"
             x += 0.18
         end
-        label_text = text(dataset_labels[i], DATASET_LABEL_FONTSIZE, DATASET_LABEL_COLOR, ha, va, :bold)
+        label_text = text(dataset_labels[i], DATASET_LABEL_FONTSIZE, DATASET_LABEL_COLOR, ha, va)
         annotate!(p, x, y, label_text)
-        annotate!(p, x + DATASET_LABEL_BOLD_OFFSET, y, label_text)
     end
 
     # 9. Per-axis numeric tick labels (along each spoke, offset slightly)

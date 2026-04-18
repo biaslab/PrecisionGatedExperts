@@ -29,6 +29,12 @@ using Statistics
 
 const RESULTS_DIR = joinpath(@__DIR__, "..", "paper", "results_vae")
 const PREDICTION_ITERATIONS = 3
+const COMPARE_LEGEND_FONTSIZE = 16
+const COMPARE_TITLE_FONTSIZE = 20
+const COMPARE_GUIDE_FONTSIZE = 16
+const COMPARE_TICK_FONTSIZE = 14
+const SUBPLOT_TOP_BOTTOM_MARGIN = 10Plots.mm
+const COMBINED_PLOT_MARGIN = 10Plots.mm
 const RESULT_MODEL_SPECS = [
     ("Static", "static"),
     ("Noisy Diagonal", "noisy_experts_diagonal"),
@@ -401,7 +407,13 @@ function main()
     # ── Top plot: predictions comparison ─────────────────────────────────
     p1 = plot(1:length(y_plot), y_plot, label="Ground Truth", color=:black, linewidth=2,
         legend=:topright, ylabel="Value",
-        title="$(dataset) h=$(horizon)$(dim_label)")
+        title="$(dataset) h=$(horizon)$(dim_label)",
+        legendfontsize=COMPARE_LEGEND_FONTSIZE,
+        titlefontsize=COMPARE_TITLE_FONTSIZE,
+        guidefontsize=COMPARE_GUIDE_FONTSIZE,
+        tickfontsize=COMPARE_TICK_FONTSIZE,
+        top_margin=SUBPLOT_TOP_BOTTOM_MARGIN,
+        bottom_margin=SUBPLOT_TOP_BOTTOM_MARGIN)
 
     if show_val
         vline!(p1, [n_val + 0.5], color=:gray, linestyle=:dash, linewidth=2,
@@ -448,7 +460,13 @@ function main()
             n_t = size(res.influence, 2)
             p_inf = plot(title="$(name) — Gammas",
                 ylabel="Normalized influence", xlabel="Time Step",
-                legend=:topright, legendfontsize=8)
+                legend=:topright,
+                legendfontsize=COMPARE_LEGEND_FONTSIZE,
+                titlefontsize=COMPARE_TITLE_FONTSIZE,
+                guidefontsize=COMPARE_GUIDE_FONTSIZE,
+                tickfontsize=COMPARE_TICK_FONTSIZE,
+                top_margin=SUBPLOT_TOP_BOTTOM_MARGIN,
+                bottom_margin=SUBPLOT_TOP_BOTTOM_MARGIN)
             top_share = plot_influence_dynamic!(p_inf, res.influence, labels, n_f, n_t, expert_colors)
             push!(subplots, p_inf)
 
@@ -456,12 +474,23 @@ function main()
                 title="$(name) — TopShare",
                 xlabel="Time Step", ylabel="Top-1 normalized γ",
                 color=:darkblue, linewidth=2, ylims=(0.0, 1.0),
-                label="max γᵢ / Σγ", legend=:topright)
+                label="max γᵢ / Σγ", legend=:topright,
+                legendfontsize=COMPARE_LEGEND_FONTSIZE,
+                titlefontsize=COMPARE_TITLE_FONTSIZE,
+                guidefontsize=COMPARE_GUIDE_FONTSIZE,
+                tickfontsize=COMPARE_TICK_FONTSIZE,
+                top_margin=SUBPLOT_TOP_BOTTOM_MARGIN,
+                bottom_margin=SUBPLOT_TOP_BOTTOM_MARGIN)
             push!(subplots, p_ts)
         else
             p_inf = plot(title="Static — Gammas",
                 ylabel="Normalized γ", xlabel="Expert",
-                legend=false, xrotation=45, bottom_margin=8Plots.mm)
+                legend=false, xrotation=45,
+                titlefontsize=COMPARE_TITLE_FONTSIZE,
+                guidefontsize=COMPARE_GUIDE_FONTSIZE,
+                tickfontsize=COMPARE_TICK_FONTSIZE,
+                top_margin=SUBPLOT_TOP_BOTTOM_MARGIN,
+                bottom_margin=SUBPLOT_TOP_BOTTOM_MARGIN)
             plot_influence_static!(p_inf, res.influence, labels, n_f, expert_colors)
             push!(subplots, p_inf)
         end
@@ -477,7 +506,13 @@ function main()
 
         p_gating = plot(title="MoE — Gating Weights",
             ylabel="Softmax prob.", xlabel="Time Step",
-            legend=:topright, legendfontsize=8)
+            legend=:topright,
+            legendfontsize=COMPARE_LEGEND_FONTSIZE,
+            titlefontsize=COMPARE_TITLE_FONTSIZE,
+            guidefontsize=COMPARE_GUIDE_FONTSIZE,
+            tickfontsize=COMPARE_TICK_FONTSIZE,
+            top_margin=SUBPLOT_TOP_BOTTOM_MARGIN,
+            bottom_margin=SUBPLOT_TOP_BOTTOM_MARGIN)
         for i in 1:n_f
             plot!(p_gating, 1:n_t, gw[i, :],
                 label=labels[i], color=expert_colors[i], linewidth=1.5)
@@ -488,21 +523,21 @@ function main()
     # ── Layout ───────────────────────────────────────────────────────────
     n_sub = length(subplots)
     if n_sub == 1
-        p = plot(subplots[1], size=(2400, 800), dpi=600, margin=6Plots.mm)
+        p = plot(subplots[1], size=(2400, 800), dpi=600, margin=COMBINED_PLOT_MARGIN)
     elseif n_sub == 2
         l = @layout [a; b]
-        p = plot(subplots..., layout=l, size=(2400, 1400), margin=6Plots.mm, dpi=600)
+        p = plot(subplots..., layout=l, size=(2400, 1400), margin=COMBINED_PLOT_MARGIN, dpi=600)
     elseif n_sub == 3
         l = @layout [a; b; c]
-        p = plot(subplots..., layout=l, size=(2400, 1800), margin=6Plots.mm, dpi=600)
+        p = plot(subplots..., layout=l, size=(2400, 1800), margin=COMBINED_PLOT_MARGIN, dpi=600)
     elseif n_sub == 4
         l = @layout [a; b; c d]
-        p = plot(subplots..., layout=l, size=(2400, 1800), margin=6Plots.mm, dpi=600)
+        p = plot(subplots..., layout=l, size=(2400, 1800), margin=COMBINED_PLOT_MARGIN, dpi=600)
     elseif n_sub == 5
         l = @layout [a; b; c d; e]
-        p = plot(subplots..., layout=l, size=(2400, 2200), margin=6Plots.mm, dpi=600)
+        p = plot(subplots..., layout=l, size=(2400, 2200), margin=COMBINED_PLOT_MARGIN, dpi=600)
     else
-        p = plot(subplots..., layout=(n_sub, 1), size=(2400, 600 * n_sub), margin=6Plots.mm, dpi=600)
+        p = plot(subplots..., layout=(n_sub, 1), size=(2400, 600 * n_sub), margin=COMBINED_PLOT_MARGIN, dpi=600)
     end
 
     outstem = "compare_$(dataset)_h$(horizon)_dim$(dim)"
