@@ -83,6 +83,8 @@ end
 function compute_ensemble_metrics(::Univariate, ensemble_preds, y_test)
     ensemble_mean = map(mean, ensemble_preds)
     ensemble_std = map(std, ensemble_preds)
+    mse_terms = (ensemble_mean .- y_test) .^ 2
+    nll_terms = map((y_dist) -> logpdf(y_dist[2], y_dist[1]), zip(y_test, ensemble_preds))
     ci95_lower = ensemble_mean .- ZSCORE_95 .* ensemble_std
     ci95_upper = ensemble_mean .+ ZSCORE_95 .* ensemble_std
     ci95_target_overlap = mean((y_test .>= ci95_lower) .& (y_test .<= ci95_upper))
@@ -96,12 +98,12 @@ function compute_ensemble_metrics(::Univariate, ensemble_preds, y_test)
         mse = mse(ensemble_mean, y_test),
         mae = mae(ensemble_mean, y_test),
         rmse = rmse(ensemble_mean, y_test),
+        mse_std = std(mse_terms),
         r2 = r2(ensemble_mean, y_test),
         mape = mape(ensemble_mean, y_test),
         smape = smape(ensemble_mean, y_test),
-        nll = mean(
-            map((y_dist) -> logpdf(y_dist[2], y_dist[1]), zip(y_test, ensemble_preds)),
-        ),
+        nll = mean(nll_terms),
+        nll_std = std(nll_terms),
         ci95_target_overlap = ci95_target_overlap,
         ci95_avg_width = ci95_avg_width,
         ci95_interval_score = ci95_interval_score,
@@ -112,6 +114,13 @@ end
 function compute_ensemble_metrics(::Multivariate, ensemble_preds, y_test)
     ensemble_mean = reduce(hcat, map(mean, ensemble_preds))
     ensemble_std = reduce(hcat, map(_marginal_std, ensemble_preds))
+    mse_terms = vec((ensemble_mean .- y_test) .^ 2)
+    nll_terms = collect(
+        map(
+            (y_dist) -> logpdf(y_dist[2], y_dist[1]),
+            zip(eachcol(y_test), ensemble_preds),
+        ),
+    )
     ci95_lower = ensemble_mean .- ZSCORE_95 .* ensemble_std
     ci95_upper = ensemble_mean .+ ZSCORE_95 .* ensemble_std
     ci95_target_overlap = mean((y_test .>= ci95_lower) .& (y_test .<= ci95_upper))
@@ -125,15 +134,12 @@ function compute_ensemble_metrics(::Multivariate, ensemble_preds, y_test)
         mse = mse_mv(ensemble_mean, y_test),
         mae = mae_mv(ensemble_mean, y_test),
         rmse = rmse_mv(ensemble_mean, y_test),
+        mse_std = std(mse_terms),
         r2 = r2_mv(ensemble_mean, y_test),
         mape = mape_mv(ensemble_mean, y_test),
         smape = smape_mv(ensemble_mean, y_test),
-        nll = mean(
-            map(
-                (y_dist) -> logpdf(y_dist[2], y_dist[1]),
-                zip(eachcol(y_test), ensemble_preds),
-            ),
-        ),
+        nll = mean(nll_terms),
+        nll_std = std(nll_terms),
         ci95_target_overlap = ci95_target_overlap,
         ci95_avg_width = ci95_avg_width,
         ci95_interval_score = ci95_interval_score,
