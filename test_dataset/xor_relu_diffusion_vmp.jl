@@ -44,6 +44,11 @@ const SPLIT_SEED = parse(Int, get(ENV, "SPLIT_SEED", "2027"))
 const NOISE_SEED = parse(Int, get(ENV, "NOISE_SEED", "2028"))
 const FREE_ENERGY = lowercase(get(ENV, "FREE_ENERGY", "true")) in ("1", "true", "yes")
 
+const MAKE_GIF = lowercase(get(ENV, "MAKE_GIF", "false")) in ("1", "true", "yes")
+const GIF_STRIDE = parse(Int, get(ENV, "GIF_STRIDE", "1"))
+const GIF_PRED_ITER = parse(Int, get(ENV, "GIF_PRED_ITER", "3"))
+const GIF_FPS = parse(Int, get(ENV, "GIF_FPS", "2"))
+
 # ---------------------------------------------------------------------------
 # Diffusion model: strategy (B) — forward-diffuse targets y[l, j] = y_true[j] + N(0, sigma2[l]).
 # Weights w_mean[k], w_a[k] are shared across levels (weight tying).
@@ -389,6 +394,53 @@ function prediction_grid(features_test; grid_size = GRID_SIZE)
     return grid_x, grid_y, features_grid, actual_grid
 end
 
+function build_iteration_gif(training_result, grid_x, grid_y, features_grid, df_test,
+                              chain_var, prior_var; stride = GIF_STRIDE,
+                              pred_iter = GIF_PRED_ITER, fps = GIF_FPS)
+    n_it = length(training_result.posteriors[:w_mean])
+    iter_indices = collect(1:stride:n_it)
+    if iter_indices[end] != n_it
+        push!(iter_indices, n_it)
+    end
+    println("\nBuilding heatmap GIF over $(length(iter_indices)) VMP iterations (stride=$stride, pred_iter=$pred_iter)")
+
+    anim = Animation()
+    for (f, it) in enumerate(iter_indices)
+        println("  frame $f/$(length(iter_indices)): iter=$it")
+        pr = Dict{Symbol,Any}(
+            :w_mean  => deepcopy(training_result.posteriors[:w_mean][it]),
+            :w_a     => deepcopy(training_result.posteriors[:w_a][it]),
+            :τ       => training_result.posteriors[:τ][it],
+            :obs_tau => training_result.posteriors[:obs_tau][it],
+        )
+        pred = predict_with_rxinfer(pr, features_grid, chain_var, prior_var;
+                                     iterations = pred_iter, showprogress = false)
+        mg = clean_out_marginals(pred)
+        m_grid = reshape(predictive_mean(mg), length(grid_y), length(grid_x))
+        sd_grid = sqrt.(max.(reshape(predictive_variance(mg), length(grid_y), length(grid_x)), 0.0))
+
+        p1 = contourf(grid_x, grid_y, m_grid;
+            c = :RdBu, levels = 20, clims = (-1, 1),
+            xlabel = "x1", ylabel = "x2",
+            title = "predictive mean (iter $it)", linewidth = 0)
+        scatter!(p1, df_test.x1, df_test.x2; marker_z = df_test.OT, ms = 1.2,
+            label = "", colorbar = false)
+
+        p2 = contourf(grid_x, grid_y, sd_grid;
+            c = :viridis, levels = 20,
+            xlabel = "x1", ylabel = "x2",
+            title = "predictive std (iter $it)", linewidth = 0)
+
+        plot(p1, p2; layout = (1, 2), size = (900, 400),
+            plot_title = "diffusion VMP (L=$L_DEPTH, $SCHEDULE)  —  VMP iter $it/$n_it")
+        frame(anim)
+    end
+
+    outpath = "$(OUTPUT_PREFIX)_iter_heatmap.gif"
+    gif(anim, outpath; fps = fps)
+    return outpath
+end
+
 function save_prediction_heatmaps(grid_x, grid_y, grid_marginals, actual_grid, df_test)
     y_mean_grid = reshape(predictive_mean(grid_marginals), length(grid_y), length(grid_x))
     y_var_grid = reshape(predictive_variance(grid_marginals), length(grid_y), length(grid_x))
@@ -496,6 +548,12 @@ println("Test predictions saved to $prediction_path")
 println("Free-energy plot saved to $free_energy_plot")
 println("Stability plot saved to $stability_plot")
 println("Posterior predictive heatmaps saved to $heatmap_path")
+
+if MAKE_GIF
+    gif_path = build_iteration_gif(training_result, grid_x, grid_y, features_grid, df_test,
+                                    chain_var_val, prior_var)
+    println("Per-iteration heatmap GIF saved to $gif_path")
+end
 
 println("\nPer-iteration diagnostics:")
 for row in eachrow(diagnostics)
