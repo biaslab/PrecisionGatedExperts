@@ -36,6 +36,8 @@ const W_A_PRECISION = parse(Float64, get(ENV, "W_A_PRECISION", "1.0"))
 const WEIGHT_PRIOR_MEAN_SCALE = parse(Float64, get(ENV, "WEIGHT_PRIOR_MEAN_SCALE", "1.0"))
 const TAU_SHAPE = parse(Float64, get(ENV, "TAU_SHAPE", "1e8"))
 const TAU_RATE = parse(Float64, get(ENV, "TAU_RATE", "100.0"))
+const OBS_TAU_SHAPE = parse(Float64, get(ENV, "OBS_TAU_SHAPE", "1e8"))
+const OBS_TAU_RATE = parse(Float64, get(ENV, "OBS_TAU_RATE", "1e6"))
 
 const PRIOR_SEED = parse(Int, get(ENV, "PRIOR_SEED", "2027"))
 const SPLIT_SEED = parse(Int, get(ENV, "SPLIT_SEED", "2027"))
@@ -51,10 +53,11 @@ const FREE_ENERGY = lowercase(get(ENV, "FREE_ENERGY", "true")) in ("1", "true", 
 # ---------------------------------------------------------------------------
 
 @model function xor_relu_diffusion_vmp(n_neurons, n_levels, features, y, priors,
-                                        chain_var, y_prec, prior_var)
-    local w_mean, w_a, z_mean, za, γ, τ, out
+                                        chain_var, prior_var)
+    local w_mean, w_a, z_mean, za, γ, τ, obs_tau, out
 
-    τ ~ priors[:τ]
+    τ       ~ priors[:τ]
+    obs_tau ~ priors[:obs_tau]
 
     for k = 1:n_neurons
         w_mean[k] ~ priors[:w_mean][k]
@@ -76,16 +79,17 @@ const FREE_ENERGY = lowercase(get(ENV, "FREE_ENERGY", "true")) in ("1", "true", 
                 out[l, j]      ~ NormalMeanPrecision(z_mean[k, l, j], γ[k, l, j])
             end
 
-            y[l, j] ~ NormalMeanPrecision(out[l, j], y_prec[l])
+            y[l, j] ~ NormalMeanPrecision(out[l, j], obs_tau)
         end
     end
 end
 
 @model function xor_relu_diffusion_vmp_prediction(n_neurons, n_levels, n_obs, features, priors,
-                                                    chain_var, y_prec, prior_var)
-    local w_mean, w_a, z_mean, za, γ, τ, out, y
+                                                    chain_var, prior_var)
+    local w_mean, w_a, z_mean, za, γ, τ, obs_tau, out, y
 
-    τ ~ priors[:τ]
+    τ       ~ priors[:τ]
+    obs_tau ~ priors[:obs_tau]
 
     for k = 1:n_neurons
         w_mean[k] ~ priors[:w_mean][k]
@@ -107,15 +111,15 @@ end
                 out[l, j]      ~ NormalMeanPrecision(z_mean[k, l, j], γ[k, l, j])
             end
 
-            y[l, j] ~ NormalMeanPrecision(out[l, j], y_prec[l]) where {meta = StrangeMissingMeta()}
+            y[l, j] ~ NormalMeanPrecision(out[l, j], obs_tau) where {meta = StrangeMissingMeta()}
             y[l, j] ~ Uninformative()
         end
     end
 end
 
 @constraints function xor_relu_diffusion_vmp_constraints()
-    q(w_mean, w_a, z_mean, za, γ, τ, out) =
-        q(w_mean, z_mean, out)q(w_a)q(za, γ)q(τ)
+    q(w_mean, w_a, z_mean, za, γ, τ, obs_tau, out) =
+        q(w_mean, z_mean, out)q(w_a)q(za, γ)q(τ)q(obs_tau)
 
     q(z_mean)::ProjectedTo(NormalMeanVariance, parameters = ProjectionParameters(strategy = ClosedFormStrategy()))
     q(out)::ProjectedTo(NormalMeanVariance, parameters = ProjectionParameters(strategy = ClosedFormStrategy()))
@@ -124,8 +128,8 @@ end
 end
 
 @constraints function xor_relu_diffusion_vmp_prediction_constraints(priors)
-    q(w_mean, w_a, z_mean, za, γ, τ, out, y) =
-        q(w_mean)q(w_a)q(τ)q(z_mean)q(za, γ)q(out, y)
+    q(w_mean, w_a, z_mean, za, γ, τ, obs_tau, out, y) =
+        q(w_mean)q(w_a)q(τ)q(obs_tau)q(z_mean)q(za, γ)q(out, y)
 
     q(z_mean)::ProjectedTo(NormalMeanVariance, parameters = ProjectionParameters(strategy = ClosedFormStrategy()))
     q(out)::ProjectedTo(NormalMeanVariance, parameters = ProjectionParameters(strategy = ClosedFormStrategy()))
@@ -133,6 +137,7 @@ end
     q(γ)::ProjectedTo(Gamma, parameters = ProjectionParameters(strategy = ClosedFormStrategy(EnzymeBackend())))
 
     q(τ)::RxInfer.FixedMarginalFormConstraint(priors[:τ])
+    q(obs_tau)::RxInfer.FixedMarginalFormConstraint(priors[:obs_tau])
 
     for (k, prior) in enumerate(priors[:w_mean])
         q(w_mean[k])::RxInfer.FixedMarginalFormConstraint(prior)
@@ -143,27 +148,29 @@ end
 end
 
 @initialization function xor_relu_diffusion_vmp_init(priors)
-    q(w_mean) = deepcopy(priors[:w_mean])
-    q(w_a)    = deepcopy(priors[:w_a])
-    q(τ)      = priors[:τ]
-    q(z_mean) = NormalMeanVariance(0.0, 1.0)
-    q(za)     = GammaShapeScale(2.0, 1.0)
-    q(γ)      = GammaShapeScale(2.0, 1.0)
-    q(out)    = NormalMeanVariance(0.5, 1.0)
+    q(w_mean)  = deepcopy(priors[:w_mean])
+    q(w_a)     = deepcopy(priors[:w_a])
+    q(τ)       = priors[:τ]
+    q(obs_tau) = priors[:obs_tau]
+    q(z_mean)  = NormalMeanVariance(0.0, 1.0)
+    q(za)      = GammaShapeScale(2.0, 1.0)
+    q(γ)       = GammaShapeScale(2.0, 1.0)
+    q(out)     = NormalMeanVariance(0.5, 1.0)
 
     μ(out)    = NormalMeanVariance(0.5, 10.0)
     μ(z_mean) = NormalMeanVariance(0.0, 10.0)
 end
 
 @initialization function xor_relu_diffusion_vmp_prediction_init(priors)
-    q(w_mean) = deepcopy(priors[:w_mean])
-    q(w_a)    = deepcopy(priors[:w_a])
-    q(τ)      = priors[:τ]
-    q(z_mean) = NormalMeanVariance(0.0, 1.0)
-    q(za)     = GammaShapeScale(2.0, 1.0)
-    q(γ)      = GammaShapeScale(2.0, 1.0)
-    q(out)    = NormalMeanVariance(0.5, 1.0)
-    q(y)      = NormalMeanVariance(0.5, 1.0)
+    q(w_mean)  = deepcopy(priors[:w_mean])
+    q(w_a)     = deepcopy(priors[:w_a])
+    q(τ)       = priors[:τ]
+    q(obs_tau) = priors[:obs_tau]
+    q(z_mean)  = NormalMeanVariance(0.0, 1.0)
+    q(za)      = GammaShapeScale(2.0, 1.0)
+    q(γ)       = GammaShapeScale(2.0, 1.0)
+    q(out)     = NormalMeanVariance(0.5, 1.0)
+    q(y)       = NormalMeanVariance(0.5, 1.0)
 
     μ(out)    = NormalMeanVariance(0.5, 10.0)
     μ(z_mean) = NormalMeanVariance(0.0, 10.0)
@@ -213,9 +220,10 @@ end
 function make_priors(; n_neurons = N_NEURONS, n_features = 3, seed = PRIOR_SEED)
     rng = StableRNG(seed)
     return Dict{Symbol,Any}(
-        :w_mean => [make_weight_prior(rng, n_features, W_MEAN_PRECISION) for _ in 1:n_neurons],
-        :w_a    => [make_weight_prior(rng, n_features, W_A_PRECISION) for _ in 1:n_neurons],
-        :τ      => GammaShapeRate(TAU_SHAPE, TAU_RATE),
+        :w_mean  => [make_weight_prior(rng, n_features, W_MEAN_PRECISION) for _ in 1:n_neurons],
+        :w_a     => [make_weight_prior(rng, n_features, W_A_PRECISION) for _ in 1:n_neurons],
+        :τ       => GammaShapeRate(TAU_SHAPE, TAU_RATE),
+        :obs_tau => GammaShapeRate(OBS_TAU_SHAPE, OBS_TAU_RATE),
     )
 end
 
@@ -230,13 +238,14 @@ end
 
 function posterior_priors(result; iteration = length(result.posteriors[:w_mean]))
     return Dict{Symbol,Any}(
-        :w_mean => deepcopy(result.posteriors[:w_mean][iteration]),
-        :w_a    => deepcopy(result.posteriors[:w_a][iteration]),
-        :τ      => result.posteriors[:τ][iteration],
+        :w_mean  => deepcopy(result.posteriors[:w_mean][iteration]),
+        :w_a     => deepcopy(result.posteriors[:w_a][iteration]),
+        :τ       => result.posteriors[:τ][iteration],
+        :obs_tau => result.posteriors[:obs_tau][iteration],
     )
 end
 
-function predict_with_rxinfer(priors, features, chain_var, y_prec, prior_var;
+function predict_with_rxinfer(priors, features, chain_var, prior_var;
                                iterations = PREDICTION_ITERATIONS, showprogress = true)
     return infer(
         model = xor_relu_diffusion_vmp_prediction(
@@ -245,7 +254,6 @@ function predict_with_rxinfer(priors, features, chain_var, y_prec, prior_var;
             n_obs = length(features),
             priors = priors,
             chain_var = chain_var,
-            y_prec = y_prec,
             prior_var = prior_var,
         ),
         data = (features = features,),
@@ -272,13 +280,15 @@ function mse_from_marginals(marginals, y_true)
     return mean((y_pred .- y_true) .^ 2)
 end
 
-function training_diagnostics(result)
+function training_diagnostics(result, y_true_train)
     rows = DataFrame(
         iteration = Int[],
         free_energy = Float64[],
         tau = Float64[],
+        obs_tau = Float64[],
         w_mean_max_norm = Float64[],
         w_a_max_norm = Float64[],
+        train_mse_cleanend = Float64[],
     )
     fe = FREE_ENERGY ? result.free_energy : Real[]
     n_it = length(result.posteriors[:w_mean])
@@ -286,12 +296,19 @@ function training_diagnostics(result)
         w_means = [mean(result.posteriors[:w_mean][iteration][k]) for k in 1:N_NEURONS]
         w_as = [mean(result.posteriors[:w_a][iteration][k]) for k in 1:N_NEURONS]
         fe_val = iteration <= length(fe) ? Float64(fe[iteration]) : NaN
+
+        out_mat = result.posteriors[:out][iteration]
+        y_pred = [Float64(mean(out_mat[L_DEPTH, j])) for j in 1:length(y_true_train)]
+        mse = mean((y_pred .- y_true_train) .^ 2)
+
         push!(rows, (
             iteration,
             fe_val,
             Float64(mean(result.posteriors[:τ][iteration])),
+            Float64(mean(result.posteriors[:obs_tau][iteration])),
             maximum(norm.(w_means)),
             maximum(norm.(w_as)),
+            mse,
         ))
     end
     return rows
@@ -324,6 +341,25 @@ function save_free_energy_plot(diagnostics)
         size = (760, 440),
     )
     savefig(p, outpath)
+    return outpath
+end
+
+function save_stability_plot(diagnostics)
+    outpath = "$(OUTPUT_PREFIX)_stability.png"
+    p1 = plot(diagnostics.iteration, diagnostics.train_mse_cleanend;
+        marker = :circle, xlabel = "iteration", ylabel = "train MSE (clean end)",
+        title = "Train MSE", label = "train MSE", size = (380, 300), lw = 2)
+    p2 = plot(diagnostics.iteration, diagnostics.obs_tau;
+        marker = :circle, xlabel = "iteration", ylabel = "E[obs_tau]",
+        title = "Learned obs_tau", label = "obs_tau", size = (380, 300), lw = 2)
+    p3 = plot(diagnostics.iteration, diagnostics.w_mean_max_norm;
+        marker = :circle, xlabel = "iteration", ylabel = "max |w|",
+        title = "Weight norms", label = "|w_mean|", size = (380, 300), lw = 2)
+    plot!(p3, diagnostics.iteration, diagnostics.w_a_max_norm;
+        marker = :square, label = "|w_a|", lw = 2)
+    plot(p1, p2, p3; layout = (1, 3), size = (1200, 330),
+        plot_title = "diffusion VMP stability (L=$L_DEPTH, $SCHEDULE)")
+    savefig(outpath)
     return outpath
 end
 
@@ -388,7 +424,6 @@ features_test = build_features(df_test)
 priors = make_priors()
 
 sigma2_sched = variance_schedule(L_DEPTH, SIGMA_MIN, SIGMA_MAX; kind = SCHEDULE)
-y_prec = [1.0 / s for s in sigma2_sched]
 prior_var = sigma2_sched[1]  # noise-end variance
 chain_var_val = CHAIN_VAR_OVERRIDE > 0 ? CHAIN_VAR_OVERRIDE :
                 max(CHAIN_VAR_FLOOR,
@@ -397,12 +432,12 @@ chain_var_val = CHAIN_VAR_OVERRIDE > 0 ? CHAIN_VAR_OVERRIDE :
 y_train_matrix = forward_diffuse_targets(df_train.OT, sigma2_sched)
 
 println("=" ^ 78)
-println("XOR diffusion VMP (weight-tied)")
+println("XOR diffusion VMP (weight-tied, learned obs_tau)")
 println("  n_train=$(nrow(df_train)), n_test=$(nrow(df_test))")
-println("  L_DEPTH=$L_DEPTH, schedule=$SCHEDULE")
+println("  L_DEPTH=$L_DEPTH, schedule=$SCHEDULE (for target-noise generation only)")
 println("  sigma^2 per level = $(round.(sigma2_sched, digits=4))")
-println("  y_prec per level  = $(round.(y_prec, digits=4))")
 println("  chain_var = $(round(chain_var_val, digits=4)), prior_var = $(round(prior_var, digits=4))")
+println("  obs_tau prior = GammaShapeRate($OBS_TAU_SHAPE, $OBS_TAU_RATE), mean = $(OBS_TAU_SHAPE / OBS_TAU_RATE)")
 println("  training iter=$N_ITERATIONS, prediction iter=$PREDICTION_ITERATIONS, neurons=$N_NEURONS")
 println("=" ^ 78)
 
@@ -412,7 +447,6 @@ training_result = infer(
         n_levels = L_DEPTH,
         priors = priors,
         chain_var = chain_var_val,
-        y_prec = y_prec,
         prior_var = prior_var,
     ),
     data = (y = y_train_matrix, features = features_train),
@@ -427,12 +461,12 @@ training_result = infer(
 prediction_priors = posterior_priors(training_result)
 
 println("\nRunning posterior predictive inference on test data")
-test_prediction = predict_with_rxinfer(prediction_priors, features_test, chain_var_val, y_prec, prior_var)
+test_prediction = predict_with_rxinfer(prediction_priors, features_test, chain_var_val, prior_var)
 test_marginals = clean_out_marginals(test_prediction)
 
 println("\nRunning posterior predictive inference on grid")
 grid_x, grid_y, features_grid, actual_grid = prediction_grid(features_test)
-grid_prediction = predict_with_rxinfer(prediction_priors, features_grid, chain_var_val, y_prec, prior_var)
+grid_prediction = predict_with_rxinfer(prediction_priors, features_grid, chain_var_val, prior_var)
 grid_marginals = clean_out_marginals(grid_prediction)
 
 baseline_mse = mean((0.52 .- df_test.OT) .^ 2)
@@ -440,31 +474,34 @@ final_mse = mse_from_marginals(test_marginals, df_test.OT)
 y_var = predictive_variance(test_marginals)
 
 mkpath(dirname(OUTPUT_PREFIX))
-diagnostics = training_diagnostics(training_result)
+diagnostics = training_diagnostics(training_result, Vector{Float64}(df_train.OT))
 diagnostics_path = "$(OUTPUT_PREFIX)_training_diagnostics.csv"
 CSV.write(diagnostics_path, diagnostics)
 level_stats = per_level_out_stats(training_result, nrow(df_train))
 CSV.write("$(OUTPUT_PREFIX)_level_stats.csv", level_stats)
 prediction_path = save_prediction_csv(test_marginals, df_test)
 free_energy_plot = save_free_energy_plot(diagnostics)
+stability_plot = save_stability_plot(diagnostics)
 heatmap_path = save_prediction_heatmaps(grid_x, grid_y, grid_marginals, actual_grid, df_test)
 
 @printf("Baseline MSE constant 0.52 = %.6f\n", baseline_mse)
 @printf("Posterior predictive test MSE = %.6f\n", final_mse)
 @printf("Mean posterior predictive std = %.6f\n", mean(sqrt.(max.(y_var, 0.0))))
-@printf("Final τ = %.6f\n", diagnostics.tau[end])
+@printf("Final τ = %.6f, Final obs_tau = %.6f\n", diagnostics.tau[end], diagnostics.obs_tau[end])
 @printf("Final w_mean max norm = %.6f\n", diagnostics.w_mean_max_norm[end])
 @printf("Final w_a max norm    = %.6f\n", diagnostics.w_a_max_norm[end])
 println("Training diagnostics saved to $diagnostics_path")
 println("Per-level out stats saved to $(OUTPUT_PREFIX)_level_stats.csv")
 println("Test predictions saved to $prediction_path")
 println("Free-energy plot saved to $free_energy_plot")
+println("Stability plot saved to $stability_plot")
 println("Posterior predictive heatmaps saved to $heatmap_path")
 
-println("\nFree energy by iteration:")
+println("\nPer-iteration diagnostics:")
 for row in eachrow(diagnostics)
-    @printf("  iter %d: FE=%.4f  τ=%.3f  |w_mean|=%.3f  |w_a|=%.3f\n",
-        row.iteration, row.free_energy, row.tau, row.w_mean_max_norm, row.w_a_max_norm)
+    @printf("  iter %2d: FE=%.3e  τ=%.2e  obs_tau=%.3e  |w_m|=%.3f  |w_a|=%.3f  train_mse(L)=%.5f\n",
+        row.iteration, row.free_energy, row.tau, row.obs_tau,
+        row.w_mean_max_norm, row.w_a_max_norm, row.train_mse_cleanend)
 end
 
 println("\nPer-level out statistics (final iteration):")
