@@ -447,6 +447,7 @@ function evaluate_neural_ensemble(
     nll_terms = [logpdf(normal_predictions[j], y_test_mat[:, j]) for j = 1:n_test]
     nll = mean(nll_terms)
     mse_terms = vec((ensemble_mean .- y_test_mat) .^ 2)
+    mse_terms_timestep = vec(mean((ensemble_mean .- y_test_mat) .^ 2; dims = 1))
 
     # CI95 from Bayesian product-of-experts posterior
     posterior_mean = reduce(hcat, map(mean, normal_predictions))
@@ -466,6 +467,7 @@ function evaluate_neural_ensemble(
         mae = mae_mv(ensemble_mean, y_test_mat),
         rmse = rmse_mv(ensemble_mean, y_test_mat),
         mse_std = std(mse_terms),
+        mse_std_mv = std(mse_terms_timestep),
         r2 = r2_mv(ensemble_mean, y_test_mat),
         mape = mape_mv(ensemble_mean, y_test_mat),
         smape = smape_mv(ensemble_mean, y_test_mat),

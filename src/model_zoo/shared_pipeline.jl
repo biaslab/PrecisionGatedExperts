@@ -115,6 +115,7 @@ function compute_ensemble_metrics(::Multivariate, ensemble_preds, y_test)
     ensemble_mean = reduce(hcat, map(mean, ensemble_preds))
     ensemble_std = reduce(hcat, map(_marginal_std, ensemble_preds))
     mse_terms = vec((ensemble_mean .- y_test) .^ 2)
+    mse_terms_timestep = vec(mean((ensemble_mean .- y_test) .^ 2; dims = 1))
     nll_terms = collect(
         map(
             (y_dist) -> logpdf(y_dist[2], y_dist[1]),
@@ -135,6 +136,7 @@ function compute_ensemble_metrics(::Multivariate, ensemble_preds, y_test)
         mae = mae_mv(ensemble_mean, y_test),
         rmse = rmse_mv(ensemble_mean, y_test),
         mse_std = std(mse_terms),
+        mse_std_mv = std(mse_terms_timestep),
         r2 = r2_mv(ensemble_mean, y_test),
         mape = mape_mv(ensemble_mean, y_test),
         smape = smape_mv(ensemble_mean, y_test),
