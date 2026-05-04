@@ -327,13 +327,13 @@ function evaluate_neural_ensemble(
 )
     n_test = size(predictions_test_vec, 2)
 
-    ensemble_mean = hcat(
+    ensemble_mean_all = hcat(
         [
             moe_predict(predictions_test_vec[:, j], gating, ps, st, features_test[j])
             for j = 1:n_test
         ]...,
     )
-    ensemble_std = sqrt.(
+    ensemble_std_all = sqrt.(
         hcat(
             [
                 moe_var(predictions_test_vec[:, j], gating, ps, st, features_test[j])
@@ -354,10 +354,14 @@ function evaluate_neural_ensemble(
     gating_weights =
         hcat([gating_probs(gating, ps, st, features_test[j]) for j = 1:n_test]...)
 
-    # Evaluate on target column only
-    y_eval = y_test_mat[col_idx:col_idx, :]
-    ensemble_eval = ensemble_mean[col_idx:col_idx, :]
+    # Evaluate on target column only (same semantics as shared_pipeline univariate path)
+    ensemble_mean = vec(ensemble_mean_all[col_idx, :])
+    ensemble_std = vec(ensemble_std_all[col_idx, :])
     y_test = [y_test_mat[col_idx, j] for j = 1:n_test]
+    mse_terms = (ensemble_mean .- y_test) .^ 2
+    nll_terms = collect(
+        map((y_dist) -> logpdf(y_dist[2], y_dist[1]), zip(y_test, normal_predictions)),
+    )
 
     # CI95 from Bayesian product-of-experts posterior
     ci95_lower = [
@@ -377,15 +381,15 @@ function evaluate_neural_ensemble(
     )
 
     ensemble_metrics = (
-        mse = mse_mv(ensemble_eval, y_eval),
-        mae = mae_mv(ensemble_eval, y_eval),
-        rmse = rmse_mv(ensemble_eval, y_eval),
-        r2 = r2_mv(ensemble_eval, y_eval),
-        mape = mape_mv(ensemble_eval, y_eval),
-        smape = smape_mv(ensemble_eval, y_eval),
-        nll = mean(
-            map((y_dist) -> logpdf(y_dist[2], y_dist[1]), zip(y_test, normal_predictions)),
-        ),
+        mse = mse(ensemble_mean, y_test),
+        mae = mae(ensemble_mean, y_test),
+        rmse = rmse(ensemble_mean, y_test),
+        mse_std = std(mse_terms),
+        r2 = r2(ensemble_mean, y_test),
+        mape = mape(ensemble_mean, y_test),
+        smape = smape(ensemble_mean, y_test),
+        nll = mean(nll_terms),
+        nll_std = std(nll_terms),
         ci95_target_overlap = ci95_target_overlap,
         ci95_avg_width = ci95_avg_width,
         ci95_interval_score = ci95_interval_score,
@@ -440,7 +444,10 @@ function evaluate_neural_ensemble(
         hcat([gating_probs(gating, ps, st, features_test[j]) for j = 1:n_test]...)
 
     # NLL from MvNormal product-of-experts posterior
-    nll = mean([logpdf(normal_predictions[j], y_test_mat[:, j]) for j = 1:n_test])
+    nll_terms = [logpdf(normal_predictions[j], y_test_mat[:, j]) for j = 1:n_test]
+    nll = mean(nll_terms)
+    mse_terms = vec((ensemble_mean .- y_test_mat) .^ 2)
+    mse_terms_timestep = vec(mean((ensemble_mean .- y_test_mat) .^ 2; dims = 1))
 
     # CI95 from Bayesian product-of-experts posterior
     posterior_mean = reduce(hcat, map(mean, normal_predictions))
@@ -459,10 +466,13 @@ function evaluate_neural_ensemble(
         mse = mse_mv(ensemble_mean, y_test_mat),
         mae = mae_mv(ensemble_mean, y_test_mat),
         rmse = rmse_mv(ensemble_mean, y_test_mat),
+        mse_std = std(mse_terms),
+        mse_std_mv = std(mse_terms_timestep),
         r2 = r2_mv(ensemble_mean, y_test_mat),
         mape = mape_mv(ensemble_mean, y_test_mat),
         smape = smape_mv(ensemble_mean, y_test_mat),
         nll = nll,
+        nll_std = std(nll_terms),
         ci95_target_overlap = ci95_target_overlap,
         ci95_avg_width = ci95_avg_width,
         ci95_interval_score = ci95_interval_score,

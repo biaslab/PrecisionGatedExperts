@@ -1,6 +1,7 @@
 using JLD2
 using Printf
-using Plots; gr()
+using Plots;
+gr();
 using Plots.PlotMeasures
 
 # ─── Configuration ────────────────────────────────────────────────────────────
@@ -11,10 +12,10 @@ const HORIZONS = [96, 192, 336, 720]
 # Datasets to include in the radar chart (change this list to add/remove datasets)
 # Each entry: (internal_name, display_label, prediction_type)
 const DATASETS_DEFAULT = [
-    ("electricity",   "Electricity",   :multivariate),
-    ("traffic",       "Traffic",       :multivariate),
-    ("ETTh2",         "ETTh2",         :univariate),
-    ("ETTh1",         "ETTh1",         :univariate),
+    ("electricity", "Electricity", :multivariate),
+    ("traffic", "Traffic", :multivariate),
+    ("ETTh2", "ETTh2", :univariate),
+    ("ETTh1", "ETTh1", :univariate),
     ("exchange_rate", "Exchange Rate", :multivariate),  # uncomment for 5-axis pentagon
 ]
 
@@ -29,31 +30,34 @@ const ENSEMBLE_BAYES_MODEL_TYPES = [
     "noisy_experts", "noisy_experts_diagonal",
 ]
 const ENSEMBLE_MODEL_LABELS = Dict(
-    "static"                  => "Static",
-    "dynamic"                 => "Dyn.",
-    "dynamic_diagonal"        => "Dyn. Diag.",
-    "noisy_experts"           => "Noisy",
-    "noisy_experts_diagonal"  => "Noisy Diag.",
-    "neural_ensemble"         => "MoE",
-    "neural_ensemble_big"     => "MoE Big",
+    "static" => "Static",
+    "dynamic" => "Dyn.",
+    "dynamic_diagonal" => "Dyn. Diag.",
+    "noisy_experts" => "Noisy",
+    "noisy_experts_diagonal" => "Noisy Diag.",
+    "neural_ensemble" => "MoE",
+    "neural_ensemble_big" => "MoE Big",
 )
 const MODEL_DIR = Dict(
     "noisy_experts_diagonal" => "noisy_diagonal",
-    "noisy_experts"          => "noisy_experts",
+    "noisy_experts" => "noisy_experts",
 )
 
 const MODEL_COLORS = Dict(
-    "static"                  => :royalblue,
-    "dynamic"                 => :orangered,
-    "dynamic_diagonal"        => :forestgreen,
-    "noisy_experts"           => :darkorchid,
-    "noisy_experts_diagonal"  => :goldenrod,
-    "neural_ensemble"         => :deeppink,
-    "neural_ensemble_big"     => :saddlebrown,
+    "static" => :royalblue,
+    "dynamic" => :orangered,
+    "dynamic_diagonal" => :forestgreen,
+    "noisy_experts" => :darkorchid,
+    "noisy_experts_diagonal" => :goldenrod,
+    "neural_ensemble" => :deeppink,
+    "neural_ensemble_big" => :saddlebrown,
 )
 
 # Cap extreme values (e.g., MoE NLL can be 1e22+)
 const VALUE_CAP = 1e40
+const DATASET_LABEL_FONTSIZE = 16
+const DATASET_LABEL_COLOR = :black
+const RADAR_TICK_LABEL_COLOR = :gray15
 
 # Models to exclude from axis range calculation (they distort the scale)
 # Their values will be clamped to the axis range instead
@@ -62,31 +66,31 @@ const RANGE_EXCLUDE_MODELS = Set{String}()  # include all models in axis range (
 const BASELINE_MODELS = ["CNN", "DLinear", "LSTM", "MLP", "NConv"]
 const BASELINE_METRICS = Dict(
     "exchange_rate" => Dict(
-        96  => Dict("CNN" => (mse=2.455, mae=1.187), "DLinear" => (mse=0.157, mae=0.306), "LSTM" => (mse=1.150, mae=0.881), "MLP" => (mse=0.183, mae=0.317), "NConv" => (mse=0.180, mae=0.314)),
+        96 => Dict("CNN" => (mse=2.455, mae=1.187), "DLinear" => (mse=0.157, mae=0.306), "LSTM" => (mse=1.150, mae=0.881), "MLP" => (mse=0.183, mae=0.317), "NConv" => (mse=0.180, mae=0.314)),
         192 => Dict("CNN" => (mse=3.559, mae=1.448), "DLinear" => (mse=0.325, mae=0.446), "LSTM" => (mse=2.589, mae=1.337), "MLP" => (mse=0.400, mae=0.478), "NConv" => (mse=0.410, mae=0.479)),
         336 => Dict("CNN" => (mse=2.295, mae=1.184), "DLinear" => (mse=0.558, mae=0.606), "LSTM" => (mse=1.536, mae=1.023), "MLP" => (mse=0.804, mae=0.680), "NConv" => (mse=0.820, mae=0.680)),
         720 => Dict("CNN" => (mse=4.902, mae=1.706), "DLinear" => (mse=1.495, mae=0.984), "LSTM" => (mse=1.982, mae=1.147), "MLP" => (mse=2.187, mae=1.166), "NConv" => (mse=2.426, mae=1.225)),
     ),
     "ETTh1" => Dict(
-        96  => Dict("CNN" => (mse=0.900, mae=0.734), "DLinear" => (mse=0.504, mae=0.484), "LSTM" => (mse=0.762, mae=0.646), "MLP" => (mse=0.516, mae=0.493), "NConv" => (mse=0.665, mae=0.547)),
+        96 => Dict("CNN" => (mse=0.900, mae=0.734), "DLinear" => (mse=0.504, mae=0.484), "LSTM" => (mse=0.762, mae=0.646), "MLP" => (mse=0.516, mae=0.493), "NConv" => (mse=0.665, mae=0.547)),
         192 => Dict("CNN" => (mse=1.594, mae=0.966), "DLinear" => (mse=0.553, mae=0.523), "LSTM" => (mse=0.964, mae=0.725), "MLP" => (mse=0.578, mae=0.528), "NConv" => (mse=0.779, mae=0.610)),
         336 => Dict("CNN" => (mse=1.717, mae=0.958), "DLinear" => (mse=0.611, mae=0.560), "LSTM" => (mse=1.189, mae=0.812), "MLP" => (mse=0.643, mae=0.564), "NConv" => (mse=0.776, mae=0.625)),
         720 => Dict("CNN" => (mse=1.186, mae=0.846), "DLinear" => (mse=0.794, mae=0.688), "LSTM" => (mse=1.204, mae=0.832), "MLP" => (mse=0.910, mae=0.724), "NConv" => (mse=1.084, mae=0.787)),
     ),
     "ETTh2" => Dict(
-        96  => Dict("CNN" => (mse=2.111, mae=0.955), "DLinear" => (mse=0.293, mae=0.368), "LSTM" => (mse=0.987, mae=0.774), "MLP" => (mse=0.300, mae=0.364), "NConv" => (mse=0.336, mae=0.388)),
+        96 => Dict("CNN" => (mse=2.111, mae=0.955), "DLinear" => (mse=0.293, mae=0.368), "LSTM" => (mse=0.987, mae=0.774), "MLP" => (mse=0.300, mae=0.364), "NConv" => (mse=0.336, mae=0.388)),
         192 => Dict("CNN" => (mse=2.274, mae=1.099), "DLinear" => (mse=0.345, mae=0.410), "LSTM" => (mse=1.347, mae=0.792), "MLP" => (mse=0.354, mae=0.401), "NConv" => (mse=0.417, mae=0.434)),
         336 => Dict("CNN" => (mse=2.359, mae=1.198), "DLinear" => (mse=0.428, mae=0.473), "LSTM" => (mse=1.517, mae=0.952), "MLP" => (mse=0.421, mae=0.445), "NConv" => (mse=0.479, mae=0.465)),
         720 => Dict("CNN" => (mse=1.826, mae=1.052), "DLinear" => (mse=0.639, mae=0.585), "LSTM" => (mse=1.155, mae=0.884), "MLP" => (mse=0.695, mae=0.578), "NConv" => (mse=0.759, mae=0.596)),
     ),
     "electricity" => Dict(
-        96  => Dict("CNN" => (mse=0.350, mae=0.432), "DLinear" => (mse=0.176, mae=0.267), "LSTM" => (mse=0.396, mae=0.443), "MLP" => (mse=0.178, mae=0.266), "NConv" => (mse=0.348, mae=0.363)),
+        96 => Dict("CNN" => (mse=0.350, mae=0.432), "DLinear" => (mse=0.176, mae=0.267), "LSTM" => (mse=0.396, mae=0.443), "MLP" => (mse=0.178, mae=0.266), "NConv" => (mse=0.348, mae=0.363)),
         192 => Dict("CNN" => (mse=0.388, mae=0.462), "DLinear" => (mse=0.251, mae=0.326), "LSTM" => (mse=0.335, mae=0.403), "MLP" => (mse=0.260, mae=0.324), "NConv" => (mse=0.307, mae=0.345)),
         336 => Dict("CNN" => (mse=0.364, mae=0.434), "DLinear" => (mse=0.223, mae=0.314), "LSTM" => (mse=0.337, mae=0.407), "MLP" => (mse=0.229, mae=0.310), "NConv" => (mse=0.248, mae=0.319)),
         720 => Dict("CNN" => (mse=0.418, mae=0.462), "DLinear" => (mse=0.344, mae=0.404), "LSTM" => (mse=0.425, mae=0.462), "MLP" => (mse=0.370, mae=0.407), "NConv" => (mse=0.462, mae=0.449)),
     ),
     "traffic" => Dict(
-        96  => Dict("CNN" => (mse=0.743, mae=0.422), "DLinear" => (mse=0.475, mae=0.308), "LSTM" => (mse=0.845, mae=0.469), "MLP" => (mse=0.478, mae=0.305), "NConv" => (mse=1.205, mae=0.596)),
+        96 => Dict("CNN" => (mse=0.743, mae=0.422), "DLinear" => (mse=0.475, mae=0.308), "LSTM" => (mse=0.845, mae=0.469), "MLP" => (mse=0.478, mae=0.305), "NConv" => (mse=1.205, mae=0.596)),
         192 => Dict("CNN" => (mse=0.737, mae=0.423), "DLinear" => (mse=0.710, mae=0.431), "LSTM" => (mse=0.817, mae=0.443), "MLP" => (mse=0.716, mae=0.430), "NConv" => (mse=0.831, mae=0.453)),
         336 => Dict("CNN" => (mse=0.730, mae=0.403), "DLinear" => (mse=0.547, mae=0.345), "LSTM" => (mse=0.740, mae=0.407), "MLP" => (mse=0.556, mae=0.337), "NConv" => (mse=0.622, mae=0.344)),
         720 => Dict("CNN" => (mse=0.800, mae=0.447), "DLinear" => (mse=0.814, mae=0.473), "LSTM" => (mse=1.055, mae=0.576), "MLP" => (mse=0.820, mae=0.466), "NConv" => (mse=1.191, mae=0.588)),
@@ -175,16 +179,16 @@ end
 # ─── Main Radar Chart Builder ─────────────────────────────────────────────────
 
 function build_radar_chart(metric::Symbol;
-                           datasets = DATASETS_DEFAULT,
-                           cap = VALUE_CAP,
-                           models = ENSEMBLE_MODEL_TYPES,
-                           log_metric = true,
-                           show_title = true)
+    datasets=DATASETS_DEFAULT,
+    cap=VALUE_CAP,
+    models=ENSEMBLE_MODEL_TYPES,
+    log_metric=true,
+    show_title=true)
     N = length(datasets)
     dataset_labels = [d[2] for d in datasets]
 
     # 1. Compute average metric per model × dataset
-    raw_data = Dict{String, Vector{Union{Nothing,Float64}}}()
+    raw_data = Dict{String,Vector{Union{Nothing,Float64}}}()
     for mt in models
         vals = Union{Nothing,Float64}[]
         for (ds, _, pred_type) in datasets
@@ -214,20 +218,20 @@ function build_radar_chart(metric::Symbol;
 
     # 3. Per-axis range: [best (min), worst (max)]
     #    Exclude RANGE_EXCLUDE_MODELS from range calc to avoid scale distortion (e.g., MoE NLL)
-    axis_best  = fill(Inf, N)
+    axis_best = fill(Inf, N)
     axis_worst = fill(-Inf, N)
     for i in 1:N
         for mt in models
             mt in RANGE_EXCLUDE_MODELS && continue
             v = raw_data[mt][i]
             v === nothing && continue
-            axis_best[i]  = min(axis_best[i], v)
+            axis_best[i] = min(axis_best[i], v)
             axis_worst[i] = max(axis_worst[i], v)
         end
         # Include baseline in range
         bv = baseline_vals[i]
         if bv !== nothing
-            axis_best[i]  = min(axis_best[i], bv)
+            axis_best[i] = min(axis_best[i], bv)
             axis_worst[i] = max(axis_worst[i], bv)
         end
     end
@@ -249,14 +253,14 @@ function build_radar_chart(metric::Symbol;
         return clamp(n, 0.0, 1.0)
     end
 
-    normed = Dict{String, Vector{Float64}}()
+    normed = Dict{String,Vector{Float64}}()
     for mt in models
         normed[mt] = [normalize_val(raw_data[mt][i], i) for i in 1:N]
     end
 
     # 5. Find best model (largest total area)
     θ_raw = LinRange(0, 2π, N + 1)[1:N] |> collect
-    areas = Dict{String, Float64}()
+    areas = Dict{String,Float64}()
     for mt in models
         areas[mt] = radar_polygon_area(normed[mt], θ_raw)
     end
@@ -299,23 +303,23 @@ function build_radar_chart(metric::Symbol;
     plotted_models = copy(models)
 
     p = plot(
-        size = (950, 900),
-        proj = :polar,
-        lims = (0, 1.18),
-        xaxis = false,
-        yaxis = false,
-        grid = true,
-        gridalpha = 0.25,
-        gridlinewidth = 0.5,
-        bg = :white,
-        left_margin = 30mm,
-        right_margin = 25mm,
-        top_margin = 15mm,
-        bottom_margin = 20mm,
-        title = show_title ? "Log $metric_upper — Average over Horizons" : "",
-        titlefontsize = 14,
-        legend = :outertopright,
-        legendfontsize = 18,
+        size=(950, 900),
+        proj=:polar,
+        lims=(0, 1.18),
+        xaxis=false,
+        yaxis=false,
+        grid=true,
+        gridalpha=0.25,
+        gridlinewidth=0.5,
+        bg=:white,
+        left_margin=30mm,
+        right_margin=25mm,
+        top_margin=15mm,
+        bottom_margin=20mm,
+        title=show_title ? "Log $metric_upper — Average over Horizons" : "",
+        titlefontsize=14,
+        legend=:outertopright,
+        legendfontsize=18,
     )
 
     # Draw models (best model last for z-ordering)
@@ -328,12 +332,12 @@ function build_radar_chart(metric::Symbol;
         lw = mt == best_plotted ? 3.0 : 1.5
         fa = mt == best_plotted ? 0.12 : 0.0
         plot!(p, θ, R,
-            proj = :polar,
-            linewidth = lw,
-            color = MODEL_COLORS[mt],
-            fill = fa > 0 ? (true, fa, MODEL_COLORS[mt]) : false,
-            label = ENSEMBLE_MODEL_LABELS[mt],
-            markershape = :none,
+            proj=:polar,
+            linewidth=lw,
+            color=MODEL_COLORS[mt],
+            fill=fa > 0 ? (true, fa, MODEL_COLORS[mt]) : false,
+            label=ENSEMBLE_MODEL_LABELS[mt],
+            markershape=:none,
         )
     end
 
@@ -344,26 +348,46 @@ function build_radar_chart(metric::Symbol;
 
         # Determine alignment based on quadrant
         if angle_deg < 10 || angle_deg > 350       # right
-            label_r = 1.38; ha = :left;   va = :center
+            label_r = 1.38
+            ha = :left
+            va = :center
         elseif angle_deg < 80                       # upper-right
-            label_r = 1.35; ha = :left;   va = :bottom
+            label_r = 1.35
+            ha = :left
+            va = :bottom
         elseif angle_deg < 100                      # top
-            label_r = 1.40; ha = :center; va = :bottom
+            label_r = 1.40
+            ha = :center
+            va = :bottom
         elseif angle_deg < 170                      # upper-left
-            label_r = 1.35; ha = :right;  va = :bottom
+            label_r = 1.35
+            ha = :right
+            va = :bottom
         elseif angle_deg < 190                      # left
-            label_r = 1.38; ha = :right;  va = :center
+            label_r = 1.38
+            ha = :right
+            va = :center
         elseif angle_deg < 260                      # lower-left
-            label_r = 1.35; ha = :right;  va = :top
+            label_r = 1.35
+            ha = :right
+            va = :top
         elseif angle_deg < 280                      # bottom
-            label_r = 1.40; ha = :center; va = :top
+            label_r = 1.40
+            ha = :center
+            va = :top
         else                                        # lower-right
-            label_r = 1.35; ha = :left;   va = :top
+            label_r = 1.35
+            ha = :left
+            va = :top
         end
 
         x = label_r * cos(angle)
         y = label_r * sin(angle)
-        annotate!(p, x, y, text(dataset_labels[i], 12, ha, va, :bold))
+        if dataset_labels[i] == "Electricity"
+            x += 0.18
+        end
+        label_text = text(dataset_labels[i], DATASET_LABEL_FONTSIZE, DATASET_LABEL_COLOR, ha, va)
+        annotate!(p, x, y, label_text)
     end
 
     # 9. Per-axis numeric tick labels (along each spoke, offset slightly)
@@ -377,7 +401,7 @@ function build_radar_chart(metric::Symbol;
             r_pos = frac
             x = r_pos * cos(angle + angle_offset)
             y = r_pos * sin(angle + angle_offset)
-            annotate!(p, x, y, text(label, 6, :left, :gray40))
+            annotate!(p, x, y, text(label, 6, :left, RADAR_TICK_LABEL_COLOR))
         end
     end
 
@@ -396,9 +420,9 @@ function build_radar_chart(metric::Symbol;
 end
 
 # ─── Generate Charts ──────────────────────────────────────────────────────────
-const SHOW_TITLE = !("--no-title" in ARGS)
+const SHOW_TITLE = false
 
-build_radar_chart(:mse, models = ENSEMBLE_BAYES_MODEL_TYPES, show_title = SHOW_TITLE)
-build_radar_chart(:nll, models = ENSEMBLE_BAYES_MODEL_TYPES, show_title = SHOW_TITLE)
-build_radar_chart(:mse, show_title = SHOW_TITLE)
-build_radar_chart(:nll, show_title = SHOW_TITLE)
+build_radar_chart(:mse, models=ENSEMBLE_BAYES_MODEL_TYPES, show_title=SHOW_TITLE)
+build_radar_chart(:nll, models=ENSEMBLE_BAYES_MODEL_TYPES, show_title=SHOW_TITLE)
+build_radar_chart(:mse, show_title=SHOW_TITLE)
+build_radar_chart(:nll, show_title=SHOW_TITLE)
