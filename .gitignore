@@ -40,7 +40,6 @@ test_dataset/xor_dataset.csv
 test_dataset/plane_switch_dataset.csv
 test_dataset/xor_simple_dataset.csv
 test_dataset/viz/lux_regression_metrics.csv
-test_dataset/viz/*.png
 paper/figures/*
 benchmarks/mcmc_scaling/results/*
- test_dataset/viz/*
+test_dataset/viz/*
