@@ -196,6 +196,9 @@ function run_gibbs(
     n_warmup::Int = 200,
     n_samples::Int = 500,
     rng = Random.default_rng(),
+    prior_prec_w::Real = 0.01,
+    prior_rate_τ::Real = 1e-3,
+    prior_rate_β::Real = 1e3,
 )
     N = length(y)
     n_total = n_warmup + n_samples
@@ -222,9 +225,9 @@ function run_gibbs(
         # === Block 1: Sample globals from conjugate conditionals ===
         for i in 1:n_experts
             z_i = @view z[i, :]
-            w[i] = sample_w_conditional(z_i, features, τ[i])
-            τ[i] = sample_τ_conditional(z_i, w[i], features)
-            β[i] = sample_β_conditional(z_i)
+            w[i] = sample_w_conditional(z_i, features, τ[i]; prior_prec = prior_prec_w)
+            τ[i] = sample_τ_conditional(z_i, w[i], features; prior_rate = prior_rate_τ)
+            β[i] = sample_β_conditional(z_i; prior_rate = prior_rate_β)
         end
 
         # === Block 2: Sample each z[i,j] independently via slice sampling ===
