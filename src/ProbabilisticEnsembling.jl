@@ -47,6 +47,11 @@ include("model_zoo/dynamic_diagonal/univariate.jl")
 include("model_zoo/dynamic_diagonal/multivariate.jl")
 include("model_zoo/dynamic_diagonal/pipeline.jl")
 
+# dynamic_exp
+include("model_zoo/dynamic_exp/model_type.jl")
+include("model_zoo/dynamic_exp/univariate.jl")
+include("model_zoo/dynamic_exp/pipeline.jl")
+
 # shared noisy experts rules (must precede noisy_experts and noisy_experts_diagonal)
 include("strange_missing_meta.jl")
 
