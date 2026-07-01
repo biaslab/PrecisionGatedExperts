@@ -52,6 +52,19 @@ end
     return LowRankNormalWeightedMeanPrecision(mγ * mθ * my, mθ, mγ)
 end
 
+@rule ReactiveMP.softdot(:x, Marginalisation) (
+    m_y::UnivariateNormalDistributionsFamily,
+    q_θ::PointMass,
+    q_γ::Any,
+    meta::LowRankMeta,
+) = begin
+    my, Vy = mean_cov(m_y)
+    mθ = mean(q_θ)
+    mγ = mean(q_γ)
+    scale = inv(ReactiveMP.add_transition(Vy, inv(mγ)))
+    return LowRankNormalWeightedMeanPrecision(scale * mθ * my, mθ, scale)
+end
+
 # Average Energy: delegate to default SoftDot (no low-rank specialization)
 @average_energy ReactiveMP.softdot (
     q_y::Any,

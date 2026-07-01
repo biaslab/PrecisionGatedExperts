@@ -4,6 +4,7 @@ using ProbabilisticEnsembling
 using BayesBase
 using ExponentialFamily
 using LinearAlgebra
+using ReactiveMP
 
 @testset "Low-rank product" begin
     dense_left = MvNormalWeightedMeanPrecision(
@@ -53,6 +54,25 @@ using LinearAlgebra
         weightedmean(symmetric_result) == weightedmean(dense_result) &&
             Matrix(BayesBase.invcov(symmetric_result)) == Matrix(BayesBase.invcov(dense_result))
     end
+end
+
+@testset "Low-rank structured softdot" begin
+    low_rank_message = @call_rule SoftDot(:x, Marginalisation) (
+        m_y = NormalMeanVariance(2.0, 3.0),
+        q_θ = PointMass([1.0, 2.0]),
+        q_γ = PointMass(4.0),
+        meta = LowRankMeta(),
+    )
+
+    dense_message = @call_rule SoftDot(:x, Marginalisation) (
+        m_y = NormalMeanVariance(2.0, 3.0),
+        q_θ = PointMass([1.0, 2.0]),
+        q_γ = PointMass(4.0),
+    )
+
+    @test low_rank_message isa LowRankNormalWeightedMeanPrecision
+    @test weightedmean(low_rank_message) ≈ weightedmean(dense_message)
+    @test Matrix(BayesBase.invcov(low_rank_message)) ≈ Matrix(BayesBase.invcov(dense_message))
 end
 
 @testset "Low-rank diagonal update" begin
