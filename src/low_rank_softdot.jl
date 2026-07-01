@@ -19,6 +19,15 @@ struct LowRankMeta end
     return @call_rule SoftDot(:y, Marginalisation) (q_θ = q_θ, q_x = q_x, q_γ = q_γ)
 end
 
+@rule ReactiveMP.softdot(:y, Marginalisation) (
+    q_θ::Any,
+    m_x::Any,
+    q_γ::Any,
+    meta::LowRankMeta,
+) = begin
+    return @call_rule SoftDot(:y, Marginalisation) (q_θ = q_θ, m_x = m_x, q_γ = q_γ)
+end
+
 @rule ReactiveMP.softdot(:θ, Marginalisation) (
     q_y::Any,
     q_x::PointMass,
@@ -74,4 +83,13 @@ end
     meta::LowRankMeta,
 ) = begin
     return score(AverageEnergy(), SoftDot, Val{(:y, :θ, :x, :γ)}(), marginals, nothing)
+end
+
+@average_energy ReactiveMP.softdot (
+    q_y_x::MultivariateNormalDistributionsFamily,
+    q_θ::Any,
+    q_γ::Any,
+    meta::LowRankMeta,
+) = begin
+    return score(AverageEnergy(), SoftDot, Val{(:y_x, :θ, :γ)}(), marginals, nothing)
 end

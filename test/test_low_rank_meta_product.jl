@@ -75,6 +75,59 @@ end
     @test Matrix(BayesBase.invcov(low_rank_message)) ≈ Matrix(BayesBase.invcov(dense_message))
 end
 
+@testset "Low-rank structured softdot y prediction" begin
+    low_rank_message = @call_rule SoftDot(:y, Marginalisation) (
+        q_θ = PointMass([1.0, 2.0]),
+        m_x = MvNormalMeanCovariance([3.0, 4.0], Matrix{Float64}(I, 2, 2)),
+        q_γ = PointMass(5.0),
+        meta = LowRankMeta(),
+    )
+
+    dense_message = @call_rule SoftDot(:y, Marginalisation) (
+        q_θ = PointMass([1.0, 2.0]),
+        m_x = MvNormalMeanCovariance([3.0, 4.0], Matrix{Float64}(I, 2, 2)),
+        q_γ = PointMass(5.0),
+    )
+
+    @test low_rank_message isa NormalMeanVariance
+    low_rank_mean, low_rank_cov = mean_cov(low_rank_message)
+    dense_mean, dense_cov = mean_cov(dense_message)
+    @test low_rank_mean ≈ dense_mean
+    @test low_rank_cov ≈ dense_cov
+end
+
+@testset "Low-rank structured softdot average energy" begin
+    q_y_x = MvNormalMeanCovariance(
+        [1.0, 3.0, 4.0],
+        Matrix{Float64}(I, 3, 3),
+    )
+    q_θ = PointMass([1.0, 2.0])
+    q_γ = PointMass(5.0)
+    marginals = (
+        Marginal(q_y_x, false, false),
+        Marginal(q_θ, false, false),
+        Marginal(q_γ, false, false),
+    )
+
+    low_rank_score = score(
+        AverageEnergy(),
+        SoftDot,
+        Val{(:y_x, :θ, :γ)}(),
+        marginals,
+        LowRankMeta(),
+    )
+    dense_score = score(
+        AverageEnergy(),
+        SoftDot,
+        Val{(:y_x, :θ, :γ)}(),
+        marginals,
+        nothing,
+    )
+
+    @test isfinite(low_rank_score)
+    @test low_rank_score ≈ dense_score
+end
+
 @testset "Low-rank diagonal update" begin
     @test begin
         diagonal_update_result = prod(
