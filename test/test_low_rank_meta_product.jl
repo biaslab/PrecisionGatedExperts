@@ -56,6 +56,44 @@ using ReactiveMP
     end
 end
 
+@testset "Low-rank likelihood messages can multiply before prior" begin
+    first_message = LowRankNormalWeightedMeanPrecision(
+        [1.0, 2.0],
+        [1.0, 2.0],
+        0.5,
+    )
+    second_message = LowRankNormalWeightedMeanPrecision(
+        [3.0, 5.0],
+        [2.0, -1.0],
+        2.0,
+    )
+    prior = MvNormalMeanScalePrecision([0.0, 0.0], 0.25)
+
+    likelihood_product = prod(
+        PreserveTypeProd(Distribution),
+        first_message,
+        second_message,
+    )
+    posterior = prod(
+        PreserveTypeProd(Distribution),
+        likelihood_product,
+        prior,
+    )
+
+    @test likelihood_product isa MvNormalWeightedMeanPrecision
+    @test weightedmean(likelihood_product) == [4.0, 7.0]
+    @test Matrix(BayesBase.invcov(likelihood_product)) == [
+        8.5 -3.0
+        -3.0 4.0
+    ]
+    @test posterior isa MvNormalWeightedMeanPrecision
+    @test weightedmean(posterior) == [4.0, 7.0]
+    @test Matrix(BayesBase.invcov(posterior)) == [
+        8.75 -3.0
+        -3.0 4.25
+    ]
+end
+
 @testset "Low-rank structured softdot" begin
     low_rank_message = @call_rule SoftDot(:x, Marginalisation) (
         m_y = NormalMeanVariance(2.0, 3.0),
@@ -73,6 +111,32 @@ end
     @test low_rank_message isa LowRankNormalWeightedMeanPrecision
     @test weightedmean(low_rank_message) ≈ weightedmean(dense_message)
     @test Matrix(BayesBase.invcov(low_rank_message)) ≈ Matrix(BayesBase.invcov(dense_message))
+end
+
+@testset "Low-rank structured softdot gamma" begin
+    q_y_x = MvNormalWeightedMeanPrecision(
+        [1.0, 0.5, -0.25],
+        [
+            3.0 0.2 0.1
+            0.2 2.0 0.3
+            0.1 0.3 1.5
+        ],
+    )
+    q_θ = PointMass([0.75, -1.25])
+
+    low_rank_message = @call_rule SoftDot(:γ, Marginalisation) (
+        q_y_x = q_y_x,
+        q_θ = q_θ,
+        meta = LowRankMeta(),
+    )
+    dense_message = @call_rule SoftDot(:γ, Marginalisation) (
+        q_y_x = q_y_x,
+        q_θ = q_θ,
+    )
+
+    @test low_rank_message isa GammaShapeRate
+    @test BayesBase.shape(low_rank_message) ≈ BayesBase.shape(dense_message)
+    @test BayesBase.rate(low_rank_message) ≈ BayesBase.rate(dense_message)
 end
 
 @testset "Low-rank structured softdot y prediction" begin

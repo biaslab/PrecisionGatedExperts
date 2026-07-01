@@ -47,9 +47,34 @@ Base.precision(d::LR) = invcov(d)
 # an existing MvNormalWeightedMeanPrecision with dense Matrix precision,
 # the rank-1 update is applied in-place via BLAS.syr!.
 #
-# No prod(LR, LR) rule is defined — this keeps the foldl type-stable.
-# The prior comes first, creates a dense MvNormalWeightedMeanPrecision,
-# and all subsequent LR messages update it in-place.
+# The preferred path is prior first: it creates a dense
+# MvNormalWeightedMeanPrecision, and subsequent LR messages update it in-place.
+# RxInfer may still multiply likelihood messages before the prior, so LR × LR
+# falls back to a dense MvNormalWeightedMeanPrecision accumulator.
+
+# --- LR × LR → allocate dense MvNormalWeightedMeanPrecision ---
+BayesBase.default_prod_rule(::Type{<:LR}, ::Type{<:LR}) =
+    PreserveTypeProd(Distribution)
+
+function BayesBase.prod(
+    ::PreserveTypeProd{Distribution},
+    left::LR,
+    right::LR,
+)
+    n = length(left)
+    length(right) == n || throw(DimensionMismatch("Low-rank messages must have the same length"))
+
+    T = promote_type(eltype(left), eltype(right))
+    xi = Vector{T}(left.xi)
+    xi .+= right.xi
+
+    Λ = zeros(T, n, n)
+    BLAS.syr!('U', T(left.scale), Vector{T}(left.u), Λ)
+    BLAS.syr!('U', T(right.scale), Vector{T}(right.u), Λ)
+    copytri!(Λ, 'U')
+
+    return MvNormalWeightedMeanPrecision(xi, Λ)
+end
 
 # --- MvNormalWeightedMeanPrecision × LR → in-place syr! ---
 BayesBase.default_prod_rule(::Type{<:MvNormalWeightedMeanPrecision}, ::Type{<:LR}) =

@@ -49,6 +49,14 @@ end
     return @call_rule SoftDot(:γ, Marginalisation) (q_y = q_y, q_θ = q_θ, q_x = q_x)
 end
 
+@rule ReactiveMP.softdot(:γ, Marginalisation) (
+    q_y_x::MultivariateNormalDistributionsFamily,
+    q_θ::Any,
+    meta::LowRankMeta,
+) = begin
+    return @call_rule SoftDot(:γ, Marginalisation) (q_y_x = q_y_x, q_θ = q_θ)
+end
+
 @rule ReactiveMP.softdot(:x, Marginalisation) (
     q_y::Any,
     q_θ::PointMass,
