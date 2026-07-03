@@ -1,5 +1,9 @@
 # probabilistic_ensemble_forecasting
 
+Check out our paper here!
+
+[![arXiv](https://img.shields.io/badge/arXiv-2605.29467-b31b1b.svg)](https://arxiv.org/abs/2605.29467)
+
 ## Running experiments
 
 All experiments are configured via YAML session files and launched through `run_experiment`:
