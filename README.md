@@ -1,4 +1,4 @@
-# probabilistic_ensemble_forecasting
+# Composing Non-Conjugate Factor Graphs with Closed-Form Variational Inference
 
 Check out our paper here!
 
