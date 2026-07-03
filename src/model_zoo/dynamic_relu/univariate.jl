@@ -25,7 +25,7 @@ using ClosedFormExpectations: EnzymeBackend
 end
 
 @constraints function univariate_dynamic_relu_ensemble_constraints(priors, prediction)
-    q(w, z, γ, τ) = q(w)q(z,γ)q(τ)
+    q(w, z, γ, τ) = q(w)q(z, γ)q(τ)
     q(
         z,
     )::ProjectedTo(

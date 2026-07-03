@@ -65,9 +65,8 @@ function _expnode_digamma_approx(x::Real)
     end
     inv = 1.0 / y
     inv2 = inv^2
-    return result + log(y) - 0.5 * inv - inv2 * (
-        1.0 / 12.0 - inv2 * (1.0 / 120.0 - inv2 * (1.0 / 252.0))
-    )
+    return result + log(y) - 0.5 * inv -
+           inv2 * (1.0 / 12.0 - inv2 * (1.0 / 120.0 - inv2 * (1.0 / 252.0)))
 end
 
 function _expnode_trigamma_approx(x::Real)
@@ -80,8 +79,8 @@ function _expnode_trigamma_approx(x::Real)
     inv = 1.0 / y
     inv2 = inv^2
     return max(
-        result + inv + 0.5 * inv2 + (1.0 / 6.0) * inv2 * inv -
-        (1.0 / 30.0) * inv2^2 * inv + (1.0 / 42.0) * inv2^3 * inv,
+        result + inv + 0.5 * inv2 + (1.0 / 6.0) * inv2 * inv - (1.0 / 30.0) * inv2^2 * inv +
+        (1.0 / 42.0) * inv2^3 * inv,
         eps(Float64),
     )
 end

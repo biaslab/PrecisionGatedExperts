@@ -117,10 +117,7 @@ function compute_ensemble_metrics(::Multivariate, ensemble_preds, y_test)
     mse_terms = vec((ensemble_mean .- y_test) .^ 2)
     mse_terms_timestep = vec(mean((ensemble_mean .- y_test) .^ 2; dims = 1))
     nll_terms = collect(
-        map(
-            (y_dist) -> logpdf(y_dist[2], y_dist[1]),
-            zip(eachcol(y_test), ensemble_preds),
-        ),
+        map((y_dist) -> logpdf(y_dist[2], y_dist[1]), zip(eachcol(y_test), ensemble_preds)),
     )
     ci95_lower = ensemble_mean .- ZSCORE_95 .* ensemble_std
     ci95_upper = ensemble_mean .+ ZSCORE_95 .* ensemble_std

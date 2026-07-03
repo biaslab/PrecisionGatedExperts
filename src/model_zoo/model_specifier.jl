@@ -299,11 +299,7 @@ function _predict_test_in_batches(
     ensemble_preds = Any[]
     test_posteriors = Dict{Symbol,Any}()
     n_batches = cld(n_test, batch_size)
-    progress = Progress(
-        n_batches;
-        desc = "Test prediction batches",
-        dt = 0.5,
-    )
+    progress = Progress(n_batches; desc = "Test prediction batches", dt = 0.5)
 
     for batch_start = 1:batch_size:n_test
         batch_end = min(batch_start + batch_size - 1, n_test)
@@ -392,15 +388,12 @@ function _predict_test_kalman(
 )
     ensemble_preds = Any[]
     test_posteriors = Dict{Symbol,Any}()
-    current_priors = Dict{Symbol,Any}(k => deepcopy(v) for (k, v) in pairs(prediction_priors))
+    current_priors =
+        Dict{Symbol,Any}(k => deepcopy(v) for (k, v) in pairs(prediction_priors))
 
-    progress = Progress(
-        n_test;
-        desc = "Kalman test prediction",
-        dt = 0.5,
-    )
+    progress = Progress(n_test; desc = "Kalman test prediction", dt = 0.5)
 
-    for step in 1:n_test
+    for step = 1:n_test
         step_range = step:step
         infer_step = predict_with_model(
             pt,
@@ -419,7 +412,8 @@ function _predict_test_kalman(
         step_posteriors = _collect_test_posteriors(mt, infer_step)
         for (k, step_posterior) in pairs(step_posteriors)
             if haskey(test_posteriors, k)
-                test_posteriors[k] = _merge_batched_posterior(test_posteriors[k], step_posterior)
+                test_posteriors[k] =
+                    _merge_batched_posterior(test_posteriors[k], step_posterior)
             else
                 test_posteriors[k] = step_posterior
             end

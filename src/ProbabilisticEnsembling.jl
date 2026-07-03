@@ -12,8 +12,11 @@ include("models.jl")
 
 # low rank normal message type (must precede softdot which uses it)
 include("low_rank_normal.jl")
-# low rank softdot
-include("low_rank_softdot.jl")
+# low rank softdot (meta must precede the rule files)
+include("low_rank_softdot/meta.jl")
+include("low_rank_softdot/mean_field.jl")
+include("low_rank_softdot/structured.jl")
+
 # low rank diagonal product rules (ADF diagonal-precision accumulator)
 include("low_rank_diagonal.jl")
 

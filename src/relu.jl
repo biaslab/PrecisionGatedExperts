@@ -100,12 +100,10 @@ end
 end
 
 # Marginal on :in when both messages are Gamma (e.g. after first iteration)
-@marginalrule ReLU(:in) (
-    m_out::GammaDistributionsFamily,
-    m_in::GammaDistributionsFamily,
-) = begin
-    return prod(ClosedProd(), convert(Gamma, m_out), convert(Gamma, m_in))
-end
+@marginalrule ReLU(:in) (m_out::GammaDistributionsFamily, m_in::GammaDistributionsFamily) =
+    begin
+        return prod(ClosedProd(), convert(Gamma, m_out), convert(Gamma, m_in))
+    end
 
 # Marginal on :out (γ) given messages from both sides.
 # m_in: Normal (from softdot on z), m_out: Gamma (from NormalMeanPrecision on γ)
@@ -129,9 +127,7 @@ end
 end
 
 # Marginal on :out when both messages are Gamma
-@marginalrule ReLU(:out) (
-    m_in::GammaDistributionsFamily,
-    m_out::GammaDistributionsFamily,
-) = begin
-    return prod(ClosedProd(), convert(Gamma, m_in), convert(Gamma, m_out))
-end
+@marginalrule ReLU(:out) (m_in::GammaDistributionsFamily, m_out::GammaDistributionsFamily) =
+    begin
+        return prod(ClosedProd(), convert(Gamma, m_in), convert(Gamma, m_out))
+    end

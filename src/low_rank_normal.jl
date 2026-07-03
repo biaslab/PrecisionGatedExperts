@@ -53,16 +53,12 @@ Base.precision(d::LR) = invcov(d)
 # falls back to a dense MvNormalWeightedMeanPrecision accumulator.
 
 # --- LR × LR → allocate dense MvNormalWeightedMeanPrecision ---
-BayesBase.default_prod_rule(::Type{<:LR}, ::Type{<:LR}) =
-    PreserveTypeProd(Distribution)
+BayesBase.default_prod_rule(::Type{<:LR}, ::Type{<:LR}) = PreserveTypeProd(Distribution)
 
-function BayesBase.prod(
-    ::PreserveTypeProd{Distribution},
-    left::LR,
-    right::LR,
-)
+function BayesBase.prod(::PreserveTypeProd{Distribution}, left::LR, right::LR)
     n = length(left)
-    length(right) == n || throw(DimensionMismatch("Low-rank messages must have the same length"))
+    length(right) == n ||
+        throw(DimensionMismatch("Low-rank messages must have the same length"))
 
     T = promote_type(eltype(left), eltype(right))
     xi = Vector{T}(left.xi)

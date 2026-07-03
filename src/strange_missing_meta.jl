@@ -120,6 +120,10 @@ end
     return @call_rule MvNormalMeanScalePrecision(:out, Marginalisation) (m_μ = m_μ, q_γ = q_γ)
 end
 
-@rule NormalMeanPrecision(:μ, Marginalisation) (m_out::NormalMeanVariance, q_τ::GammaShapeRate, meta::StrangeMissingMeta) = begin 
+@rule NormalMeanPrecision(:μ, Marginalisation) (
+    m_out::NormalMeanVariance,
+    q_τ::GammaShapeRate,
+    meta::StrangeMissingMeta,
+) = begin
     return @call_rule NormalMeanPrecision(:μ, Marginalisation) (m_out = m_out, q_τ = q_τ)
 end

@@ -8,8 +8,7 @@ build_rxinfer_model(::Univariate, ::DynamicExp, nf, no, p) =
 build_rxinfer_constraints(::Univariate, ::DynamicExp, p, pred) =
     univariate_dynamic_exp_ensemble_constraints(p, pred)
 
-build_rxinfer_init(::Univariate, ::DynamicExp, p) =
-    univariate_dynamic_exp_ensemble_init(p)
+build_rxinfer_init(::Univariate, ::DynamicExp, p) = univariate_dynamic_exp_ensemble_init(p)
 
 training_posterior_keys(::DynamicExp) = (:w, :τ, :γ)
 
