@@ -1,5 +1,7 @@
 # Variational MP: mean-field rules with LowRankMeta
 
+using LinearAlgebra: dot
+
 @rule ReactiveMP.softdot(:y, Marginalisation) (
     q_θ::Any,
     q_x::Any,
@@ -19,6 +21,22 @@ end
     mx = mean(q_x)
     mγ = mean(q_γ)
     return LowRankNormalWeightedMeanPrecision(mγ * mx * my, mx, mγ)
+end
+
+@rule ReactiveMP.softdot(:γ, Marginalisation) (
+    q_y::Any,
+    q_θ::PointMass,
+    q_x::Any,
+    meta::LowRankMeta,
+) = begin
+    my = mean(q_y)
+    Vy = var(q_y)
+    θ = mean(q_θ)
+    mx = mean(q_x)
+    Vx = cov(q_x)
+    s = dot(θ, mx)
+    β = (Vy + my^2) / 2 - my * s + (dot(θ, Vx, θ) + s^2) / 2
+    return GammaShapeRate(3 // 2, β)
 end
 
 @rule ReactiveMP.softdot(:γ, Marginalisation) (

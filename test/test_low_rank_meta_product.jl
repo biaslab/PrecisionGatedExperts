@@ -139,6 +139,34 @@ end
     @test BayesBase.rate(low_rank_message) ≈ BayesBase.rate(dense_message)
 end
 
+@testset "Low-rank mean-field softdot gamma with point-mass theta" begin
+    q_y = NormalMeanVariance(2.0, 3.0)
+    q_θ = PointMass([0.75, -1.25])
+    q_x = MvNormalMeanCovariance(
+        [1.0, -2.0],
+        [
+            3.0 0.2
+            0.2 2.0
+        ],
+    )
+
+    low_rank_message = @call_rule SoftDot(:γ, Marginalisation) (
+        q_y = q_y,
+        q_θ = q_θ,
+        q_x = q_x,
+        meta = LowRankMeta(),
+    )
+    dense_message = @call_rule SoftDot(:γ, Marginalisation) (
+        q_y = q_y,
+        q_θ = q_θ,
+        q_x = q_x,
+    )
+
+    @test low_rank_message isa GammaShapeRate
+    @test BayesBase.shape(low_rank_message) ≈ BayesBase.shape(dense_message)
+    @test BayesBase.rate(low_rank_message) ≈ BayesBase.rate(dense_message)
+end
+
 @testset "Low-rank structured softdot y prediction" begin
     low_rank_message = @call_rule SoftDot(:y, Marginalisation) (
         q_θ = PointMass([1.0, 2.0]),
