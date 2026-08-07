@@ -53,9 +53,9 @@ function build_gating_network(n_features::Int, n_experts::Int, layers::Int, hidd
     if layers == 1
         return Chain(Dense(n_features => n_experts))
     end
-    gating_layers = Any[Dense(n_features => hidden_dim)]
+    gating_layers = Any[Dense(n_features => hidden_dim, relu)]
     for _ = 2:(layers-1)
-        push!(gating_layers, Dense(hidden_dim => hidden_dim))
+        push!(gating_layers, Dense(hidden_dim => hidden_dim, relu))
     end
     push!(gating_layers, Dense(hidden_dim => n_experts))
     return Chain(gating_layers...)
